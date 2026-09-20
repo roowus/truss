@@ -1,0 +1,32 @@
+@import "tailwindcss";
+
+/* Truss design tokens — docs/ui-design.md (Dracula at Night) */
+:root {
+  --bg-deep: #0c0d12;
+  --bg-side: #101118;
+  --bg-pane: #15161e;
+  --bg-focus: #1a1b24;
+  --bg-inset: #0f1016;
+  --fg: #e9e9f4;
+  --com: #6272a4;
+  --com-dim: #3f4a78;
+  --cyan: #8be9fd;
+  --purple: #bd93f9;
+  --pink: #ff79c6;
+  --orange: #ffb86c;
+  --red: #ff5555;
+  --hair: rgba(98, 114, 164, 0.14);
+  --hover: rgba(98, 114, 164, 0.13);
+  --hover-strong: rgba(98, 114, 164, 0.22);
+}
+
+html, body, #root { height: 100%; }
+body {
+  background: var(--bg-deep);
+  color: var(--fg);
+  font-family: "Inter", system-ui, sans-serif;
+  font-size: 13.5px;
+  font-feature-settings: "ss01", "cv11", "zero", "tnum";
+  overflow: hidden;
+}
+.font-code { font-family: "JetBrains Mono", ui-monospace, monospace; }

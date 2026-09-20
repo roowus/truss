@@ -1,0 +1,7 @@
+node_modules/
+dist/
+.next/
+*.log
+.DS_Store
+apps/server/data/
+vendor/

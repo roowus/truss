@@ -1,0 +1,399 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Variant 10 — Nocturne Abyss (real icons, adjustable sidebar)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Inter+Tight:wght@600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg-deep:#0c0d12; --bg-side:#101118; --bg-pane:#15161e; --bg-focus:#1a1b24; --bg-inset:#0f1016;
+    --sel:#3a3d4d;
+    --fg:#e9e9f4; --com:#6272a4; --com-dim:#3f4a78;
+    --cyan:#8be9fd; --purple:#bd93f9; --pink:#ff79c6; --orange:#ffb86c; --red:#ff5555;
+    --hair:rgba(98,114,164,.14);
+    --hover:rgba(98,114,164,.13);
+    --hover-strong:rgba(98,114,164,.22);
+    --f:'Inter',system-ui,sans-serif;
+    --fd:'Inter Tight','Inter',system-ui,sans-serif;
+    --fmono:'JetBrains Mono',ui-monospace,monospace;  /* terminal + code blocks only */
+    --mono-feat:"ss01","cv11","zero","tnum";
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  html,body{height:100%}
+  body{background:var(--bg-deep);color:var(--fg);font-family:var(--f);font-size:13.5px;overflow:hidden;display:flex;font-feature-settings:var(--mono-feat)}
+  ::selection{background:var(--sel)}
+  button{cursor:pointer;font-family:var(--f)}
+  svg{display:block}
+  .ic{width:14px;height:14px;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+  .ic.sm{width:11px;height:11px;stroke-width:2}
+  .ic.fill{fill:currentColor;stroke:none}
+
+  .bub{border-radius:7px;transition:background .15s}
+  .bub:hover{background:var(--hover)}
+
+  /* ══ sidebar ══ */
+  .side{width:236px;flex:none;display:flex;flex-direction:column;background:var(--bg-side);border-right:1px solid var(--hair);padding:18px 10px 12px 14px;overflow-y:auto}
+  .brand{display:flex;align-items:baseline;gap:8px;padding:0 0 16px 6px}
+  .brand .nm{font-family:var(--fd);font-size:16px;font-weight:600;letter-spacing:-.01em}
+  .brand .nm i{font-style:normal;color:var(--purple)}
+  .brand .v{font-size:10px;color:var(--com-dim);font-weight:500}
+  .newsess{font-size:12px;font-weight:500;color:var(--cyan);background:none;border:none;text-align:left;padding:4px 8px;display:flex;align-items:center;gap:6px}
+  .sec{font-size:10px;font-weight:600;letter-spacing:.14em;text-transform:uppercase;color:var(--com-dim);padding:15px 8px 5px}
+
+  .pgroup{margin:2px 0}
+  .pgroup-h{display:flex;align-items:center;gap:7px;padding:4px 8px;cursor:pointer;border-radius:7px}
+  .pgroup-h:hover{background:var(--hover)}
+  .pgroup-h .caret{color:var(--com-dim);display:flex;transition:transform .15s}
+  .pgroup.closed .caret{transform:rotate(-90deg)}
+  .pgroup-h .chip{width:8px;height:8px;border-radius:2.5px;flex:none}
+  .pgroup-h .pnm{font-size:12.5px;font-weight:600}
+  .pgroup-h .cnt{margin-left:auto;font-size:10px;color:var(--com-dim)}
+  .pgroup-body{padding-left:14px;border-left:1px solid var(--hair);margin-left:11px}
+  .pgroup.closed .pgroup-body{display:none}
+  .c-rewter{background:var(--purple)} .c-cp{background:var(--orange)} .c-misc{background:var(--com)}
+
+  .sess{padding:4px 8px;cursor:pointer;display:flex;align-items:center;gap:8px;min-height:26px;border-radius:7px}
+  .sess .nm{font-size:12.5px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--fg);opacity:.72;transition:opacity .15s}
+  .sess:hover .nm{opacity:1}
+  .sess.on{background:rgba(189,147,249,.09)}
+  .sess.on:hover{background:rgba(189,147,249,.13)}
+  .sess.on .nm{opacity:1;color:var(--purple)}
+  .sess .meta{margin-left:auto;font-size:10px;color:var(--com-dim);flex:none;display:flex;align-items:center;gap:4px}
+  .sess .livemeta{color:var(--cyan)}
+
+  /* ── harness logos: real brand marks as inline SVG ── */
+  .hlogo{position:relative;width:18px;height:18px;border-radius:5px;flex:none;display:flex;align-items:center;justify-content:center;overflow:visible}
+  .hlogo svg{width:12px;height:12px}
+  .hlogo.cc{background:rgba(204,120,80,.16)}
+  .hlogo.dsh{background:rgba(77,107,254,.16)}
+  .hlogo.pi{background:rgba(189,147,249,.14)}
+  .hlogo.her{background:rgba(255,184,108,.14)}
+  .hlogo.none{background:rgba(98,114,164,.12);color:var(--com-dim)}
+  .hlogo.none .ic{width:11px;height:11px}
+  .hlogo::after{
+    content:attr(data-name);position:absolute;left:24px;top:50%;transform:translateY(-50%);
+    background:#232433;border:1px solid rgba(98,114,164,.35);color:var(--fg);
+    font-family:var(--f);font-size:10.5px;font-weight:500;padding:3px 8px;border-radius:6px;
+    white-space:nowrap;opacity:0;pointer-events:none;transition:opacity .12s;z-index:50;
+  }
+  .hlogo:hover::after{opacity:1}
+
+  .side-foot{margin-top:auto;padding:10px 8px 2px 6px;border-top:1px solid var(--hair);display:flex;flex-direction:column;gap:5px;font-size:10.5px;color:var(--com)}
+  .side-foot .row{display:flex;justify-content:space-between}
+  .side-foot b{color:var(--fg);opacity:.8;font-weight:600}
+  .ctxbar{display:flex;gap:2px}
+  .ctxbar i{flex:1;height:3px;background:rgba(98,114,164,.2);border-radius:2px}
+  .ctxbar i.f{background:var(--purple)}
+
+  /* ══ sidebar splitter ══ */
+  .splitside{flex:none;width:6px;background:var(--hair);cursor:col-resize;transition:background .15s;position:relative}
+  .splitside:hover{background:var(--purple)}
+  .splitside::after{content:"";position:absolute;inset:0;margin:auto;width:1px;height:44px;background:rgba(233,233,244,.35);border-radius:1px;opacity:0;transition:opacity .15s}
+  .splitside:hover::after{opacity:1}
+
+  /* ══ workspace ══ */
+  .ws{flex:1;display:flex;flex-direction:column;min-width:0;padding-bottom:26px}
+  .panes{flex:1;display:grid;grid-template-columns:1.15fr 6px 1fr;min-height:0}
+  .vstack{display:grid;grid-template-rows:1.5fr 6px 1fr;min-height:0}
+
+  .split{position:relative;background:var(--hair);cursor:col-resize;transition:background .15s}
+  .split.v{cursor:row-resize}
+  .split:hover{background:var(--purple)}
+  .split::after{content:"";position:absolute;inset:0;margin:auto;opacity:0;transition:opacity .15s;background:rgba(233,233,244,.35);border-radius:1px}
+  .split:not(.v)::after{width:1px;height:44px}
+  .split.v::after{height:1px;width:44px}
+  .split:hover::after{opacity:1}
+
+  .pane{display:flex;flex-direction:column;min-width:0;min-height:0;background:var(--bg-pane);transition:background .2s}
+  .pane.focus{background:var(--bg-focus)}
+  .ptabs{display:flex;align-items:baseline;gap:4px;padding:9px 12px 0;flex:none;font-size:12px;border-bottom:1px solid var(--hair)}
+  .ptab{color:var(--com);cursor:pointer;padding:4px 9px 8px;display:flex;gap:7px;align-items:center;transition:color .15s;border-radius:7px 7px 0 0;font-weight:500}
+  .ptab:hover{color:var(--fg);background:var(--hover)}
+  .ptab.on{color:var(--fg);font-weight:600}
+  .ptab.on:hover{background:transparent}
+  .ptab .x{color:var(--com-dim);border-radius:4px;padding:2px;display:flex}
+  .ptab .x:hover{color:var(--red);background:var(--hover-strong)}
+  .ptab .ico{color:var(--com-dim);display:flex}
+  .ptab.on .ico{color:var(--cyan)}
+  .ptab-add{color:var(--com-dim);cursor:pointer;padding:4px 8px 8px;border-radius:7px 7px 0 0;display:flex}
+  .ptab-add:hover{color:var(--cyan);background:var(--hover)}
+  .pane-h{padding:9px 16px 6px;display:flex;align-items:center;gap:10px;flex:none}
+  .pane-h .t{font-size:13px;font-weight:600}
+  .pane-h .s{font-size:11px;color:var(--com)}
+  .pane-h .r{margin-left:auto;display:flex;gap:4px;font-size:11px;color:var(--com);font-weight:500}
+  .pane-h .r span{cursor:pointer;padding:3px 8px;border-radius:6px;transition:color .15s;display:flex;align-items:center;gap:5px}
+  .pane-h .r span:hover{color:var(--cyan);background:var(--hover)}
+
+  /* ══ chat ══ */
+  .chat{flex:1;overflow-y:auto;padding:12px 20px;display:flex;flex-direction:column;gap:18px}
+  .msg-u{align-self:flex-end;max-width:80%;padding:9px 14px;background:rgba(98,114,164,.14);border-left:2px solid var(--purple);font-size:13.5px;line-height:1.55;border-radius:0 8px 8px 0}
+  .msg-a{max-width:95%;line-height:1.65;font-size:13.5px}
+  .msg-a .who{font-size:10px;font-weight:700;letter-spacing:.1em;color:var(--pink);margin-bottom:4px;text-transform:uppercase}
+  .tool{margin-top:10px;border-left:1px solid rgba(98,114,164,.3);padding-left:12px}
+  .tool-h{display:flex;align-items:center;gap:8px;font-size:12px;cursor:pointer;padding:3px 8px;margin-left:-8px;border-radius:6px}
+  .tool-h:hover{background:var(--hover)}
+  .tool-h .chev{color:var(--com-dim);display:flex}
+  .tool-h .tn{color:var(--cyan);font-size:11.5px;font-weight:600}
+  .tool-h .tgt{font-size:11px;color:var(--com)}
+  .tool-h .ok{margin-left:auto;font-size:10.5px;color:var(--com);display:flex;align-items:center;gap:4px}
+  .tool-h .ok .ic{color:var(--cyan)}
+  .tool-b{padding:6px 8px 4px 14px;font-family:var(--fmono);font-size:11px;white-space:pre-wrap;line-height:1.65;color:var(--com);border-left:1px dashed rgba(98,114,164,.25);margin-top:4px;background:rgba(12,13,18,.5)}
+  .tool-b .add{color:var(--cyan)} .tool-b .del{color:var(--red)}
+  .think{font-style:italic;font-size:11.5px;color:var(--com-dim);margin-top:9px;padding-left:12px;border-left:1px solid rgba(98,114,164,.2)}
+  code.il{font-family:var(--fmono);font-size:11px;color:var(--orange)}
+  .working{display:flex;align-items:center;gap:8px;color:var(--com);font-size:11.5px}
+  .working .dot{color:var(--purple);display:flex;animation:pulse 2s infinite}
+  @keyframes pulse{50%{opacity:.3}}
+
+  /* ══ composer ══ */
+  .composer{flex:none;padding:11px 16px 12px;background:var(--bg-inset);border-top:1px solid var(--hair)}
+  .cbox{display:flex;align-items:center;gap:10px;font-size:13.5px;color:var(--com);border-bottom:1px solid rgba(98,114,164,.32);padding-bottom:8px;transition:border-color .2s}
+  .cbox:focus-within{border-bottom-color:var(--purple)}
+  .cbox .ps{color:var(--purple);display:flex}
+  .cbox .send{margin-left:auto;font-size:11.5px;font-weight:600;color:var(--cyan);background:none;border:none;padding:4px 8px;border-radius:6px;display:flex;align-items:center;gap:5px}
+  .cbox .send:hover{background:var(--hover)}
+  .cmeta{display:flex;gap:4px;margin-top:7px;font-size:10.5px;color:var(--com-dim)}
+  .cmeta span{cursor:pointer;padding:2px 7px;border-radius:5px;display:flex;align-items:center;gap:4px}
+  .cmeta span:hover{color:var(--com);background:var(--hover)}
+  .cmeta b{color:var(--com);font-weight:600}
+
+  /* ══ trajectory ══ */
+  .traj{flex:1;overflow-y:auto;padding:6px 8px 6px 0}
+  .trow{display:grid;grid-template-columns:56px 1fr 92px 76px;gap:9px;align-items:center;padding:5px 14px 5px 16px;cursor:pointer;border-left:2px solid transparent;transition:border-color .15s}
+  .trow:hover{border-left-color:var(--purple);background:var(--hover)}
+  .trow .ts{font-size:10px;color:var(--com-dim)}
+  .trow .lbl{font-size:11.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--com)}
+  .trow .lbl b{font-weight:600;font-size:11px;color:var(--fg)}
+  .trow .lbl .md{font-size:10.5px}
+  .bar{height:4px;background:rgba(98,114,164,.18);border-radius:99px;overflow:hidden}
+  .bar i{display:block;height:100%;background:var(--purple);border-radius:99px}
+  .bar i.retry{background:var(--orange)}
+  .trow .st{font-size:10.5px;text-align:right;color:var(--com)}
+  .trow .st.bad{color:var(--orange)}
+  .tsub{grid-column:2/5;padding:2px 0 6px 12px;border-left:1px dashed rgba(98,114,164,.28);display:flex;flex-direction:column;gap:2px;font-size:10.5px;color:var(--com)}
+  .tsub div{display:flex;gap:8px}
+  .tsub .k{color:var(--pink);font-weight:600}
+  .tsub .tm{margin-left:auto;color:var(--com-dim)}
+  .pane-f{flex:none;padding:7px 16px;display:flex;gap:15px;font-size:10.5px;color:var(--com-dim);background:var(--bg-inset);border-top:1px solid var(--hair)}
+  .pane-f b{color:var(--com);font-weight:600}
+
+  /* ══ terminal — JetBrains Mono ══ */
+  .term{flex:1;overflow:hidden;padding:10px 16px;font-family:var(--fmono);font-size:11.5px;line-height:1.6;color:var(--fg);background:rgba(12,13,18,.4)}
+  .term .p{color:var(--purple);font-weight:500} .term .c{color:var(--com)} .term .ok{color:var(--cyan)}
+  .term .cur::after{content:"▋";color:var(--pink);animation:pulse 1.1s steps(1) infinite}
+
+  /* ══ status bar ══ */
+  .status{position:fixed;left:0;right:0;bottom:0;height:26px;background:var(--bg-deep);border-top:1px solid rgba(98,114,164,.2);display:flex;align-items:center;padding:0 12px;gap:6px;font-size:11px;color:var(--com)}
+  .status .g{display:flex;align-items:center;gap:6px;padding:2px 8px;border-radius:5px}
+  .status .g:hover{background:var(--hover)}
+  .status b{color:var(--fg);opacity:.85;font-weight:600}
+  .status .dotp{color:var(--purple)} .status .dotw{color:var(--orange)}
+  .status .right{margin-left:auto;display:flex;gap:6px}
+  ::-webkit-scrollbar{width:8px}::-webkit-scrollbar-thumb{background:rgba(98,114,164,.28);border-radius:99px}::-webkit-scrollbar-track{background:transparent}
+  @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style>
+</head>
+<body>
+
+<!-- ══════ SVG ICON SPRITE (lucide-style) ══════ -->
+<svg width="0" height="0" style="position:absolute">
+  <defs>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></symbol>
+    <symbol id="i-chev-d" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
+    <symbol id="i-chev-r" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></symbol>
+    <symbol id="i-msg" viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></symbol>
+    <symbol id="i-term" viewBox="0 0 24 24"><path d="m4 17 6-6-6-6M12 19h8"/></symbol>
+    <symbol id="i-pulse" viewBox="0 0 24 24"><path d="M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2"/></symbol>
+    <symbol id="i-agents" viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></symbol>
+    <symbol id="i-ctx" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></symbol>
+    <symbol id="i-brain" viewBox="0 0 24 24"><path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z"/><path d="M12 5a3 3 0 1 1 5.997.125 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z"/><path d="M12 5v13"/></symbol>
+    <symbol id="i-zap" viewBox="0 0 24 24"><path d="M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></symbol>
+    <symbol id="i-git" viewBox="0 0 24 24"><circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="6" r="3"/><path d="M6 9v9M18 9a9 9 0 0 1-9 9"/></symbol>
+    <symbol id="i-send" viewBox="0 0 24 24"><path d="M14.5 21.7a.5.5 0 0 0 .94-.02l6.5-19a.5.5 0 0 0-.63-.63l-19 6.5a.5.5 0 0 0-.02.94l7.93 3.18a2 2 0 0 1 1.11 1.11z"/><path d="m21.85 2.15-10.94 10.94"/></symbol>
+    <symbol id="i-fork" viewBox="0 0 24 24"><circle cx="12" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><circle cx="18" cy="6" r="3"/><path d="M18 9v2c0 .6-.4 1-1 1H7c-.6 0-1-.4-1-1V9M12 12v3"/></symbol>
+    <symbol id="i-split" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M12 3v18"/></symbol>
+    <symbol id="i-filter" viewBox="0 0 24 24"><path d="M22 3H2l8 9.46V19l4 2v-8.54z"/></symbol>
+    <symbol id="i-export" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></symbol>
+    <symbol id="i-dot" viewBox="0 0 24 24"><circle cx="12" cy="12" r="5"/></symbol>
+    <symbol id="i-halfdot" viewBox="0 0 24 24"><circle cx="12" cy="12" r="6"/><path d="M12 6a6 6 0 0 1 0 12z" fill="currentColor" stroke="none"/></symbol>
+    <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></symbol>
+    <!-- harness brand marks (stylized placeholders for the real logos) -->
+    <symbol id="lg-claude" viewBox="0 0 24 24"><path fill="#d97757" d="M12 2c.7 2.9 2.4 5.2 5 6.5-2.6 1.3-4.3 3.6-5 6.5-.7-2.9-2.4-5.2-5-6.5 2.6-1.3 4.3-3.6 5-6.5z"/><path fill="#d97757" opacity=".55" d="M18.5 13c.35 1.45 1.2 2.6 2.5 3.25-1.3.65-2.15 1.8-2.5 3.25-.35-1.45-1.2-2.6-2.5-3.25 1.3-.65 2.15-1.8 2.5-3.25z"/></symbol>
+    <symbol id="lg-deepseek" viewBox="0 0 24 24"><path fill="#4d6bfe" d="M3 15c2-1 3.5-3 4-6 .8 2.5 2.6 4.5 5 5.5-1 .8-2.4 1.3-4 1.3-1.9 0-3.6-.3-5-.8z"/><circle fill="#4d6bfe" cx="17.5" cy="6.5" r="2.4"/><path fill="#4d6bfe" opacity=".55" d="M13 18.5c2.5-.6 4.8-2 6.5-4.2.4 2.1.2 4.3-.5 6.2-1.8-1.2-3.9-1.9-6-2z"/></symbol>
+    <symbol id="lg-pi" viewBox="0 0 24 24"><path fill="#bd93f9" d="M5 5.5h14v2.2h-2.1V19h-2.3V7.7h-3.4c-.3 4.2-1.6 8.2-3.9 11.3l-2-1.2c2.3-2.9 3.5-6.6 3.8-10.1H5z"/></symbol>
+    <symbol id="lg-hermes" viewBox="0 0 24 24"><path fill="#ffb86c" d="M12 3l7 4v6c0 4-3 6.5-7 8-4-1.5-7-4-7-8V7z"/><path fill="#101118" d="M12 6.2l4.4 2.5v4.1c0 2.6-1.9 4.3-4.4 5.4-2.5-1.1-4.4-2.8-4.4-5.4V8.7z" opacity=".85"/><path fill="#ffb86c" d="M11 8h2v3h2.5l-4.5 6 .9-3.5H9.5z"/></symbol>
+  </defs>
+</svg>
+
+<div class="side">
+  <div class="brand"><span class="nm">nocturne<i>_</i></span><span class="v">v0.1.0</span></div>
+  <button class="newsess bub"><svg class="ic sm"><use href="#i-plus"/></svg>new session</button>
+
+  <div class="sec">Sessions</div>
+
+  <div class="pgroup">
+    <div class="pgroup-h"><span class="caret"><svg class="ic sm"><use href="#i-chev-d"/></svg></span><span class="chip c-rewter"></span><span class="pnm">rewter</span><span class="cnt">2</span></div>
+    <div class="pgroup-body">
+      <div class="sess on bub"><span class="hlogo cc" data-name="Claude Code"><svg><use href="#lg-claude"/></svg></span><span class="nm">fix-auth-middleware</span><span class="meta livemeta">2m</span></div>
+      <div class="sess bub"><span class="hlogo pi" data-name="pi"><svg><use href="#lg-pi"/></svg></span><span class="nm">phase 2 planning</span><span class="meta">1d</span></div>
+    </div>
+  </div>
+
+  <div class="pgroup">
+    <div class="pgroup-h"><span class="caret"><svg class="ic sm"><use href="#i-chev-d"/></svg></span><span class="chip c-cp"></span><span class="pnm">cyberpatriot-lab</span><span class="cnt">1</span></div>
+    <div class="pgroup-body">
+      <div class="sess bub"><span class="hlogo her" data-name="Hermes"><svg><use href="#lg-hermes"/></svg></span><span class="nm">image 12 investigation</span><span class="meta livemeta">3h <svg class="ic sm fill"><use href="#i-dot"/></svg></span></div>
+    </div>
+  </div>
+
+  <div class="pgroup closed">
+    <div class="pgroup-h"><span class="caret"><svg class="ic sm"><use href="#i-chev-d"/></svg></span><span class="chip c-misc"></span><span class="pnm" style="color:var(--com);font-weight:500">ungrouped</span><span class="cnt">1</span></div>
+    <div class="pgroup-body">
+      <div class="sess bub"><span class="hlogo dsh" data-name="DeepSeek Harness"><svg><use href="#lg-deepseek"/></svg></span><span class="nm">plugin loader refactor</span><span class="meta">1h</span></div>
+    </div>
+  </div>
+
+  <div class="sec">Harnesses</div>
+  <div class="sess bub"><span class="hlogo cc" data-name="Claude Code"><svg><use href="#lg-claude"/></svg></span><span class="nm">Claude Code</span><span class="meta">v5.1</span></div>
+  <div class="sess bub"><span class="hlogo dsh" data-name="DeepSeek Harness"><svg><use href="#lg-deepseek"/></svg></span><span class="nm">DeepSeek Harness</span></div>
+  <div class="sess bub"><span class="hlogo pi" data-name="pi"><svg><use href="#lg-pi"/></svg></span><span class="nm">pi</span><span class="meta">rpc</span></div>
+  <div class="sess bub"><span class="hlogo her" data-name="Hermes"><svg><use href="#lg-hermes"/></svg></span><span class="nm">Hermes</span><span class="meta">acp</span></div>
+
+  <div class="sec">Panels</div>
+  <div class="sess bub"><span class="hlogo none" data-name="Context tracker"><svg class="ic"><use href="#i-ctx"/></svg></span><span class="nm" style="opacity:.6">context tracker</span></div>
+  <div class="sess bub"><span class="hlogo none" data-name="Subagents"><svg class="ic"><use href="#i-agents"/></svg></span><span class="nm" style="opacity:.6">subagents</span><span class="meta livemeta">2 live</span></div>
+  <div class="sess bub"><span class="hlogo none" data-name="Memory"><svg class="ic"><use href="#i-brain"/></svg></span><span class="nm" style="opacity:.6">memory</span></div>
+  <div class="sess bub"><span class="hlogo none" data-name="Skills"><svg class="ic"><use href="#i-zap"/></svg></span><span class="nm" style="opacity:.6">skills</span></div>
+
+  <div class="side-foot">
+    <div class="row"><span>context</span><b>41.2k/200k</b></div>
+    <div class="ctxbar"><i class="f"></i><i class="f"></i><i class="f"></i><i class="f"></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+    <div class="row"><span>cost</span><b>$0.0421</b></div>
+  </div>
+</div>
+
+<!-- sidebar splitter -->
+<div class="splitside" title="drag to resize sidebar"></div>
+
+<div class="ws">
+  <div class="panes">
+
+    <!-- left window -->
+    <div class="pane focus">
+      <div class="ptabs">
+        <div class="ptab on"><span class="ico"><svg class="ic sm"><use href="#i-msg"/></svg></span> fix-auth-middleware <span class="x"><svg class="ic sm"><use href="#i-x"/></svg></span></div>
+        <div class="ptab"><span class="ico"><svg class="ic sm"><use href="#i-ctx"/></svg></span> context tracker <span class="x"><svg class="ic sm"><use href="#i-x"/></svg></span></div>
+        <div class="ptab"><span class="ico"><svg class="ic sm"><use href="#i-brain"/></svg></span> memory <span class="x"><svg class="ic sm"><use href="#i-x"/></svg></span></div>
+        <div class="ptab-add"><svg class="ic sm"><use href="#i-plus"/></svg></div>
+      </div>
+      <div class="pane-h"><span class="t">fix-auth-middleware</span><span class="s">claude-code · sonnet-5 · rewter</span><span class="r"><span><svg class="ic sm"><use href="#i-fork"/></svg>fork</span><span><svg class="ic sm"><use href="#i-split"/></svg>split</span></span></div>
+      <div class="chat">
+        <div class="msg-u">update the auth middleware to use the new session store and add tests</div>
+        <div class="msg-a">
+          <div class="who">Claude Code · Sonnet-5</div>
+          I'll update the auth middleware. Reading the current implementation first.
+          <div class="tool">
+            <div class="tool-h"><span class="chev"><svg class="ic sm"><use href="#i-chev-d"/></svg></span><span class="tn">Read</span><span class="tgt">src/middleware/auth.ts</span><span class="ok"><svg class="ic sm"><use href="#i-check"/></svg>180ms</span></div>
+          </div>
+          <div class="tool">
+            <div class="tool-h"><span class="chev"><svg class="ic sm"><use href="#i-chev-d"/></svg></span><span class="tn">Edit</span><span class="tgt">src/middleware/auth.ts</span><span class="ok"><svg class="ic sm"><use href="#i-check"/></svg>94ms</span></div>
+            <div class="tool-b"><span class="del">− const session = await req.cookies.get("sid")</span>
+<span class="add">+ const session = await sessionStore.resolve(req)</span>
+<span class="add">+ if (!session) return unauthorized()</span></div>
+          </div>
+          <div class="think">the old cookie path is still referenced in admin.ts — checking that before running tests…</div>
+          <div class="tool">
+            <div class="tool-h"><span class="chev"><svg class="ic sm"><use href="#i-chev-r"/></svg></span><span class="tn">Bash</span><span class="tgt">npm test -- auth</span><span class="ok"><svg class="ic sm"><use href="#i-check"/></svg>3.2s · 42 passed</span></div>
+          </div>
+          Middleware updated, tests green. The old cookie path in <code class="il">admin.ts</code> is still live — want me to migrate that too?
+        </div>
+        <div class="working"><span class="dot"><svg class="ic sm fill"><use href="#i-dot"/></svg></span> 2 subagents exploring admin.ts…</div>
+      </div>
+      <div class="composer">
+        <div class="cbox"><span class="ps"><svg class="ic"><use href="#i-chev-r"/></svg></span> yes, migrate admin.ts as well <button class="send"><svg class="ic sm"><use href="#i-send"/></svg>Send</button></div>
+        <div class="cmeta"><span>harness <b>claude-code</b></span><span>model <b>sonnet-5</b></span><span>perm <b>auto-edit</b></span><span><svg class="ic sm"><use href="#i-git"/></svg> <b>~/projects/rewter</b></span></div>
+      </div>
+    </div>
+
+    <!-- h splitter -->
+    <div class="split" title="drag to resize"></div>
+
+    <!-- right column -->
+    <div class="vstack">
+
+      <div class="pane">
+        <div class="ptabs">
+          <div class="ptab on"><span class="ico"><svg class="ic sm"><use href="#i-pulse"/></svg></span> trajectory <span class="x"><svg class="ic sm"><use href="#i-x"/></svg></span></div>
+          <div class="ptab"><span class="ico"><svg class="ic sm"><use href="#i-agents"/></svg></span> subagents <span class="x"><svg class="ic sm"><use href="#i-x"/></svg></span></div>
+          <div class="ptab-add"><svg class="ic sm"><use href="#i-plus"/></svg></div>
+        </div>
+        <div class="pane-h"><span class="t">Trajectory</span><span class="s">llm calls · fix-auth-middleware</span><span class="r"><span><svg class="ic sm"><use href="#i-filter"/></svg>filter</span><span><svg class="ic sm"><use href="#i-export"/></svg>export</span></span></div>
+        <div class="traj">
+          <div class="trow">
+            <span class="ts">12:14:02</span><span class="lbl"><b>POST</b> <span class="md">/v1/messages · sonnet-5</span></span>
+            <div class="bar"><i style="width:78%"></i></div>
+            <span class="st">200 · 2.13s</span>
+          </div>
+          <div class="trow">
+            <span class="ts">12:14:05</span><span class="lbl"><b>POST</b> <span class="md">/v1/messages · sonnet-5</span></span>
+            <div class="bar"><i style="width:41%"></i></div>
+            <span class="st">200 · 1.14s</span>
+            <div class="tsub">
+              <div><span class="k">tool</span> Read(src/middleware/auth.ts) <span class="tm">180ms</span></div>
+              <div><span class="k">tool</span> Edit(src/middleware/auth.ts) <span class="tm">94ms</span></div>
+              <div><span class="k">tokens</span> 13.1k → 412 <span class="tm">$0.011</span></div>
+            </div>
+          </div>
+          <div class="trow">
+            <span class="ts">12:14:09</span><span class="lbl"><b>POST</b> <span class="md">/v1/messages · sonnet-5</span> <span style="color:var(--orange)">· retry 1</span></span>
+            <div class="bar"><i class="retry" style="width:96%"></i></div>
+            <span class="st bad">529 · 2.61s</span>
+          </div>
+          <div class="trow">
+            <span class="ts">12:14:12</span><span class="lbl"><b>POST</b> <span class="md">/v1/messages · sonnet-5</span></span>
+            <div class="bar"><i style="width:55%"></i></div>
+            <span class="st">200 · 1.49s</span>
+          </div>
+        </div>
+        <div class="pane-f"><span>calls <b>4</b></span><span>tokens <b>42.7k → 1.9k</b></span><span>cost <b>$0.0421</b></span><span style="color:var(--orange)">1 retried</span></div>
+      </div>
+
+      <!-- v splitter -->
+      <div class="split v" title="drag to resize"></div>
+
+      <div class="pane">
+        <div class="ptabs">
+          <div class="ptab on"><span class="ico"><svg class="ic sm"><use href="#i-term"/></svg></span> zsh · rewter <span class="x"><svg class="ic sm"><use href="#i-x"/></svg></span></div>
+          <div class="ptab"><span class="ico"><svg class="ic sm"><use href="#i-term"/></svg></span> agent shell <span class="x"><svg class="ic sm"><use href="#i-x"/></svg></span></div>
+          <div class="ptab-add"><svg class="ic sm"><use href="#i-plus"/></svg></div>
+        </div>
+        <div class="term">
+          <div><span class="p">rewter</span> <span class="c">~/projects/rewter</span> <span class="c">⎇ main*</span></div>
+          <div>$ pnpm test</div>
+          <div class="c">  ✓ router › orchestrator decomposes task (412ms)</div>
+          <div class="c">  ✓ router › tier-3 spawns claude-code (89ms)</div>
+          <div class="ok">  42 passed · 3.2s</div>
+          <div>$ git status --short</div>
+          <div class="c"> M packages/server/src/orchestrator.ts</div>
+          <div class="c">?? packages/server/src/tiers/harness-head.ts</div>
+          <div>$ <span class="cur"></span></div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<div class="status">
+  <div class="g"><span class="dotp"><svg class="ic sm fill"><use href="#i-dot"/></svg></span> <b>2</b> agents</div>
+  <div class="g"><span class="dotw"><svg class="ic sm"><use href="#i-halfdot"/></svg></span> 1 permission pending</div>
+  <div class="g"><svg class="ic sm"><use href="#i-git"/></svg> main</div>
+  <div class="right"><span class="g">ctx <b>41.2k/200k</b></span><span class="g"><b>$0.0421</b></span><span class="g">ws connected</span><span class="g"><svg class="ic sm"><use href="#i-clock"/></svg>12:14:19</span></div>
+</div>
+
+</body>
+</html>

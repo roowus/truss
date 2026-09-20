@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Variant 6 — Nocturne Depth (dracula at night, layered)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600;700&family=JetBrains+Mono:ital,wght@0,400;0,500;0,600;1,400&display=swap" rel="stylesheet">
+<style>
+  :root{
+    /* Dracula at Night — layered depth: deepest at edges, lightest at focus */
+    --bg-deep:#14151c;   /* window chrome / gutters */
+    --bg-side:#1a1b24;   /* sidebar */
+    --bg-pane:#22232f;   /* inactive pane */
+    --bg-focus:#262734;  /* focused pane — lightest surface */
+    --bg-inset:#1c1d27;  /* composer / footer wells inside panes */
+    --sel:#414558;
+    --fg:#e9e9f4; --com:#6272a4; --com-dim:#46538c;
+    --cyan:#8be9fd; --purple:#bd93f9; --pink:#ff79c6;
+    --orange:#ffb86c; --red:#ff5555;
+    --hair:rgba(98,114,164,.18);
+    --mono:'JetBrains Mono',ui-monospace,monospace;
+    --sans:'IBM Plex Sans',system-ui,sans-serif;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  html,body{height:100%}
+  body{background:var(--bg-deep);color:var(--fg);font-family:var(--sans);font-size:13.5px;overflow:hidden;display:flex}
+  ::selection{background:var(--sel)}
+  button{cursor:pointer}
+
+  /* ══ sidebar — own stratum, slightly lifted off bg-deep ══ */
+  .side{width:232px;flex:none;display:flex;flex-direction:column;background:var(--bg-side);border-right:1px solid var(--hair);padding:18px 0 12px 20px}
+  .brand{display:flex;align-items:baseline;gap:8px;padding-bottom:16px}
+  .brand .nm{font-family:var(--mono);font-size:15px;font-weight:600}
+  .brand .nm i{font-style:normal;color:var(--purple)}
+  .brand .v{font-family:var(--mono);font-size:10px;color:var(--com-dim)}
+  .newsess{font-family:var(--mono);font-size:11.5px;color:var(--cyan);background:none;border:none;text-align:left;padding:2px 0 4px}
+  .newsess:hover{text-shadow:0 0 10px rgba(139,233,253,.5)}
+  .newsess::before{content:"+ ";color:var(--com)}
+  .sec{font-family:var(--mono);font-size:9.5px;letter-spacing:.22em;text-transform:uppercase;color:var(--com-dim);padding:15px 0 5px}
+  .sess{padding:3px 0;cursor:pointer;display:flex;align-items:baseline;gap:8px;min-height:26px}
+  .sess .nm{font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--fg);opacity:.72;transition:opacity .15s}
+  .sess:hover .nm{opacity:1}
+  .sess.on .nm{opacity:1;color:var(--purple)}
+  .sess.on .nm::before{content:"● ";font-size:8px;color:var(--pink);vertical-align:2px}
+  .sess .meta{font-family:var(--mono);font-size:10px;color:var(--com)}
+  .sess .livemeta{color:var(--cyan)}
+  .tag{font-family:var(--mono);font-size:9.5px;color:var(--com);flex:none}
+  .side-foot{margin-top:auto;padding:10px 16px 2px 0;border-top:1px solid var(--hair);display:flex;flex-direction:column;gap:5px;font-family:var(--mono);font-size:10.5px;color:var(--com)}
+  .side-foot .row{display:flex;justify-content:space-between}
+  .side-foot b{color:var(--fg);opacity:.8;font-weight:500}
+  .ctxbar{display:flex;gap:2px}
+  .ctxbar i{flex:1;height:3px;background:rgba(98,114,164,.22);border-radius:2px}
+  .ctxbar i.f{background:var(--purple)}
+
+  /* ══ workspace: tab bar on bg-deep, panes float above ══ */
+  .ws{flex:1;display:flex;flex-direction:column;min-width:0;padding-bottom:26px}
+  .panes{flex:1;display:grid;grid-template-columns:1.18fr 1fr;gap:1px;background:var(--hair);min-height:0}
+
+  /* ══ pane = "window": own bg + own tab bar ══ */
+  .pane{display:flex;flex-direction:column;min-width:0;min-height:0;background:var(--bg-pane);transition:background .2s}
+  .pane.focus{background:var(--bg-focus)}
+  .ptabs{display:flex;align-items:baseline;gap:18px;padding:10px 18px 0;flex:none;font-family:var(--mono);font-size:11.5px;border-bottom:1px solid var(--hair)}
+  .ptab{color:var(--com);cursor:pointer;padding-bottom:8px;display:flex;gap:7px;align-items:baseline;transition:color .15s;border-bottom:2px solid transparent}
+  .ptab:hover{color:var(--fg)}
+  .ptab.on{color:var(--fg);border-bottom-color:var(--pink)}
+  .pane:not(.focus) .ptab.on{border-bottom-color:var(--com)}
+  .ptab .x{color:var(--com-dim);font-size:10px}
+  .ptab .x:hover{color:var(--red)}
+  .ptab .ico{font-size:9.5px;color:var(--com-dim)}
+  .ptab.on .ico{color:var(--cyan)}
+  .ptab-add{color:var(--com-dim);cursor:pointer;padding-bottom:8px}
+  .ptab-add:hover{color:var(--cyan)}
+  .pane-h{padding:9px 20px 6px;display:flex;align-items:baseline;gap:10px;flex:none}
+  .pane-h .t{font-size:13px;font-weight:600}
+  .pane-h .s{font-family:var(--mono);font-size:10px;color:var(--com)}
+  .pane-h .r{margin-left:auto;display:flex;gap:14px;font-family:var(--mono);font-size:10.5px;color:var(--com)}
+  .pane-h .r span{cursor:pointer;transition:color .15s}
+  .pane-h .r span:hover{color:var(--cyan)}
+
+  /* ══ chat ══ */
+  .chat{flex:1;overflow-y:auto;padding:12px 22px;display:flex;flex-direction:column;gap:18px}
+  .msg-u{align-self:flex-end;max-width:80%;padding:9px 14px;background:rgba(98,114,164,.16);border-left:2px solid var(--purple);font-size:13.5px;line-height:1.55}
+  .msg-a{max-width:95%;line-height:1.65;font-size:13.5px}
+  .msg-a .who{font-family:var(--mono);font-size:10px;letter-spacing:.12em;color:var(--pink);margin-bottom:4px}
+  .tool{margin-top:10px;border-left:1px solid rgba(98,114,164,.32);padding-left:12px}
+  .tool-h{display:flex;align-items:baseline;gap:9px;font-size:12px;cursor:pointer;padding:2px 0}
+  .tool-h:hover .tn{text-shadow:0 0 8px rgba(139,233,253,.6)}
+  .tool-h .tn{font-family:var(--mono);color:var(--cyan);font-size:11.5px;font-weight:500}
+  .tool-h .tgt{font-family:var(--mono);font-size:11px;color:var(--com)}
+  .tool-h .ok{margin-left:auto;font-family:var(--mono);font-size:10.5px;color:var(--com)}
+  .tool-b{padding:6px 0 2px 14px;font-family:var(--mono);font-size:11px;white-space:pre-wrap;line-height:1.65;color:var(--com);border-left:1px dashed rgba(98,114,164,.28);margin-top:4px;background:rgba(20,21,28,.35)}
+  .tool-b .add{color:var(--cyan)} .tool-b .del{color:var(--red)}
+  .think{font-family:var(--mono);font-style:italic;font-size:11px;color:var(--com-dim);margin-top:9px;padding-left:12px;border-left:1px solid rgba(98,114,164,.22)}
+  code.il{font-family:var(--mono);font-size:11.5px;color:var(--orange)}
+  .working{display:flex;align-items:baseline;gap:8px;color:var(--com);font-family:var(--mono);font-size:11px}
+  .working b{color:var(--purple);font-weight:500;animation:pulse 2s infinite}
+  @keyframes pulse{50%{opacity:.3}}
+
+  /* ══ composer — inset well (darker than pane) ══ */
+  .composer{flex:none;padding:11px 18px 12px;background:var(--bg-inset);border-top:1px solid var(--hair)}
+  .cbox{display:flex;align-items:baseline;gap:10px;font-size:13.5px;color:var(--com);border-bottom:1px solid rgba(98,114,164,.35);padding-bottom:8px;transition:border-color .2s}
+  .cbox:focus-within{border-bottom-color:var(--purple)}
+  .cbox .ps{font-family:var(--mono);color:var(--purple)}
+  .cbox .send{margin-left:auto;font-family:var(--mono);font-size:11px;color:var(--cyan);background:none;border:none}
+  .cbox .send:hover{text-shadow:0 0 8px rgba(139,233,253,.6)}
+  .cmeta{display:flex;gap:16px;margin-top:8px;font-family:var(--mono);font-size:10px;color:var(--com-dim)}
+  .cmeta span{cursor:pointer}
+  .cmeta span:hover{color:var(--com)}
+  .cmeta b{color:var(--com);font-weight:500}
+
+  /* ══ trajectory ══ */
+  .traj{flex:1;overflow-y:auto;padding:6px 0}
+  .trow{display:grid;grid-template-columns:60px 1fr 100px 80px;gap:10px;align-items:center;padding:7px 22px 7px 18px;cursor:pointer;border-left:2px solid transparent;transition:border-color .15s}
+  .trow:hover{border-left-color:var(--purple);background:rgba(98,114,164,.07)}
+  .trow .ts{font-family:var(--mono);font-size:10px;color:var(--com-dim)}
+  .trow .lbl{font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--com)}
+  .trow .lbl b{font-family:var(--mono);font-weight:500;font-size:11px;color:var(--fg)}
+  .trow .lbl .md{font-family:var(--mono);font-size:10.5px}
+  .bar{height:4px;background:rgba(98,114,164,.2);border-radius:99px;overflow:hidden}
+  .bar i{display:block;height:100%;background:var(--purple);border-radius:99px}
+  .bar i.retry{background:var(--orange)}
+  .trow .st{font-family:var(--mono);font-size:10.5px;text-align:right;color:var(--com)}
+  .trow .st.bad{color:var(--orange)}
+  .tsub{grid-column:2/5;padding:2px 0 7px 13px;border-left:1px dashed rgba(98,114,164,.3);display:flex;flex-direction:column;gap:3px;font-family:var(--mono);font-size:10.5px;color:var(--com)}
+  .tsub div{display:flex;gap:8px}
+  .tsub .k{color:var(--pink)}
+  .tsub .tm{margin-left:auto;color:var(--com-dim)}
+  .pane-f{flex:none;padding:7px 18px;display:flex;gap:16px;font-family:var(--mono);font-size:10px;color:var(--com-dim);background:var(--bg-inset);border-top:1px solid var(--hair)}
+  .pane-f b{color:var(--com);font-weight:500}
+
+  /* ══ status bar ══ */
+  .status{position:fixed;left:0;right:0;bottom:0;height:26px;background:var(--bg-deep);border-top:1px solid rgba(98,114,164,.22);display:flex;align-items:center;padding:0 16px;gap:18px;font-family:var(--mono);font-size:10.5px;color:var(--com)}
+  .status .g{display:flex;align-items:baseline;gap:7px}
+  .status b{color:var(--fg);opacity:.85;font-weight:500}
+  .status .dotp{color:var(--purple)} .status .dotw{color:var(--orange)}
+  .status .right{margin-left:auto;display:flex;gap:18px}
+  ::-webkit-scrollbar{width:8px}::-webkit-scrollbar-thumb{background:rgba(98,114,164,.3);border-radius:99px}::-webkit-scrollbar-track{background:transparent}
+  @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style>
+</head>
+<body>
+
+<div class="side">
+  <div class="brand"><span class="nm">nocturne<i>_</i></span><span class="v">v0.1.0</span></div>
+  <button class="newsess">new session</button>
+  <div class="sec">Sessions</div>
+  <div class="sess on"><div><span class="nm">fix-auth-middleware</span> <span class="meta livemeta">2m · cc</span></div></div>
+  <div class="sess"><div><span class="nm">refactor: plugin loader</span> <span class="meta">1h · dsh</span></div></div>
+  <div class="sess"><div><span class="nm">cyberpatriot image 12</span> <span class="meta livemeta">3h · hermes ●</span></div></div>
+  <div class="sess"><div><span class="nm">rewter phase 2</span> <span class="meta">1d · pi</span></div></div>
+  <div class="sec">Harnesses</div>
+  <div class="sess"><span class="tag">cc</span><span class="nm">Claude Code</span> <span class="meta">v5.1</span></div>
+  <div class="sess"><span class="tag">dsh</span><span class="nm">DeepSeek Harness</span></div>
+  <div class="sess"><span class="tag">pi</span><span class="nm">pi</span> <span class="meta">rpc</span></div>
+  <div class="sess"><span class="tag">her</span><span class="nm">Hermes</span> <span class="meta">acp</span></div>
+  <div class="sec">Panels</div>
+  <div class="sess"><span class="nm" style="opacity:.6">context tracker</span></div>
+  <div class="sess"><span class="nm" style="opacity:.6">subagents</span> <span class="meta livemeta">2 live</span></div>
+  <div class="sess"><span class="nm" style="opacity:.6">memory</span></div>
+  <div class="sess"><span class="nm" style="opacity:.6">skills</span></div>
+  <div class="side-foot">
+    <div class="row"><span>context</span><b>41.2k/200k</b></div>
+    <div class="ctxbar"><i class="f"></i><i class="f"></i><i class="f"></i><i class="f"></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+    <div class="row"><span>cost</span><b>$0.0421</b></div>
+  </div>
+</div>
+
+<div class="ws">
+  <div class="panes">
+
+    <!-- left window: chat group -->
+    <div class="pane focus">
+      <div class="ptabs">
+        <div class="ptab on"><span class="ico">◈</span> fix-auth-middleware <span class="x">×</span></div>
+        <div class="ptab"><span class="ico">◈</span> refactor-plugin-loader <span class="x">×</span></div>
+        <div class="ptab-add">+</div>
+      </div>
+      <div class="pane-h"><span class="t">fix-auth-middleware</span><span class="s">claude-code · sonnet-5</span><span class="r"><span>fork</span><span>split →</span></span></div>
+      <div class="chat">
+        <div class="msg-u">update the auth middleware to use the new session store and add tests</div>
+        <div class="msg-a">
+          <div class="who">CLAUDE-CODE · SONNET-5</div>
+          I'll update the auth middleware. Reading the current implementation first.
+          <div class="tool">
+            <div class="tool-h"><span style="color:var(--com-dim)">▾</span><span class="tn">Read</span><span class="tgt">src/middleware/auth.ts</span><span class="ok">✓ 180ms</span></div>
+          </div>
+          <div class="tool">
+            <div class="tool-h"><span style="color:var(--com-dim)">▾</span><span class="tn">Edit</span><span class="tgt">src/middleware/auth.ts</span><span class="ok">✓ 94ms</span></div>
+            <div class="tool-b"><span class="del">− const session = await req.cookies.get("sid")</span>
+<span class="add">+ const session = await sessionStore.resolve(req)</span>
+<span class="add">+ if (!session) return unauthorized()</span></div>
+          </div>
+          <div class="think">the old cookie path is still referenced in admin.ts — checking that before running tests…</div>
+          <div class="tool">
+            <div class="tool-h"><span style="color:var(--com-dim)">▸</span><span class="tn">Bash</span><span class="tgt">npm test -- auth</span><span class="ok">✓ 3.2s · 42 passed</span></div>
+          </div>
+          Middleware updated, tests green. The old cookie path in <code class="il">admin.ts</code> is still live — want me to migrate that too?
+        </div>
+        <div class="working"><b>●</b> 2 subagents exploring admin.ts…</div>
+      </div>
+      <div class="composer">
+        <div class="cbox"><span class="ps">❯</span> yes, migrate admin.ts as well <button class="send">send ⏎</button></div>
+        <div class="cmeta"><span>harness <b>claude-code</b></span><span>model <b>sonnet-5</b></span><span>perm <b>auto-edit</b></span><span>cwd <b>~/projects/rewter</b></span></div>
+      </div>
+    </div>
+
+    <!-- right window: trajectory + terminal group -->
+    <div class="pane">
+      <div class="ptabs">
+        <div class="ptab on"><span class="ico">◉</span> trajectory <span class="x">×</span></div>
+        <div class="ptab"><span class="ico">▸_</span> zsh · rewter <span class="x">×</span></div>
+        <div class="ptab"><span class="ico">◌</span> subagents <span class="x">×</span></div>
+        <div class="ptab-add">+</div>
+      </div>
+      <div class="pane-h"><span class="t">Trajectory</span><span class="s">llm calls · fix-auth-middleware</span><span class="r"><span>filter</span><span>export</span></span></div>
+      <div class="traj">
+        <div class="trow">
+          <span class="ts">12:14:02</span><span class="lbl"><b>POST</b> <span class="md">/v1/messages · sonnet-5</span></span>
+          <div class="bar"><i style="width:78%"></i></div>
+          <span class="st">200 · 2.13s</span>
+        </div>
+        <div class="trow">
+          <span class="ts">12:14:05</span><span class="lbl"><b>POST</b> <span class="md">/v1/messages · sonnet-5</span></span>
+          <div class="bar"><i style="width:41%"></i></div>
+          <span class="st">200 · 1.14s</span>
+          <div class="tsub">
+            <div><span class="k">tool</span> Read(src/middleware/auth.ts) <span class="tm">180ms</span></div>
+            <div><span class="k">tool</span> Edit(src/middleware/auth.ts) <span class="tm">94ms</span></div>
+            <div><span class="k">tokens</span> 13.1k in → 412 out <span class="tm">$0.011</span></div>
+          </div>
+        </div>
+        <div class="trow">
+          <span class="ts">12:14:09</span><span class="lbl"><b>POST</b> <span class="md">/v1/messages · sonnet-5</span> <span style="color:var(--orange)">· retry 1</span></span>
+          <div class="bar"><i class="retry" style="width:96%"></i></div>
+          <span class="st bad">529 · 2.61s</span>
+        </div>
+        <div class="trow">
+          <span class="ts">12:14:12</span><span class="lbl"><b>POST</b> <span class="md">/v1/messages · sonnet-5</span></span>
+          <div class="bar"><i style="width:55%"></i></div>
+          <span class="st">200 · 1.49s</span>
+          <div class="tsub">
+            <div><span class="k">tool</span> Bash(npm test -- auth) <span class="tm">3.2s</span></div>
+            <div><span class="k">subagent</span> Explore → admin.ts refs <span class="tm">2 live</span></div>
+          </div>
+        </div>
+        <div class="trow">
+          <span class="ts">12:14:16</span><span class="lbl"><b>POST</b> <span class="md">/v1/messages · haiku-4.5</span> <span style="color:var(--pink)">· subagent</span></span>
+          <div class="bar"><i style="width:22%"></i></div>
+          <span class="st">200 · 0.61s</span>
+        </div>
+      </div>
+      <div class="pane-f"><span>calls <b>5</b></span><span>tokens <b>42.7k → 1.9k</b></span><span>cost <b>$0.0421</b></span><span style="color:var(--orange)">1 retried</span></div>
+    </div>
+
+  </div>
+</div>
+
+<div class="status">
+  <div class="g"><span class="dotp">●</span> <b>2</b> agents</div>
+  <div class="g"><span class="dotw">◐</span> 1 permission pending</div>
+  <div class="g">⎇ main</div>
+  <div class="right"><span>ctx <b>41.2k/200k</b></span><span><b>$0.0421</b></span><span>ws connected</span><span>12:14:19</span></div>
+</div>
+
+</body>
+</html>
