@@ -29,7 +29,7 @@ Native (pre-installed plugin) panels: context tracker, subagent/team visualizati
 | M3 | **Hermes** adapter (hermes-acp over stdio) + permission cards | |
 | M4 | **Claude Code** adapter (stream-json, `--permission-prompt-tool` → permission host) | |
 | M5 | Native panels: trajectory detail, context tracker, subagents, memory | ✅ (memory stays stub — no harness memory API yet) |
-| M6 | **DSH** adapter via SSH bridge to rewvis | |
+| M6 | **DSH** adapter — local ACP (rewvis IS the dsh host; no bridge needed) | ✅ |
 | M7 | Node-agent for remote hosts · Tauri shell · mobile-responsive pass | |
 
 ### M1 notes (landed)
