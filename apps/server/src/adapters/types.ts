@@ -1,0 +1,26 @@
+import type { HarnessId, ProtoEvent } from "@truss/proto";
+
+export interface SessionOpts {
+  sessionId: string;
+  cwd: string;
+  model?: string;
+  /** provider id within the harness's own config (pi: models.json provider) */
+  provider?: string;
+}
+
+export interface AdapterHandle {
+  /** adapter-local opaque state */
+  readonly sessionId: string;
+}
+
+export interface HarnessAdapter {
+  id: HarnessId;
+  capabilities: { permissions: boolean; subagents: boolean; streaming: boolean };
+  /** models this adapter can offer right now (for the composer model chip) */
+  listModels(): Promise<{ provider: string; model: string; label: string }[]>;
+  spawn(opts: SessionOpts): Promise<AdapterHandle>;
+  send(handle: AdapterHandle, text: string): void;
+  interrupt(handle: AdapterHandle): void;
+  events(handle: AdapterHandle): AsyncIterable<ProtoEvent>;
+  dispose(handle: AdapterHandle): void;
+}

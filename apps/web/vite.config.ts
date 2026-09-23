@@ -8,6 +8,7 @@ export default defineConfig({
     port: 4041,
     proxy: {
       "/health": "http://localhost:4040",
+      "/api": "http://localhost:4040",
       "/events": { target: "ws://localhost:4040", ws: true },
     },
   },
