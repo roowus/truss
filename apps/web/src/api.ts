@@ -84,4 +84,11 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ requestId, choice }),
     }).then((r) => json<{ ok: true }>(r)),
+  layout: () => fetch("/api/layout").then((r) => json<{ layout: string | null }>(r)),
+  saveLayout: (layout: string) =>
+    fetch("/api/layout", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ layout }),
+    }).then((r) => json<{ ok: boolean }>(r)),
 };

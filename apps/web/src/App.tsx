@@ -174,14 +174,6 @@ export function App() {
     (event: DockviewReadyEvent) => {
       const a = event.api;
       dockApi.current = a;
-      dockReady.current = true;
-
-      a.addPanel({
-        id: "trajectory",
-        component: "trajectory",
-        title: "trajectory",
-        params: { sessionId: null },
-      });
 
       /* closing a terminal tab kills its pty */
       a.onDidRemovePanel((panel) => {
@@ -196,12 +188,51 @@ export function App() {
         }
       });
 
-      /* defer mutations past the ready frame — synchronous adds during onReady
-         hit dockview's parentless-element race ("Invalid grid element") */
-      requestAnimationFrame(() => {
-        void openTerminalPanel(); /* initial terminal tab below the trajectory */
-        openInitialSession();
+      /* persist the dockview layout (debounced) */
+      let saveTimer: ReturnType<typeof setTimeout> | null = null;
+      a.onDidLayoutChange(() => {
+        if (saveTimer) clearTimeout(saveTimer);
+        saveTimer = setTimeout(() => {
+          try {
+            void api.saveLayout(JSON.stringify(a.toJSON()));
+          } catch {
+            /* mid-drag states can fail to serialize — next change retries */
+          }
+        }, 800);
       });
+
+      /* restore the saved layout, else the default workspace */
+      void (async () => {
+        let restored = false;
+        try {
+          const { layout } = await api.layout();
+          if (layout) {
+            a.fromJSON(JSON.parse(layout));
+            restored = true;
+          }
+        } catch {
+          restored = false; /* corrupt/stale layout — fall through to default */
+        }
+
+        /* defer mutations past the ready frame — synchronous adds during onReady
+           hit dockview's parentless-element race ("Invalid grid element") */
+        requestAnimationFrame(() => {
+          if (!restored) {
+            a.addPanel({
+              id: "trajectory",
+              component: "trajectory",
+              title: "trajectory",
+              params: { sessionId: null },
+            });
+            void openTerminalPanel(); /* initial terminal tab below the trajectory */
+          } else {
+            /* a restored workspace owns the canvas — never auto-open a session */
+            initialOpened.current = true;
+          }
+          dockReady.current = true;
+          if (!restored) openInitialSession();
+        });
+      })();
       // eslint-disable-next-line react-hooks/exhaustive-deps
     },
     [openChatPanel, syncTrajectory],

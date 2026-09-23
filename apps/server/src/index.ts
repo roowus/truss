@@ -164,6 +164,15 @@ app.get("/api/skills", async (req) => {
 /* MCP permission host for claude-code sessions */
 registerMcpPerms(app);
 
+/* ── layout persistence (dockview serialized state) ── */
+app.get("/api/layout", async () => ({ layout: store.getKv("dockview-layout") ?? null }));
+app.put("/api/layout", async (req) => {
+  const { layout } = (req.body ?? {}) as { layout?: string };
+  if (typeof layout !== "string") return { ok: false };
+  store.setKv("dockview-layout", layout);
+  return { ok: true };
+});
+
 /* ── static hosting: serve the built web app when dist exists (prod mode) ── */
 const here = dirname(fileURLToPath(import.meta.url));
 const webDist = process.env.TRUSS_WEB_DIST ?? join(here, "..", "..", "web", "dist");
