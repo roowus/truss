@@ -26,8 +26,8 @@ Native (pre-installed plugin) panels: context tracker, subagent/team visualizati
 | M0 | Scaffold: repo, monorepo, server health, Dockview shell rendering the v11 look, CI | ✅ |
 | M1 | First harness end-to-end: **pi** adapter (RPC mode) — chat, stream, persist, trajectory rows | ✅ |
 | M2 | Terminals: xterm.js + node-pty tabs | ✅ |
-| M3 | **Hermes** adapter (hermes-acp over stdio) + permission cards | |
-| M4 | **Claude Code** adapter (stream-json, `--permission-prompt-tool` → permission host) | |
+| M3 | **Hermes** adapter (hermes-acp over stdio) + permission cards | ✅ |
+| M4 | **Claude Code** adapter (stream-json + MCP permission host over HTTP) | ✅ |
 | M5 | Native panels: trajectory detail, context tracker, subagents, memory | ✅ (memory stays stub — no harness memory API yet) |
 | M6 | **DSH** adapter — local ACP (rewvis IS the dsh host; no bridge needed) | ✅ |
 | M7 | Node-agent for remote hosts · Tauri shell · mobile-responsive pass | |
