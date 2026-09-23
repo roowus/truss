@@ -41,3 +41,16 @@ interface HarnessAdapter {
 ```
 
 A harness with no structured mode gets a **PTY fallback adapter** later — the interface already abstracts it.
+
+## As built (rewvis, 2026-09-23)
+
+All four harnesses are connected and verified live through the Truss server:
+
+- **pi** (`adapters/pi.ts`) — `pi --mode rpc` per session; LF-safe framing; turn → `llm.call.*` with usage; `tool_execution_*` → tool rows; `auto_retry_*` → linked retries. Models via `~/.pi/agent/models.json` provider `zai-local` → key-proxy z.ai.
+- **dsh** (`adapters/dsh.ts`) — one shared `dsh --profile acp --patch config/truss-dsh-acp.yml` process, sessions multiplexed (`session/new` each); permission cards via `session/request_permission`. Patch routes the profile to fireworks through the key-proxy (`/opt/dsh/.env` supplies `AGENT_PROXY_KEY`).
+- **claude-code** (`adapters/claude.ts`) — one long-lived `claude -p --input-format stream-json` per session; permission host is a Streamable-HTTP MCP endpoint the Truss server hosts (`/mcp/perm/:sessionId`) with `--permission-prompt-tool mcp__truss_perms__approval`. Models run via `ANTHROPIC_BASE_URL` → key-proxy z.ai anthropic-compatible route.
+- **hermes** (`adapters/hermes.ts`) — shared-process `hermes-acp`; per-turn token usage from prompt settlement; model state from `session/new`. Hermes lives in `~/.hermes/venv` (uv), pinned `agent-client-protocol==0.9.0`, provider `custom:zai` in `~/.hermes/config.yaml`.
+
+The ACP adapters share **`adapters/acp.ts`** (stdio JSON-RPC client + standard event mapping + turn helpers) — new ACP harnesses are ~100 lines.
+
+The interface gained `queueWhileRunning` (pi queues follow-ups; ACP harnesses settle one turn at a time) and optional `resolve()` (permission hosts).
