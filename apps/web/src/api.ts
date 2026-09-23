@@ -65,4 +65,12 @@ export const api = {
     fetch(`/api/sessions/${id}/interrupt`, { method: "POST" }).then((r) =>
       json<{ ok: true }>(r),
     ),
+  createTerminal: (input: { cwd?: string; title?: string }) =>
+    fetch("/api/terminals", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    }).then((r) => json<{ id: string; title: string }>(r)),
+  closeTerminal: (id: string) =>
+    fetch(`/api/terminals/${id}`, { method: "DELETE" }).then((r) => json<{ ok: true }>(r)),
 };

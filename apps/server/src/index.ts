@@ -14,6 +14,7 @@ import {
   setBroadcaster,
   type EventFrame,
 } from "./sessions.js";
+import { attachTerminal, closeTerminal, createTerminal, listTerminals } from "./terminal.js";
 
 const PORT = Number(process.env.TRUSS_PORT ?? 4040);
 const app = Fastify({ logger: true });
@@ -111,6 +112,27 @@ app.delete("/api/sessions/:id", async (req) => {
   const { id } = req.params as { id: string };
   closeSession(id);
   return { ok: true };
+});
+
+/* ── terminals (M2) ── */
+
+app.get("/api/terminals", async () => ({ terminals: listTerminals() }));
+
+app.post("/api/terminals", async (req) => {
+  const body = (req.body ?? {}) as { cwd?: string; shell?: string; title?: string };
+  const t = createTerminal(body);
+  return t;
+});
+
+app.delete("/api/terminals/:id", async (req) => {
+  const { id } = req.params as { id: string };
+  closeTerminal(id);
+  return { ok: true };
+});
+
+app.get("/api/terminal/:id/ws", { websocket: true }, (socket, req) => {
+  const { id } = req.params as { id: string };
+  if (!attachTerminal(id, socket)) socket.close();
 });
 
 app.listen({ port: PORT, host: "0.0.0.0" }).catch((err) => {

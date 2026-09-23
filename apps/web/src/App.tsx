@@ -12,12 +12,13 @@ import { Sprite } from "./icons";
 import { Sidebar } from "./components/Sidebar";
 import { ChatPanel } from "./components/ChatPanel";
 import { TrajectoryPanel } from "./components/TrajectoryPanel";
+import { TerminalPanel } from "./components/TerminalPanel";
 import { StubPanel } from "./components/StubPanel";
 import { StatusBar } from "./components/StatusBar";
 
 /* ── dockview panel registry ── */
 
-type PanelParams = { sessionId?: string };
+type PanelParams = { sessionId?: string; terminalId?: string };
 
 const PANEL_DEFS: Record<
   string,
@@ -27,7 +28,6 @@ const PANEL_DEFS: Record<
   subagents: { title: "subagents", icon: "agents", lands: "M5" },
   memory: { title: "memory", icon: "brain", lands: "M5" },
   skills: { title: "skills", icon: "zap", lands: "M5" },
-  terminal: { title: "terminal", icon: "term", lands: "M2" },
 };
 
 function ChatWrapper(props: IDockviewPanelProps<PanelParams>) {
@@ -42,6 +42,14 @@ function TrajectoryWrapper(props: IDockviewPanelProps<PanelParams>) {
   return (
     <div className="pbody">
       <TrajectoryPanel sessionId={props.params.sessionId ?? null} />
+    </div>
+  );
+}
+
+function TerminalWrapper(props: IDockviewPanelProps<PanelParams>) {
+  return (
+    <div className="pbody">
+      <TerminalPanel terminalId={props.params.terminalId!} />
     </div>
   );
 }
@@ -63,6 +71,7 @@ const dockComponents: Record<
 > = {
   chat: ChatWrapper,
   trajectory: TrajectoryWrapper,
+  terminal: TerminalWrapper,
   ...Object.fromEntries(Object.keys(PANEL_DEFS).map((k) => [k, makeStub(k)])),
 };
 
@@ -138,11 +147,10 @@ export function App() {
         title: "trajectory",
         params: { sessionId: null },
       });
-      a.addPanel({
-        id: "terminal",
-        component: "terminal",
-        title: "terminal",
-        position: { referencePanel: "trajectory", direction: "below" },
+
+      /* closing a terminal tab kills its pty */
+      a.onDidRemovePanel((panel) => {
+        if (panel.id.startsWith("term:")) void api.closeTerminal(panel.id.slice(5));
       });
 
       a.onDidActivePanelChange((panel) => {
@@ -153,7 +161,12 @@ export function App() {
         }
       });
 
-      openInitialSession();
+      /* defer mutations past the ready frame — synchronous adds during onReady
+         hit dockview's parentless-element race ("Invalid grid element") */
+      requestAnimationFrame(() => {
+        void openTerminalPanel(); /* initial terminal tab below the trajectory */
+        openInitialSession();
+      });
       // eslint-disable-next-line react-hooks/exhaustive-deps
     },
     [openChatPanel, syncTrajectory],
@@ -184,6 +197,23 @@ export function App() {
     [openChatPanel],
   );
 
+  /** spawn a fresh pty and open it as a terminal tab in the bottom-right stack */
+  async function openTerminalPanel() {
+    const a = dockApi.current;
+    if (!a) return;
+    const t = await api.createTerminal({});
+    const anyTerm = a.panels.find((p) => p.id.startsWith("term:"));
+    a.addPanel({
+      id: `term:${t.id}`,
+      component: "terminal",
+      title: t.title,
+      params: { terminalId: t.id },
+      position: anyTerm
+        ? { referencePanel: anyTerm.id, direction: "within" }
+        : { referencePanel: "trajectory", direction: "below" },
+    });
+  }
+
   const onOpenPanel = useCallback((kind: string) => {
     const a = dockApi.current;
     if (!a) return;
@@ -191,9 +221,14 @@ export function App() {
       a.getPanel("trajectory")?.api.setActive();
       return;
     }
+    if (kind === "terminal") {
+      void openTerminalPanel(); // every click = a fresh shell tab
+      return;
+    }
     const existing = a.getPanel(kind);
     if (existing) existing.api.setActive();
     else a.addPanel({ id: kind, component: kind, title: PANEL_DEFS[kind]?.title ?? kind });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   /* sidebar drag — 1px overlay handle, ±3px target */

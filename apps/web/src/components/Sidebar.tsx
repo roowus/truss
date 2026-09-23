@@ -151,6 +151,17 @@ export function Sidebar({
           trajectory
         </span>
       </div>
+      <div className="sess bub" onClick={() => onOpenPanel("terminal")} title="new shell">
+        <span className="hlogo none" data-name="Terminal — new per click">
+          <Icon name="term" />
+        </span>
+        <span className="nm" style={{ opacity: 0.6 }}>
+          terminal
+        </span>
+        <span className="meta">
+          <Icon name="plus" className="ic sm" />
+        </span>
+      </div>
       <div className="sess bub" onClick={() => onOpenPanel("context")}>
         <span className="hlogo none" data-name="Context tracker">
           <Icon name="ctx" />
