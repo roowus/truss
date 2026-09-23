@@ -4,12 +4,14 @@ import { store } from "./db.js";
 import { piAdapter } from "./adapters/pi.js";
 import { dshAdapter } from "./adapters/dsh.js";
 import { claudeAdapter } from "./adapters/claude.js";
+import { hermesAdapter } from "./adapters/hermes.js";
 import type { AdapterHandle, HarnessAdapter } from "./adapters/types.js";
 
 const adapters = new Map<HarnessId, HarnessAdapter>([
   [piAdapter.id, piAdapter],
   [dshAdapter.id, dshAdapter],
   [claudeAdapter.id, claudeAdapter],
+  [hermesAdapter.id, hermesAdapter],
 ]);
 
 interface LiveSession {
