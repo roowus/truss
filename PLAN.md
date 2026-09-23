@@ -28,7 +28,7 @@ Native (pre-installed plugin) panels: context tracker, subagent/team visualizati
 | M2 | Terminals: xterm.js + node-pty tabs | ✅ |
 | M3 | **Hermes** adapter (hermes-acp over stdio) + permission cards | |
 | M4 | **Claude Code** adapter (stream-json, `--permission-prompt-tool` → permission host) | |
-| M5 | Native panels: trajectory detail, context tracker, subagents, memory | |
+| M5 | Native panels: trajectory detail, context tracker, subagents, memory | ✅ (memory stays stub — no harness memory API yet) |
 | M6 | **DSH** adapter via SSH bridge to rewvis | |
 | M7 | Node-agent for remote hosts · Tauri shell · mobile-responsive pass | |
 
