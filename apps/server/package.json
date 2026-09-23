@@ -8,6 +8,7 @@
     "lint": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@fastify/static": "^10.1.4",
     "@fastify/websocket": "^11.0.1",
     "@truss/proto": "workspace:*",
     "better-sqlite3": "^11.5.0",

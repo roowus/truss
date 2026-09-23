@@ -1,5 +1,9 @@
 import Fastify from "fastify";
 import websocket from "@fastify/websocket";
+import fastifyStatic from "@fastify/static";
+import { existsSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { HarnessId } from "@truss/proto";
 import { store } from "./db.js";
 import {
@@ -156,7 +160,24 @@ app.get("/api/skills", async (req) => {
   return { skills: listSkills(cwd) };
 });
 
-app.listen({ port: PORT, host: "0.0.0.0" }).catch((err) => {
-  app.log.error(err);
-  process.exit(1);
-});
+/* ── static hosting: serve the built web app when dist exists (prod mode) ── */
+const here = dirname(fileURLToPath(import.meta.url));
+const webDist = process.env.TRUSS_WEB_DIST ?? join(here, "..", "..", "web", "dist");
+if (existsSync(join(webDist, "index.html"))) {
+  await app.register(fastifyStatic, { root: webDist });
+  /* SPA fallback — anything not /api, /events, or a file goes to the shell */
+  app.setNotFoundHandler((req, reply) => {
+    if (req.method === "GET" && !req.url.startsWith("/api") && !req.url.startsWith("/events")) {
+      return reply.sendFile("index.html");
+    }
+    return reply.code(404).send({ error: "not found" });
+  });
+  app.log.info(`serving web app from ${webDist}`);
+}
+
+app
+  .listen({ port: PORT, host: process.env.TRUSS_HOST ?? "0.0.0.0" })
+  .catch((err) => {
+    app.log.error(err);
+    process.exit(1);
+  });
