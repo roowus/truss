@@ -338,6 +338,7 @@ function handleRecord(h: PiHandle, rec: PiRecord, emit: (ev: ProtoEvent) => void
         toolCallId: id,
         name: rec.toolName ?? "tool",
         args: rec.args,
+        callId: h.currentCallId ?? undefined,
       });
       return;
     }

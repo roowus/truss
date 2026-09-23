@@ -15,6 +15,7 @@ import {
   type EventFrame,
 } from "./sessions.js";
 import { attachTerminal, closeTerminal, createTerminal, listTerminals } from "./terminal.js";
+import { listSkills } from "./skills.js";
 
 const PORT = Number(process.env.TRUSS_PORT ?? 4040);
 const app = Fastify({ logger: true });
@@ -133,6 +134,12 @@ app.delete("/api/terminals/:id", async (req) => {
 app.get("/api/terminal/:id/ws", { websocket: true }, (socket, req) => {
   const { id } = req.params as { id: string };
   if (!attachTerminal(id, socket)) socket.close();
+});
+
+/* pi skills visible to a working directory (global + project) */
+app.get("/api/skills", async (req) => {
+  const { cwd } = req.query as { cwd?: string };
+  return { skills: listSkills(cwd) };
 });
 
 app.listen({ port: PORT, host: "0.0.0.0" }).catch((err) => {

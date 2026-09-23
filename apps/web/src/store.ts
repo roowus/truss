@@ -19,6 +19,7 @@ export interface ChatEntry {
   ok?: boolean;
   durationMs?: number;
   output?: string;
+  callId?: string;
   at: number;
 }
 
@@ -41,10 +42,19 @@ interface CtxState {
   by?: { system?: number; tools?: number; rules?: number; memory?: number; conversation?: number };
 }
 
+export interface AgentNode {
+  agentId: string;
+  label: string;
+  parentAgentId?: string;
+  done: boolean;
+  ok?: boolean;
+}
+
 interface SessionData {
   entries: ChatEntry[];
   calls: CallRow[];
   ctx: CtxState | null;
+  agents: AgentNode[];
   /** highest applied event-log rowid — replay vs live dedupe */
   lastSeq: number;
   /** events have been fetched at least once (else WS-only gaps possible) */
@@ -88,7 +98,7 @@ class TrussStore {
   private sessionData(id: string): SessionData {
     let d = this.data.get(id);
     if (!d) {
-      d = { entries: [], calls: [], ctx: null, lastSeq: 0, hydrated: false };
+      d = { entries: [], calls: [], ctx: null, agents: [], lastSeq: 0, hydrated: false };
       this.data.set(id, d);
     }
     return d;
@@ -199,6 +209,7 @@ class TrussStore {
           name: ev.name,
           args: ev.args,
           status: "in_progress",
+          callId: ev.callId,
           at: Date.now(),
         });
         break;
@@ -244,8 +255,27 @@ class TrussStore {
         d.ctx = { used: ev.used, total: ev.total, by: ev.by };
         break;
       }
+      case "subagent.spawn": {
+        const d = this.sessionData(ev.sessionId);
+        d.agents.push({
+          agentId: ev.agentId,
+          label: ev.label,
+          parentAgentId: ev.parentAgentId,
+          done: false,
+        });
+        break;
+      }
+      case "subagent.done": {
+        const d = this.sessionData(ev.sessionId);
+        const a = d.agents.find((n) => n.agentId === ev.agentId);
+        if (a) {
+          a.done = true;
+          a.ok = ev.ok;
+        }
+        break;
+      }
       default:
-        return; // perm/subagent events land in later milestones
+        return; // permission events land with M3/M4
     }
     if (!defer) this.bump();
   }

@@ -938,6 +938,30 @@ code.il {
 .trow .st.bad {
   color: var(--orange);
 }
+/* expanded call detail: tools + token breakdown hanging off the row */
+.tsub {
+  grid-column: 2/5;
+  padding: 2px 0 6px 12px;
+  border-left: 1px dashed rgba(98, 114, 164, 0.28);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 10.5px;
+  color: var(--com);
+}
+.tsub div {
+  display: flex;
+  gap: 8px;
+}
+.tsub .k {
+  color: var(--pink);
+  font-weight: 600;
+}
+.tsub .tm {
+  margin-left: auto;
+  color: var(--com-dim);
+  font-feature-settings: "tnum";
+}
 .pane-f {
   flex: none;
   padding: 7px 16px;
@@ -951,6 +975,194 @@ code.il {
 .pane-f b {
   color: var(--com);
   font-weight: 600;
+}
+
+/* ══ context tracker panel ══ */
+.ctxpanel {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+.ctx-big .num {
+  font-size: 26px;
+  font-weight: 600;
+  font-feature-settings: "tnum";
+  letter-spacing: -0.02em;
+}
+.ctx-big .num .of {
+  font-size: 13px;
+  color: var(--com);
+  font-weight: 500;
+  margin-left: 6px;
+}
+.ctx-big .sub {
+  font-size: 11px;
+  color: var(--com);
+  margin: 2px 0 10px;
+}
+.gauge {
+  display: flex;
+  gap: 1.5px;
+  height: 8px;
+}
+.gauge i {
+  border-radius: 2px;
+  height: 100%;
+}
+.gauge .free {
+  background: rgba(98, 114, 164, 0.18);
+  flex: 1;
+}
+.legend {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+  font-size: 10.5px;
+  color: var(--com);
+}
+.legend span {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.legend i {
+  width: 7px;
+  height: 7px;
+  border-radius: 2px;
+}
+.ctx-hist .hd {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--com-dim);
+  margin-bottom: 8px;
+}
+.ctx-hist .sub {
+  font-size: 11px;
+  color: var(--com-dim);
+}
+.hrow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 3px 0;
+}
+.hrow .hts {
+  width: 44px;
+  font-size: 10px;
+  color: var(--com);
+  text-align: right;
+  font-feature-settings: "tnum";
+}
+.hrow .hbar {
+  flex: 1;
+  height: 4px;
+  background: rgba(98, 114, 164, 0.15);
+  border-radius: 99px;
+  overflow: hidden;
+}
+.hrow .hbar i {
+  display: block;
+  height: 100%;
+  background: var(--purple);
+  border-radius: 99px;
+}
+
+/* ══ subagents panel ══ */
+.agentpanel {
+  flex: 1;
+  overflow-y: auto;
+  padding: 10px 0;
+}
+.agentrow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 14px;
+  font-size: 12px;
+}
+.agentrow:hover {
+  background: var(--hover);
+}
+.agentrow .adot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex: none;
+}
+.agentrow .adot.run {
+  background: var(--cyan);
+  animation: pulse 1.1s steps(1) infinite;
+}
+.agentrow .adot.ok {
+  background: var(--purple);
+}
+.agentrow .adot.bad {
+  background: var(--red);
+}
+.agentrow .albl {
+  color: var(--fg);
+  font-weight: 500;
+}
+.agentrow .ameta {
+  margin-left: auto;
+  font-size: 10px;
+  color: var(--com-dim);
+}
+
+/* ══ skills panel ══ */
+.skillpanel {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px 0;
+}
+.skillrow {
+  padding: 8px 16px;
+  border-left: 2px solid transparent;
+}
+.skillrow:hover {
+  background: var(--hover);
+  border-left-color: var(--purple);
+}
+.skillrow .stop {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.skillrow .sname {
+  font-size: 12px;
+  font-weight: 600;
+}
+.skillrow .sscope {
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  padding: 1px 7px;
+  border-radius: 99px;
+  border: 1px solid var(--hair);
+  color: var(--com);
+}
+.skillrow .sscope.project {
+  color: var(--cyan);
+  border-color: rgba(139, 233, 253, 0.35);
+}
+.skillrow .sdesc {
+  font-size: 11px;
+  color: var(--com);
+  margin-top: 2px;
+  line-height: 1.5;
+}
+.skillrow .ssrc {
+  font-family: var(--fmono);
+  font-size: 9.5px;
+  color: var(--com-dim);
+  margin-top: 3px;
 }
 
 /* ══ placeholder panel (M2+/M5+ stubs) ══ */

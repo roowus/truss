@@ -66,6 +66,8 @@ export interface ToolCall {
   toolCallId: string;
   name: string;
   args: unknown;
+  /** the llm.call (turn) this tool execution belongs to, when known */
+  callId?: string;
 }
 export interface ToolUpdate {
   type: "tool.update";

@@ -13,6 +13,9 @@ import { Sidebar } from "./components/Sidebar";
 import { ChatPanel } from "./components/ChatPanel";
 import { TrajectoryPanel } from "./components/TrajectoryPanel";
 import { TerminalPanel } from "./components/TerminalPanel";
+import { ContextPanel } from "./components/ContextPanel";
+import { SubagentsPanel } from "./components/SubagentsPanel";
+import { SkillsPanel } from "./components/SkillsPanel";
 import { StubPanel } from "./components/StubPanel";
 import { StatusBar } from "./components/StatusBar";
 
@@ -20,15 +23,16 @@ import { StatusBar } from "./components/StatusBar";
 
 type PanelParams = { sessionId?: string; terminalId?: string };
 
+/** native panel titles (memory stays a stub until harnesses expose memory APIs) */
 const PANEL_DEFS: Record<
   string,
   { title: string; icon: Parameters<typeof StubPanel>[0]["icon"]; lands: string }
 > = {
-  context: { title: "context tracker", icon: "ctx", lands: "M5" },
-  subagents: { title: "subagents", icon: "agents", lands: "M5" },
-  memory: { title: "memory", icon: "brain", lands: "M5" },
-  skills: { title: "skills", icon: "zap", lands: "M5" },
+  memory: { title: "memory", icon: "brain", lands: "with a harness that has one" },
 };
+
+/** panels whose content follows the focused chat's session */
+const SESSION_SCOPED = ["trajectory", "context", "subagents", "skills"];
 
 function ChatWrapper(props: IDockviewPanelProps<PanelParams>) {
   return (
@@ -54,6 +58,30 @@ function TerminalWrapper(props: IDockviewPanelProps<PanelParams>) {
   );
 }
 
+function ContextWrapper(props: IDockviewPanelProps<PanelParams>) {
+  return (
+    <div className="pbody">
+      <ContextPanel sessionId={props.params.sessionId ?? null} />
+    </div>
+  );
+}
+
+function SubagentsWrapper(props: IDockviewPanelProps<PanelParams>) {
+  return (
+    <div className="pbody">
+      <SubagentsPanel sessionId={props.params.sessionId ?? null} />
+    </div>
+  );
+}
+
+function SkillsWrapper(props: IDockviewPanelProps<PanelParams>) {
+  return (
+    <div className="pbody">
+      <SkillsPanel sessionId={props.params.sessionId ?? null} />
+    </div>
+  );
+}
+
 function makeStub(kind: string) {
   const def = PANEL_DEFS[kind];
   return function Stub() {
@@ -72,6 +100,9 @@ const dockComponents: Record<
   chat: ChatWrapper,
   trajectory: TrajectoryWrapper,
   terminal: TerminalWrapper,
+  context: ContextWrapper,
+  subagents: SubagentsWrapper,
+  skills: SkillsWrapper,
   ...Object.fromEntries(Object.keys(PANEL_DEFS).map((k) => [k, makeStub(k)])),
 };
 
@@ -82,6 +113,8 @@ export function App() {
   const version = useStoreVersion();
   const dockApi = useRef<DockviewReadyEvent["api"] | null>(null);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
+  const activeRef = useRef<string | null>(null);
+  activeRef.current = activeSessionId;
   const [showNew, setShowNew] = useState(false);
   const [sideWidth, setSideWidth] = useState(236);
 
@@ -100,11 +133,13 @@ export function App() {
     }
   }, [version]);
 
-  /* trajectory follows the focused chat: push active session into the panel */
+  /* session-scoped panels follow the focused chat */
   const syncTrajectory = useCallback((sessionId: string | null) => {
     const a = dockApi.current;
     if (!a) return;
-    a.getPanel("trajectory")?.api.updateParameters({ sessionId });
+    for (const id of SESSION_SCOPED) {
+      a.getPanel(id)?.api.updateParameters({ sessionId });
+    }
   }, []);
 
   const openChatPanel = useCallback(
@@ -226,8 +261,20 @@ export function App() {
       return;
     }
     const existing = a.getPanel(kind);
-    if (existing) existing.api.setActive();
-    else a.addPanel({ id: kind, component: kind, title: PANEL_DEFS[kind]?.title ?? kind });
+    if (existing) {
+      existing.api.setActive();
+      /* late-opened session-scoped panels get the current selection immediately */
+      if (SESSION_SCOPED.includes(kind)) {
+        existing.api.updateParameters({ sessionId: activeRef.current });
+      }
+    } else {
+      a.addPanel({
+        id: kind,
+        component: kind,
+        title: PANEL_DEFS[kind]?.title ?? kind,
+        params: SESSION_SCOPED.includes(kind) ? { sessionId: activeRef.current } : {},
+      });
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
