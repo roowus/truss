@@ -1,0 +1,36 @@
+# Truss DSH adapter profile patch — mirrors the working lab model routing.
+# Boots: dsh --profile acp --patch config/truss-dsh-acp.yml
+#
+# The stock acp profile defaults to the deepseek-official route, which has no
+# key on this host. The fireworks route resolves FIREWORKS_API_KEY from the
+# DSH credentials store (/opt/dsh/.credentials.yaml) — the same store the
+# daily web profile instances use.
+- id: llm-deepseek
+  disabled: true
+- id: agent-default-model
+  config:
+    provider: fireworks
+    model: accounts/fireworks/models/kimi-k3
+# the acp server pins its own provider/model for sessions it creates — repoint it
+- id: acp
+  config:
+    provider: fireworks
+    model: accounts/fireworks/models/kimi-k3
+# the acp profile's settings-file section never surfaces a fireworks profile to
+# llm-pi-ai (its adapter registry stays dormant), so supply the route directly —
+# same endpoint the file-backed settings give the web profile
+- id: llm-pi-ai
+  config:
+    providers:
+      fireworks:
+        apiKeyEnv: AGENT_PROXY_KEY
+        api: openai-completions
+        baseURL: http://127.0.0.1:45820/inference/v1
+        displayName: Fireworks
+        models:
+          - id: accounts/fireworks/models/kimi-k3
+            name: Kimi K3
+            input: [text]
+          - id: accounts/fireworks/models/glm-5p3
+            name: GLM 5.3
+            input: [text]

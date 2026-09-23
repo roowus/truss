@@ -2,9 +2,13 @@ import { randomUUID } from "node:crypto";
 import type { HarnessId, ProtoEvent } from "@truss/proto";
 import { store } from "./db.js";
 import { piAdapter } from "./adapters/pi.js";
+import { dshAdapter } from "./adapters/dsh.js";
 import type { AdapterHandle, HarnessAdapter } from "./adapters/types.js";
 
-const adapters = new Map<HarnessId, HarnessAdapter>([[piAdapter.id, piAdapter]]);
+const adapters = new Map<HarnessId, HarnessAdapter>([
+  [piAdapter.id, piAdapter],
+  [dshAdapter.id, dshAdapter],
+]);
 
 interface LiveSession {
   adapter: HarnessAdapter;
@@ -125,6 +129,13 @@ export function interrupt(sessionId: string) {
   const s = live.get(sessionId);
   if (!s) throw new Error(`session not live: ${sessionId}`);
   s.adapter.interrupt(s.handle);
+}
+
+export function resolvePermission(sessionId: string, requestId: string, choice: string) {
+  const s = live.get(sessionId);
+  if (!s?.adapter.resolve) throw new Error(`session ${sessionId} has no permission host`);
+  s.adapter.resolve(s.handle, requestId, choice);
+  sink({ type: "perm.resolve", sessionId, requestId, choice });
 }
 
 export function closeSession(sessionId: string) {

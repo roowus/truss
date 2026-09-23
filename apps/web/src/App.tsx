@@ -338,13 +338,14 @@ function NewSessionModal({
   onCreated: (s: SessionMeta) => void;
 }) {
   const s = useStore();
+  const [harness, setHarness] = useState("pi");
   const [cwd, setCwd] = useState("~/projects");
   const [project, setProject] = useState("");
   const [model, setModel] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const models = s.models.filter((m) => m.harness === "pi");
+  const models = s.models.filter((m) => m.harness === harness);
   const chosen = models.find((m) => m.model === model) ?? models[0];
 
   const create = async () => {
@@ -353,7 +354,7 @@ function NewSessionModal({
     setError(null);
     try {
       const { session } = await api.createSession({
-        harness: "pi",
+        harness,
         cwd: cwd.replace(/^~/, "/home/ubuntu"),
         model: chosen?.model,
         provider: chosen?.provider,
@@ -373,19 +374,33 @@ function NewSessionModal({
         <h2>new session</h2>
         <div>
           <label>harness</label>
-          <select value="pi" disabled>
-            <option value="pi">pi — rpc</option>
+          <select
+            value={harness}
+            onChange={(e) => {
+              setHarness(e.target.value);
+              setModel("");
+            }}
+          >
+            {s.harnesses.map((h) => (
+              <option key={h.id} value={h.id}>
+                {h.id}
+              </option>
+            ))}
           </select>
         </div>
         <div>
           <label>model</label>
-          <select value={chosen?.model ?? ""} onChange={(e) => setModel(e.target.value)}>
-            {models.map((m) => (
-              <option key={m.model} value={m.model}>
-                {m.label}
-              </option>
-            ))}
-          </select>
+          {models.length > 0 ? (
+            <select value={chosen?.model ?? ""} onChange={(e) => setModel(e.target.value)}>
+              {models.map((m) => (
+                <option key={m.model} value={m.model}>
+                  {m.label}
+                </option>
+              ))}
+            </select>
+          ) : (
+            <input value="harness default" disabled />
+          )}
         </div>
         <div>
           <label>working directory</label>

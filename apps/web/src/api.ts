@@ -15,7 +15,12 @@ export interface SessionMeta {
 
 export interface HarnessInfo {
   id: string;
-  capabilities: { permissions: boolean; subagents: boolean; streaming: boolean };
+  capabilities: {
+    permissions: boolean;
+    subagents: boolean;
+    streaming: boolean;
+    queueWhileRunning: boolean;
+  };
 }
 
 export interface ModelInfo {
@@ -73,4 +78,10 @@ export const api = {
     }).then((r) => json<{ id: string; title: string }>(r)),
   closeTerminal: (id: string) =>
     fetch(`/api/terminals/${id}`, { method: "DELETE" }).then((r) => json<{ ok: true }>(r)),
+  resolvePermission: (sessionId: string, requestId: string, choice: string) =>
+    fetch(`/api/sessions/${sessionId}/permission`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ requestId, choice }),
+    }).then((r) => json<{ ok: true }>(r)),
 };

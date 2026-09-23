@@ -652,6 +652,60 @@ code.il {
   line-height: 1.8;
 }
 
+/* ══ permission card — agent→user ask, answers close the round-trip ══ */
+.permcard {
+  align-self: stretch;
+  max-width: 480px;
+  border: 1px solid rgba(255, 184, 108, 0.35);
+  border-radius: 9px;
+  background: rgba(255, 184, 108, 0.06);
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.perm-h {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--orange);
+}
+.perm-h b {
+  font-weight: 600;
+  color: var(--fg);
+}
+.perm-h .perm-kind {
+  color: var(--com);
+  font-size: 10.5px;
+}
+.perm-opts {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.perm-opts button {
+  border: 1px solid var(--hair);
+  background: rgba(12, 13, 18, 0.5);
+  color: var(--fg);
+  border-radius: 7px;
+  padding: 4px 12px;
+  font-size: 11px;
+  font-weight: 500;
+}
+.perm-opts button:hover {
+  border-color: rgba(189, 147, 249, 0.5);
+  background: var(--hover);
+}
+.perm-opts button:first-child {
+  border-color: rgba(189, 147, 249, 0.5);
+  color: var(--purple);
+}
+.perm-opts button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
 /* ══ composer dock ══ */
 .dock {
   flex: none;

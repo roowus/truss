@@ -1,7 +1,36 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "../api";
 import { Icon } from "../icons";
-import { fmtTokens, useStore, type ChatEntry } from "../store";
+import { fmtTokens, useStore, type ChatEntry, type PermCard } from "../store";
+
+/** agent→user permission card — the bidirectional contract in the UI */
+function PermissionCard({ sessionId, perm }: { sessionId: string; perm: PermCard }) {
+  const [answering, setAnswering] = useState(false);
+  const answer = async (choice: string) => {
+    setAnswering(true);
+    try {
+      await api.resolvePermission(sessionId, perm.requestId, choice);
+    } finally {
+      setAnswering(false);
+    }
+  };
+  return (
+    <div className="permcard">
+      <div className="perm-h">
+        <Icon name="shield" className="ic sm" />
+        <b>{perm.tool}</b>
+        <span className="perm-kind">{perm.reason}</span>
+      </div>
+      <div className="perm-opts">
+        {perm.options.map((o) => (
+          <button key={o} disabled={answering} onClick={() => void answer(o)}>
+            {o}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
 
 /** one chat timeline entry */
 function Entry({ e, harness }: { e: ChatEntry; harness: string }) {
@@ -75,7 +104,10 @@ export function ChatPanel({ sessionId }: { sessionId: string }) {
   const sess = s.sessions.get(sessionId);
   const d = s.data.get(sessionId);
   const entries = d?.entries ?? [];
+  const perms = d?.perms ?? [];
   const running = sess?.state === "running";
+  const harness = s.harnesses.find((h) => h.id === sess?.harness);
+  const canQueue = harness?.capabilities.queueWhileRunning ?? true;
 
   /* hydrate history on first open */
   useEffect(() => {
@@ -125,6 +157,9 @@ export function ChatPanel({ sessionId }: { sessionId: string }) {
           {entries.map((e) => (
             <Entry key={e.id} e={e} harness={sess.harness} />
           ))}
+          {perms.map((p) => (
+            <PermissionCard key={p.requestId} sessionId={sessionId} perm={p} />
+          ))}
           <div ref={bottomRef} />
         </div>
         {userTurns.length > 1 && (
@@ -165,10 +200,12 @@ export function ChatPanel({ sessionId }: { sessionId: string }) {
               sess.state === "closed"
                 ? "this session is closed"
                 : running
-                  ? "queue a follow-up…"
+                  ? canQueue
+                    ? "queue a follow-up…"
+                    : "waiting for the turn to settle…"
                   : `prompt ${sess.harness}…`
             }
-            disabled={sess.state === "closed"}
+            disabled={sess.state === "closed" || (running && !canQueue)}
             onChange={(e) => setDraft(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === "Enter" && !e.shiftKey) {
@@ -188,11 +225,13 @@ export function ChatPanel({ sessionId }: { sessionId: string }) {
           )}
           <button
             className="send"
-            disabled={!draft.trim() || sending || sess.state === "closed"}
+            disabled={
+              !draft.trim() || sending || sess.state === "closed" || (running && !canQueue)
+            }
             onClick={() => void send()}
           >
             <Icon name="send" className="ic sm" />
-            {running ? "Queue" : "Send"}
+            {running ? (canQueue ? "Queue" : "Running…") : "Send"}
           </button>
         </div>
         <div className="chips">

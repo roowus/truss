@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from "react";
 import type { ProtoEvent } from "@truss/proto";
-import { api, type EventFrame, type ModelInfo, type SessionMeta } from "./api";
+import { api, type EventFrame, type HarnessInfo, type ModelInfo, type SessionMeta } from "./api";
 
 /* ── derived per-session shapes ── */
 
@@ -50,11 +50,20 @@ export interface AgentNode {
   ok?: boolean;
 }
 
+export interface PermCard {
+  requestId: string;
+  tool: string;
+  reason: string;
+  options: string[];
+  at: number;
+}
+
 interface SessionData {
   entries: ChatEntry[];
   calls: CallRow[];
   ctx: CtxState | null;
   agents: AgentNode[];
+  perms: PermCard[];
   /** highest applied event-log rowid — replay vs live dedupe */
   lastSeq: number;
   /** events have been fetched at least once (else WS-only gaps possible) */
@@ -67,6 +76,7 @@ class TrussStore {
   sessions = new Map<string, SessionMeta>();
   data = new Map<string, SessionData>();
   models: ModelInfo[] = [];
+  harnesses: HarnessInfo[] = [];
   wsState: "connecting" | "open" | "closed" = "connecting";
 
   private listeners = new Set<() => void>();
@@ -98,7 +108,7 @@ class TrussStore {
   private sessionData(id: string): SessionData {
     let d = this.data.get(id);
     if (!d) {
-      d = { entries: [], calls: [], ctx: null, agents: [], lastSeq: 0, hydrated: false };
+      d = { entries: [], calls: [], ctx: null, agents: [], perms: [], lastSeq: 0, hydrated: false };
       this.data.set(id, d);
     }
     return d;
@@ -107,8 +117,12 @@ class TrussStore {
   /* ── loading ── */
 
   async init() {
-    const [{ sessions }, { models }] = await Promise.all([api.sessions(), api.harnesses()]);
+    const [{ sessions }, { models, harnesses }] = await Promise.all([
+      api.sessions(),
+      api.harnesses(),
+    ]);
     this.models = models;
+    this.harnesses = harnesses;
     for (const s of sessions) this.sessions.set(s.id, s);
     this.bump();
   }
@@ -274,8 +288,26 @@ class TrussStore {
         }
         break;
       }
+      case "perm.request": {
+        const d = this.sessionData(ev.sessionId);
+        if (!d.perms.some((p) => p.requestId === ev.requestId)) {
+          d.perms.push({
+            requestId: ev.requestId,
+            tool: ev.tool,
+            reason: ev.reason,
+            options: ev.options,
+            at: Date.now(),
+          });
+        }
+        break;
+      }
+      case "perm.resolve": {
+        const d = this.sessionData(ev.sessionId);
+        d.perms = d.perms.filter((p) => p.requestId !== ev.requestId);
+        break;
+      }
       default:
-        return; // permission events land with M3/M4
+        return;
     }
     if (!defer) this.bump();
   }

@@ -10,6 +10,7 @@ import {
   listHarnesses,
   listModels,
   reconcileOnBoot,
+  resolvePermission,
   sendPrompt,
   setBroadcaster,
   type EventFrame,
@@ -103,6 +104,19 @@ app.post("/api/sessions/:id/interrupt", async (req, reply) => {
   const { id } = req.params as { id: string };
   try {
     interrupt(id);
+    return { ok: true };
+  } catch (err) {
+    return reply.code(409).send({ error: String(err) });
+  }
+});
+
+/** permission card answer — the agent→user round-trip closes here */
+app.post("/api/sessions/:id/permission", async (req, reply) => {
+  const { id } = req.params as { id: string };
+  const { requestId, choice } = (req.body ?? {}) as { requestId?: string; choice?: string };
+  if (!requestId || !choice) return reply.code(400).send({ error: "requestId and choice required" });
+  try {
+    resolvePermission(id, requestId, choice);
     return { ok: true };
   } catch (err) {
     return reply.code(409).send({ error: String(err) });

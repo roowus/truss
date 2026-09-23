@@ -61,6 +61,8 @@ export function TrajectoryPanel({ sessionId }: { sessionId: string | null }) {
   const tickFmt = span < 10 * 60_000 ? fmtClockS : fmtClock;
 
   const maxLatency = Math.max(...calls.map((c) => c.latencyMs ?? 0), 1000);
+  /* some harnesses (dsh/ACP) report context usage but not per-call tokens */
+  const hasTokenData = calls.some((c) => c.tokensIn != null || c.tokensOut != null);
   const totalIn = calls.reduce((a, c) => a + (c.tokensIn ?? 0), 0);
   const totalOut = calls.reduce((a, c) => a + (c.tokensOut ?? 0), 0);
   const cost = calls.reduce((a, c) => a + (c.costUsd ?? 0), 0);
@@ -119,9 +121,7 @@ export function TrajectoryPanel({ sessionId }: { sessionId: string | null }) {
         </span>
         <span>
           tokens{" "}
-          <b>
-            {fmtTokens(totalIn)} → {fmtTokens(totalOut)}
-          </b>
+          <b>{hasTokenData ? `${fmtTokens(totalIn)} → ${fmtTokens(totalOut)}` : "—"}</b>
         </span>
         <span>
           cost <b>${cost.toFixed(4)}</b>

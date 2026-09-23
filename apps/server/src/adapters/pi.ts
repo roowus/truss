@@ -136,7 +136,7 @@ export function readPiModels(): { provider: string; model: string; label: string
 
 export const piAdapter: HarnessAdapter = {
   id: "pi",
-  capabilities: { permissions: false, subagents: false, streaming: true },
+  capabilities: { permissions: false, subagents: false, streaming: true, queueWhileRunning: true },
 
   async listModels() {
     return readPiModels();

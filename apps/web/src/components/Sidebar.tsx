@@ -121,6 +121,11 @@ export function Sidebar({
         <span className="meta">rpc</span>
       </div>
       <div className="sess bub" style={{ cursor: "default" }}>
+        <HarnessLogo harness="dsh" name="DeepSeek Harness" />
+        <span className="nm">DeepSeek Harness</span>
+        <span className="meta">acp</span>
+      </div>
+      <div className="sess bub" style={{ cursor: "default" }}>
         <HarnessLogo harness="claude-code" name="Claude Code" />
         <span className="nm" style={{ opacity: 0.45 }}>
           Claude Code
@@ -133,13 +138,6 @@ export function Sidebar({
           Hermes
         </span>
         <span className="meta">M3</span>
-      </div>
-      <div className="sess bub" style={{ cursor: "default" }}>
-        <HarnessLogo harness="dsh" name="DeepSeek Harness" />
-        <span className="nm" style={{ opacity: 0.45 }}>
-          DeepSeek Harness
-        </span>
-        <span className="meta">M6</span>
       </div>
 
       <div className="sec">Panels</div>
