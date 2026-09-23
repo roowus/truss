@@ -1,6 +1,6 @@
 import Fastify from "fastify";
 import websocket from "@fastify/websocket";
-import type { ProtoEvent, HarnessId } from "@truss/proto";
+import type { HarnessId } from "@truss/proto";
 import { store } from "./db.js";
 import {
   closeSession,
@@ -12,6 +12,7 @@ import {
   reconcileOnBoot,
   sendPrompt,
   setBroadcaster,
+  type EventFrame,
 } from "./sessions.js";
 
 const PORT = Number(process.env.TRUSS_PORT ?? 4040);
@@ -22,8 +23,8 @@ await app.register(websocket);
 /* ── WS fan-out ── */
 const clients = new Set<{ send: (s: string) => void }>();
 
-setBroadcaster((event: ProtoEvent) => {
-  const line = JSON.stringify(event);
+setBroadcaster((frame: EventFrame) => {
+  const line = JSON.stringify(frame);
   for (const c of clients) c.send(line);
 });
 

@@ -1,51 +1,328 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  DockviewReact,
+  themeAbyss,
+  type DockviewReadyEvent,
+  type IDockviewPanelProps,
+} from "dockview";
+import "dockview/dist/styles/dockview.css";
+import { api, type SessionMeta } from "./api";
+import { connectEvents, store, useStore, useStoreVersion } from "./store";
+import { Sprite } from "./icons";
+import { Sidebar } from "./components/Sidebar";
+import { ChatPanel } from "./components/ChatPanel";
+import { TrajectoryPanel } from "./components/TrajectoryPanel";
+import { StubPanel } from "./components/StubPanel";
+import { StatusBar } from "./components/StatusBar";
 
-/** M0 shell — proves the server link and renders the frame. Panels land in M1+. */
+/* ── dockview panel registry ── */
+
+type PanelParams = { sessionId?: string };
+
+const PANEL_DEFS: Record<
+  string,
+  { title: string; icon: Parameters<typeof StubPanel>[0]["icon"]; lands: string }
+> = {
+  context: { title: "context tracker", icon: "ctx", lands: "M5" },
+  subagents: { title: "subagents", icon: "agents", lands: "M5" },
+  memory: { title: "memory", icon: "brain", lands: "M5" },
+  skills: { title: "skills", icon: "zap", lands: "M5" },
+  terminal: { title: "terminal", icon: "term", lands: "M2" },
+};
+
+function ChatWrapper(props: IDockviewPanelProps<PanelParams>) {
+  return (
+    <div className="pbody">
+      <ChatPanel sessionId={props.params.sessionId!} />
+    </div>
+  );
+}
+
+function TrajectoryWrapper(props: IDockviewPanelProps<PanelParams>) {
+  return (
+    <div className="pbody">
+      <TrajectoryPanel sessionId={props.params.sessionId ?? null} />
+    </div>
+  );
+}
+
+function makeStub(kind: string) {
+  const def = PANEL_DEFS[kind];
+  return function Stub() {
+    return (
+      <div className="pbody">
+        <StubPanel title={def.title} icon={def.icon} lands={def.lands} />
+      </div>
+    );
+  };
+}
+
+const dockComponents: Record<
+  string,
+  React.FunctionComponent<IDockviewPanelProps<PanelParams>>
+> = {
+  chat: ChatWrapper,
+  trajectory: TrajectoryWrapper,
+  ...Object.fromEntries(Object.keys(PANEL_DEFS).map((k) => [k, makeStub(k)])),
+};
+
+/* ── app ── */
+
 export function App() {
-  const [health, setHealth] = useState<string>("connecting…");
+  const s = useStore();
+  const version = useStoreVersion();
+  const dockApi = useRef<DockviewReadyEvent["api"] | null>(null);
+  const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
+  const [showNew, setShowNew] = useState(false);
+  const [sideWidth, setSideWidth] = useState(236);
 
   useEffect(() => {
-    fetch("/health")
-      .then((r) => r.json())
-      .then((j) => setHealth(j.ok ? "connected" : "error"))
-      .catch(() => setHealth("offline"));
+    void store.init();
+    connectEvents();
   }, []);
 
+  /* keep dockview tab titles in step with session titles (auto-title on first prompt) */
+  useEffect(() => {
+    const a = dockApi.current;
+    if (!a) return;
+    for (const [id, sess] of store.sessions) {
+      const panel = a.getPanel(`chat:${id}`);
+      if (panel && panel.title !== sess.title) panel.api.setTitle(sess.title);
+    }
+  }, [version]);
+
+  /* trajectory follows the focused chat: push active session into the panel */
+  const syncTrajectory = useCallback((sessionId: string | null) => {
+    const a = dockApi.current;
+    if (!a) return;
+    a.getPanel("trajectory")?.api.updateParameters({ sessionId });
+  }, []);
+
+  const openChatPanel = useCallback(
+    (sess: SessionMeta) => {
+      const a = dockApi.current;
+      if (!a) return;
+      const id = `chat:${sess.id}`;
+      const existing = a.getPanel(id);
+      if (existing) {
+        existing.api.setActive();
+      } else {
+        a.addPanel({
+          id,
+          component: "chat",
+          title: sess.title,
+          params: { sessionId: sess.id },
+          position: { direction: "left" },
+        });
+      }
+      setActiveSessionId(sess.id);
+      syncTrajectory(sess.id);
+    },
+    [syncTrajectory],
+  );
+
+  const onReady = useCallback(
+    (event: DockviewReadyEvent) => {
+      const a = event.api;
+      dockApi.current = a;
+      dockReady.current = true;
+
+      a.addPanel({
+        id: "trajectory",
+        component: "trajectory",
+        title: "trajectory",
+        params: { sessionId: null },
+      });
+      a.addPanel({
+        id: "terminal",
+        component: "terminal",
+        title: "terminal",
+        position: { referencePanel: "trajectory", direction: "below" },
+      });
+
+      a.onDidActivePanelChange((panel) => {
+        const id = panel?.id.startsWith("chat:") ? panel.id.slice(5) : null;
+        if (id) {
+          setActiveSessionId(id);
+          syncTrajectory(id);
+        }
+      });
+
+      openInitialSession();
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    },
+    [openChatPanel, syncTrajectory],
+  );
+
+  /* open the most recent live session once — fires when BOTH dock + sessions are ready */
+  const dockReady = useRef(false);
+  const initialOpened = useRef(false);
+  function openInitialSession() {
+    if (!dockReady.current || initialOpened.current || store.sessions.size === 0) return;
+    initialOpened.current = true;
+    const latest = [...store.sessions.values()]
+      .filter((x) => x.state !== "closed")
+      .sort((x, y) => y.updated_at - x.updated_at)[0];
+    if (latest) openChatPanel(latest);
+  }
+
+  /* sessions may arrive after dock ready (async init) */
+  useEffect(() => {
+    openInitialSession();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [version]);
+
+  const onOpenSession = useCallback(
+    (id: string) => {
+      const sess = store.sessions.get(id);
+      if (sess) openChatPanel(sess);
+    },
+    [openChatPanel],
+  );
+
+  const onOpenPanel = useCallback((kind: string) => {
+    const a = dockApi.current;
+    if (!a) return;
+    if (kind === "trajectory") {
+      a.getPanel("trajectory")?.api.setActive();
+      return;
+    }
+    const existing = a.getPanel(kind);
+    if (existing) existing.api.setActive();
+    else a.addPanel({ id: kind, component: kind, title: PANEL_DEFS[kind]?.title ?? kind });
+  }, []);
+
+  /* sidebar drag — 1px overlay handle, ±3px target */
+  const startSideDrag = useCallback(
+    (e: React.MouseEvent) => {
+      e.preventDefault();
+      const startX = e.clientX;
+      const startW = sideWidth;
+      const move = (ev: MouseEvent) => {
+        setSideWidth(Math.min(480, Math.max(140, startW + ev.clientX - startX)));
+      };
+      const up = () => {
+        window.removeEventListener("mousemove", move);
+        window.removeEventListener("mouseup", up);
+      };
+      window.addEventListener("mousemove", move);
+      window.addEventListener("mouseup", up);
+    },
+    [sideWidth],
+  );
+
   return (
-    <div
-      style={{
-        height: "100%",
-        display: "flex",
-        flexDirection: "column",
-        background: "var(--bg-deep)",
-      }}
-    >
-      <header
-        style={{
-          padding: "10px 16px",
-          borderBottom: "1px solid var(--hair)",
-          fontFamily: "'Inter Tight', Inter, sans-serif",
-          fontWeight: 600,
-          fontSize: 15,
-        }}
-      >
-        truss<span style={{ color: "var(--purple)" }}>_</span>
-      </header>
-      <main
-        style={{
-          flex: 1,
-          display: "grid",
-          placeItems: "center",
-          color: "var(--com)",
-          flexDirection: "column",
-          gap: 8,
-        }}
-      >
-        <div style={{ fontSize: 14 }}>universal harness head — scaffold</div>
-        <div style={{ fontSize: 11, fontFeatureSettings: '"tnum"' }}>
-          server: <b style={{ color: "var(--fg)" }}>{health}</b>
+    <div className="frame">
+      <Sprite />
+      <div style={{ width: sideWidth, flex: "none", display: "flex", minWidth: 0 }}>
+        <Sidebar
+          activeSessionId={activeSessionId}
+          onOpenSession={onOpenSession}
+          onOpenPanel={onOpenPanel}
+          onNewSession={() => setShowNew(true)}
+        />
+      </div>
+      <div className="splitside" onMouseDown={startSideDrag} title="drag to resize sidebar" />
+      <div className="ws">
+        <div className="dock-host">
+          <DockviewReact components={dockComponents} onReady={onReady} theme={themeAbyss} />
         </div>
-      </main>
+      </div>
+      <StatusBar activeSessionId={activeSessionId} />
+      {showNew && (
+        <NewSessionModal
+          onClose={() => setShowNew(false)}
+          onCreated={(sess) => {
+            setShowNew(false);
+            openChatPanel(sess);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+/* ── new session modal ── */
+
+function NewSessionModal({
+  onClose,
+  onCreated,
+}: {
+  onClose: () => void;
+  onCreated: (s: SessionMeta) => void;
+}) {
+  const s = useStore();
+  const [cwd, setCwd] = useState("~/projects");
+  const [project, setProject] = useState("");
+  const [model, setModel] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const models = s.models.filter((m) => m.harness === "pi");
+  const chosen = models.find((m) => m.model === model) ?? models[0];
+
+  const create = async () => {
+    if (busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const { session } = await api.createSession({
+        harness: "pi",
+        cwd: cwd.replace(/^~/, "/home/ubuntu"),
+        model: chosen?.model,
+        provider: chosen?.provider,
+        project: project.trim() || undefined,
+      });
+      await store.refreshSessions();
+      onCreated(session);
+    } catch (err) {
+      setError(String(err));
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="modal-bg" onClick={onClose}>
+      <div className="modal" onClick={(e) => e.stopPropagation()}>
+        <h2>new session</h2>
+        <div>
+          <label>harness</label>
+          <select value="pi" disabled>
+            <option value="pi">pi — rpc</option>
+          </select>
+        </div>
+        <div>
+          <label>model</label>
+          <select value={chosen?.model ?? ""} onChange={(e) => setModel(e.target.value)}>
+            {models.map((m) => (
+              <option key={m.model} value={m.model}>
+                {m.label}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <label>working directory</label>
+          <input value={cwd} onChange={(e) => setCwd(e.target.value)} />
+        </div>
+        <div>
+          <label>project group (optional)</label>
+          <input
+            value={project}
+            placeholder="ungrouped"
+            onChange={(e) => setProject(e.target.value)}
+          />
+        </div>
+        {error && <div style={{ color: "var(--red)", fontSize: 11.5 }}>{error}</div>}
+        <div className="row2">
+          <button className="btn-ghost" onClick={onClose}>
+            cancel
+          </button>
+          <button className="btn-solid" disabled={busy || !chosen} onClick={() => void create()}>
+            {busy ? "spawning…" : "create"}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

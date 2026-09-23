@@ -12,23 +12,31 @@ interface LiveSession {
 }
 
 const live = new Map<string, LiveSession>();
-let broadcastFn: (ev: ProtoEvent) => void = () => {};
 
-export function setBroadcaster(fn: (ev: ProtoEvent) => void) {
+/** wire frame: seq is the event-log rowid; clients dedupe replay vs live by it */
+export interface EventFrame {
+  seq: number;
+  ev: ProtoEvent;
+}
+
+let broadcastFn: (f: EventFrame) => void = () => {};
+
+export function setBroadcaster(fn: (f: EventFrame) => void) {
   broadcastFn = fn;
 }
 
 /** Persist + fan out one event. The single sink every adapter event flows through. */
 function sink(ev: ProtoEvent) {
+  let seq = 0;
   try {
-    store.appendEvent(ev);
+    seq = store.appendEvent(ev);
   } catch (err) {
     console.error("persist failed", err);
   }
   if (ev.type === "session.state") {
     store.setSessionState(ev.sessionId, ev.state);
   }
-  broadcastFn(ev);
+  broadcastFn({ seq, ev });
 }
 
 /**

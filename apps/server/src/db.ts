@@ -71,7 +71,7 @@ const listSessionsStmt = db.prepare(`
 const getSessionStmt = db.prepare(`SELECT * FROM sessions WHERE id = ?`);
 
 const listEventsStmt = db.prepare(`
-  SELECT payload FROM events WHERE session_id = ? ORDER BY id ASC
+  SELECT id, payload FROM events WHERE session_id = ? ORDER BY id ASC
 `);
 
 export const store = {
@@ -125,9 +125,9 @@ export const store = {
     return Number(info.lastInsertRowid);
   },
 
-  /** Replay every persisted event for a session, in order. */
-  listEvents(sessionId: string): ProtoEvent[] {
-    const rows = listEventsStmt.all(sessionId) as { payload: string }[];
-    return rows.map((r) => JSON.parse(r.payload) as ProtoEvent);
+  /** Replay every persisted event for a session, in order, with rowids for dedupe. */
+  listEvents(sessionId: string): { seq: number; ev: ProtoEvent }[] {
+    const rows = listEventsStmt.all(sessionId) as { id: number; payload: string }[];
+    return rows.map((r) => ({ seq: r.id, ev: JSON.parse(r.payload) as ProtoEvent }));
   },
 };
