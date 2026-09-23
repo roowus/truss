@@ -25,7 +25,7 @@ Native (pre-installed plugin) panels: context tracker, subagent/team visualizati
 |---|---|---|
 | M0 | Scaffold: repo, monorepo, server health, Dockview shell rendering the v11 look, CI | ✅ |
 | M1 | First harness end-to-end: **pi** adapter (RPC mode) — chat, stream, persist, trajectory rows | ✅ |
-| M2 | Terminals: xterm.js + node-pty tabs | next |
+| M2 | Terminals: xterm.js + node-pty tabs | ✅ |
 | M3 | **Hermes** adapter (hermes-acp over stdio) + permission cards | |
 | M4 | **Claude Code** adapter (stream-json, `--permission-prompt-tool` → permission host) | |
 | M5 | Native panels: trajectory detail, context tracker, subagents, memory | |
