@@ -167,6 +167,23 @@ class DshConnection {
         this.onExit?.();
       });
 
+      /* never orphan the multiplexed server when the truss server goes down */
+      const shutdown = () => {
+        try {
+          proc.stdin?.end(); // orderly ACP shutdown
+        } catch {
+          proc.kill("SIGTERM");
+        }
+      };
+      process.once("SIGTERM", shutdown);
+      process.once("SIGINT", shutdown);
+      process.once("exit", shutdown);
+      proc.on("exit", () => {
+        process.removeListener("SIGTERM", shutdown);
+        process.removeListener("SIGINT", shutdown);
+        process.removeListener("exit", shutdown);
+      });
+
       const init = (await this.call("initialize", {
         protocolVersion: 1,
         clientCapabilities: { fs: { readTextFile: false, writeTextFile: false } },
