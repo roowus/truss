@@ -21,16 +21,24 @@ Native (pre-installed plugin) panels: context tracker, subagent/team visualizati
 
 ## Milestones
 
-| M | Goal |
-|---|---|
-| M0 | Scaffold: repo, monorepo, server health, Dockview shell rendering the v11 look, CI |
-| M1 | First harness end-to-end: **pi** adapter (RPC mode) — chat, stream, persist, trajectory rows |
-| M2 | Terminals: xterm.js + node-pty tabs |
-| M3 | **Hermes** adapter (hermes-acp over stdio) + permission cards |
-| M4 | **Claude Code** adapter (stream-json, `--permission-prompt-tool` → permission host) |
-| M5 | Native panels: trajectory detail, context tracker, subagents, memory |
-| M6 | **DSH** adapter via SSH bridge to rewvis |
-| M7 | Node-agent for remote hosts · Tauri shell · mobile-responsive pass |
+| M | Goal | Status |
+|---|---|---|
+| M0 | Scaffold: repo, monorepo, server health, Dockview shell rendering the v11 look, CI | ✅ |
+| M1 | First harness end-to-end: **pi** adapter (RPC mode) — chat, stream, persist, trajectory rows | ✅ |
+| M2 | Terminals: xterm.js + node-pty tabs | next |
+| M3 | **Hermes** adapter (hermes-acp over stdio) + permission cards | |
+| M4 | **Claude Code** adapter (stream-json, `--permission-prompt-tool` → permission host) | |
+| M5 | Native panels: trajectory detail, context tracker, subagents, memory | |
+| M6 | **DSH** adapter via SSH bridge to rewvis | |
+| M7 | Node-agent for remote hosts · Tauri shell · mobile-responsive pass | |
+
+### M1 notes (landed)
+
+- pi adapter drives `pi --mode rpc` (LF-framed JSONL); maps `turn_*` → `llm.call.*` trajectory rows with usage, `tool_execution_*` → `tool.*` scaffold rows, `auto_retry_*` → linked retry rows, `agent_settled` → idle.
+- Events are SQLite-persisted and broadcast as `{seq, ev}` frames; clients dedupe replay vs live by rowid.
+- Server restart closes all sessions (pi processes die with it); closed sessions stay listed and their transcripts replay read-only from the event log.
+- The full v11 shell runs on Dockview: per-window tab bars, 1px splitters, chat + trajectory + terminal stub, sidebar groups, composer dock, status bar.
+- Dev host: rewvis serves models to pi via `dsh-key-proxy` loopback routes (z.ai :45821 → GLM); `~/.pi/agent/models.json` provider `zai-local`. 9router also available (`systemctl start 9router`, :20128).
 
 ## Docs
 
