@@ -6,11 +6,15 @@ export interface SessionOpts {
   model?: string;
   /** provider id within the harness's own config (pi: models.json provider) */
   provider?: string;
+  /** resume an existing harness session (the harness's own session id) */
+  resumeRef?: string;
 }
 
 export interface AdapterHandle {
   /** adapter-local opaque state */
   readonly sessionId: string;
+  /** the harness's own session id, when known — persisted for resume */
+  harnessRef?: string;
 }
 
 export interface HarnessAdapter {

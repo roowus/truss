@@ -162,23 +162,23 @@ export const claudeAdapter: HarnessAdapter = {
       },
     });
 
-    const proc = spawn(
-      "claude",
-      [
-        "-p",
-        "--input-format",
-        "stream-json",
-        "--output-format",
-        "stream-json",
-        "--verbose",
-        "--permission-prompt-tool",
-        "mcp__truss_perms__approval",
-        "--mcp-config",
-        mcpConfig,
-        "--model",
-        model,
-      ],
-      {
+    const args = [
+      "-p",
+      "--input-format",
+      "stream-json",
+      "--output-format",
+      "stream-json",
+      "--verbose",
+      "--permission-prompt-tool",
+      "mcp__truss_perms__approval",
+      "--mcp-config",
+      mcpConfig,
+      "--model",
+      model,
+    ];
+    if (opts.resumeRef) args.push("--resume", opts.resumeRef);
+
+    const proc = spawn("claude", args, {
         cwd: opts.cwd,
         stdio: ["pipe", "pipe", "inherit"],
         env: {
@@ -246,6 +246,9 @@ export const claudeAdapter: HarnessAdapter = {
     });
 
     emit({ type: "session.state", sessionId: sid, state: "idle" });
+
+    /* claude emits system.init (with session_id) only after the first prompt —
+       the session manager picks harnessRef up lazily from the event pump */
     return h;
   },
 
@@ -348,6 +351,7 @@ function handleEvent(h: ClaudeHandle, rec: ClaudeEvent, emit: (ev: ProtoEvent) =
     case "system": {
       if (rec.subtype === "init") {
         h.claudeSessionId = rec.session_id ?? null;
+        if (h.claudeSessionId) h.harnessRef = h.claudeSessionId;
         return;
       }
       if (rec.subtype === "permission_denied") {

@@ -1,7 +1,8 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { ProtoEvent } from "@truss/proto";
 import type { AdapterHandle, HarnessAdapter, SessionOpts } from "./types.js";
 
@@ -28,6 +29,7 @@ interface PiRecord {
   command?: string;
   success?: boolean;
   error?: string;
+  data?: Record<string, unknown>;
   message?: { role?: string; content?: unknown };
   usage?: PiUsage;
   assistantMessageEvent?: {
@@ -62,6 +64,11 @@ interface PiHandle extends AdapterHandle {
   busy: boolean;
   contextWindow: number;
   model: string;
+  /** pi command-id → resolver (get_state etc.) */
+  pending: Map<string, (rec: PiRecord) => void>;
+  /** per-process id prefix — after a resume the counters restart and old
+      message/call ids are already persisted, so ids must be unique per spawn */
+  idPrefix: string;
   msgCounter: number;
   turnCounter: number;
   currentMessageId: string | null;
@@ -145,7 +152,13 @@ export const piAdapter: HarnessAdapter = {
   async spawn(opts: SessionOpts): Promise<PiHandle> {
     const provider = opts.provider ?? "zai-local";
     const model = opts.model ?? "glm-4.7";
-    const args = ["--mode", "rpc", "--no-session", "--provider", provider, "--model", model];
+    /* sessions persist under the truss data dir so a server restart can resume them */
+    const here = dirname(fileURLToPath(import.meta.url));
+    const sessionDir = join(process.env.TRUSS_DATA_DIR ?? join(here, "..", "..", "data"), "pi-sessions");
+    mkdirSync(sessionDir, { recursive: true });
+
+    const args = ["--mode", "rpc", "--session-dir", sessionDir, "--provider", provider, "--model", model];
+    if (opts.resumeRef) args.push("--session", opts.resumeRef);
     const proc = spawn("pi", args, {
       cwd: opts.cwd,
       stdio: ["pipe", "pipe", "inherit"], // stderr is diagnostics, never protocol
@@ -160,6 +173,8 @@ export const piAdapter: HarnessAdapter = {
       contextWindow:
         readPiModels().find((m) => m.provider === provider && m.model === model)?.contextWindow ?? 200_000,
       model,
+      pending: new Map(),
+      idPrefix: `${Date.now().toString(36)}-`,
       msgCounter: 0,
       turnCounter: 0,
       currentMessageId: null,
@@ -208,6 +223,22 @@ export const piAdapter: HarnessAdapter = {
     });
 
     emit({ type: "session.state", sessionId: sid, state: "idle" });
+
+    /* learn pi's own session id for restart-resume (get_state is the rpc handshake for it) */
+    const stateReqId = `truss-state-${Date.now()}`;
+    const stateRec = new Promise<PiRecord | null>((res) => {
+      h.pending.set(stateReqId, res);
+      setTimeout(() => res(null), 8000);
+    });
+    proc.stdin!.write(JSON.stringify({ id: stateReqId, type: "get_state" }) + "\n");
+    void stateRec
+      .then((rec) => {
+        h.pending.delete(stateReqId);
+        const sessionId = (rec?.data as { sessionId?: string } | undefined)?.sessionId;
+        if (sessionId) h.harnessRef = sessionId;
+      })
+      .catch(() => undefined);
+
     return h;
   },
 
@@ -246,10 +277,16 @@ function handleRecord(h: PiHandle, rec: PiRecord, emit: (ev: ProtoEvent) => void
   const sid = h.sessionId;
 
   switch (rec.type) {
-    case "response":
+    case "response": {
+      // truss-internal command correlation first (get_state, …)
+      if (rec.id && h.pending.has(rec.id)) {
+        h.pending.get(rec.id)!(rec);
+        h.pending.delete(rec.id);
+        return;
+      }
       // command ack; failures of prompt surface here before acceptance
       if (rec.success === false && (rec.command === "prompt" || rec.command === "follow_up")) {
-        const id = `m${++h.msgCounter}`;
+        const id = `m${h.idPrefix}${++h.msgCounter}`;
         emit({ type: "msg.start", sessionId: sid, messageId: id, role: "system", at: Date.now() });
         emit({
           type: "msg.chunk",
@@ -260,6 +297,7 @@ function handleRecord(h: PiHandle, rec: PiRecord, emit: (ev: ProtoEvent) => void
         emit({ type: "msg.done", sessionId: sid, messageId: id, stopReason: "error" });
       }
       return;
+    }
 
     case "agent_start": {
       h.busy = true;
@@ -269,7 +307,7 @@ function handleRecord(h: PiHandle, rec: PiRecord, emit: (ev: ProtoEvent) => void
     }
 
     case "turn_start": {
-      const callId = `call-${++h.turnCounter}`;
+      const callId = `call-${h.idPrefix}${++h.turnCounter}`;
       h.currentCallId = callId;
       h.currentCallStartedAt = Date.now();
       h.latestUsage = null;
@@ -280,7 +318,7 @@ function handleRecord(h: PiHandle, rec: PiRecord, emit: (ev: ProtoEvent) => void
     case "message_start": {
       const role = rec.message?.role;
       if (role === "assistant") {
-        const id = `m${++h.msgCounter}`;
+        const id = `m${h.idPrefix}${++h.msgCounter}`;
         h.currentMessageId = id;
         emit({ type: "msg.start", sessionId: sid, messageId: id, role: "assistant", at: Date.now() });
       }

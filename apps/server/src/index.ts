@@ -98,7 +98,7 @@ app.post("/api/sessions/:id/prompt", async (req, reply) => {
   const { text } = (req.body ?? {}) as { text?: string };
   if (!text?.trim()) return reply.code(400).send({ error: "text is required" });
   try {
-    sendPrompt(id, text);
+    await sendPrompt(id, text);
     return { ok: true };
   } catch (err) {
     return reply.code(409).send({ error: String(err) });
@@ -185,3 +185,31 @@ app
     app.log.error(err);
     process.exit(1);
   });
+
+/* ── fast graceful shutdown: close HTTP/WS, dispose harness children, hard-exit
+   after a short grace so systemd restarts don't stall ~90s ── */
+let shuttingDown = false;
+function shutdown(sig: string) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  app.log.info(`${sig} — shutting down`);
+  const hard = setTimeout(() => process.exit(0), 4000);
+  hard.unref();
+  void (async () => {
+    try {
+      for (const id of [...store.listSessions().map((s) => s.id)]) {
+        try {
+          closeSession(id); // closes adapter children (stdin end → orderly)
+        } catch {
+          /* keep closing the rest */
+        }
+      }
+      await app.close();
+    } finally {
+      clearTimeout(hard);
+      process.exit(0);
+    }
+  })();
+}
+process.once("SIGTERM", () => shutdown("SIGTERM"));
+process.once("SIGINT", () => shutdown("SIGINT"));

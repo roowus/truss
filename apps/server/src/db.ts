@@ -35,6 +35,22 @@ CREATE TABLE IF NOT EXISTS events (
 CREATE INDEX IF NOT EXISTS idx_events_session ON events(session_id, id);
 `);
 
+/* migration: harness_ref = the harness's own session id (pi sessionId,
+   claude session_id, dsh/hermes ACP sessionId) for resume-across-restart */
+const sessionCols = db.prepare(`PRAGMA table_info(sessions)`).all() as { name: string }[];
+if (!sessionCols.some((c) => c.name === "harness_ref")) {
+  db.exec(`ALTER TABLE sessions ADD COLUMN harness_ref TEXT`);
+}
+
+/* server-level key-value store (layout persistence, future settings) */
+db.exec(`
+CREATE TABLE IF NOT EXISTS kv (
+  key         TEXT PRIMARY KEY,
+  value       TEXT NOT NULL,
+  updated_at  INTEGER NOT NULL
+);
+`);
+
 export interface SessionRow {
   id: string;
   harness: HarnessId;
@@ -45,6 +61,7 @@ export interface SessionRow {
   state: SessionState;
   created_at: number;
   updated_at: number;
+  harness_ref: string | null;
 }
 
 const insertSession = db.prepare(`
@@ -58,6 +75,16 @@ const updateSessionState = db.prepare(`
 
 const updateSessionTitle = db.prepare(`
   UPDATE sessions SET title = @title, updated_at = @at WHERE id = @id
+`);
+
+const updateHarnessRef = db.prepare(`
+  UPDATE sessions SET harness_ref = @ref, updated_at = @at WHERE id = @id
+`);
+
+const kvGet = db.prepare(`SELECT value FROM kv WHERE key = ?`);
+const kvSet = db.prepare(`
+  INSERT INTO kv (key, value, updated_at) VALUES (@key, @value, @at)
+  ON CONFLICT(key) DO UPDATE SET value = @value, updated_at = @at
 `);
 
 const insertEvent = db.prepare(`
@@ -105,6 +132,19 @@ export const store = {
 
   setSessionTitle(id: string, title: string) {
     updateSessionTitle.run({ id, title, at: Date.now() });
+  },
+
+  setHarnessRef(id: string, ref: string) {
+    updateHarnessRef.run({ id, ref, at: Date.now() });
+  },
+
+  getKv(key: string): string | undefined {
+    const row = kvGet.get(key) as { value: string } | undefined;
+    return row?.value;
+  },
+
+  setKv(key: string, value: string) {
+    kvSet.run({ key, value, at: Date.now() });
   },
 
   getSession(id: string): SessionRow | undefined {

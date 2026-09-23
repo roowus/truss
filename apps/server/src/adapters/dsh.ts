@@ -122,10 +122,22 @@ export const dshAdapter: HarnessAdapter = {
   async spawn(opts: SessionOpts): Promise<AcpSessionState> {
     await client.ensure();
 
-    const res = (await client.call("session/new", { cwd: opts.cwd, mcpServers: [] })) as {
-      sessionId: string;
-      configOptions?: AcpConfigOption[];
-    };
+    let res: { sessionId: string; configOptions?: AcpConfigOption[] };
+    if (opts.resumeRef) {
+      /* resume the persisted dsh session — cwd is required and must match
+         the persisted session's workspace ("session/resume cwd mismatch") */
+      res = { sessionId: opts.resumeRef };
+      await client.call("session/resume", {
+        sessionId: opts.resumeRef,
+        cwd: opts.cwd,
+        mcpServers: [],
+      });
+    } else {
+      res = (await client.call("session/new", { cwd: opts.cwd, mcpServers: [] })) as {
+        sessionId: string;
+        configOptions?: AcpConfigOption[];
+      };
+    }
 
     const models = parseModelOptions(res.configOptions);
     if (models.length) discoveredModels = models;
@@ -145,6 +157,7 @@ export const dshAdapter: HarnessAdapter = {
     }
 
     const h = makeSessionState(opts.sessionId, res.sessionId, model);
+    h.harnessRef = res.sessionId;
     client.onSession(res.sessionId, (rec) => handleServerMessage(h, rec));
     h.queue.push({ type: "session.state", sessionId: opts.sessionId, state: "idle" });
     return h;

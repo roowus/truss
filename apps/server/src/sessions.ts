@@ -48,12 +48,13 @@ function sink(ev: ProtoEvent) {
 }
 
 /**
- * On boot every previously-live session's harness process is gone.
+ * On boot every previously-live session's harness process is gone — includes
+ * sessions whose dying adapter flipped them to "error" during the shutdown.
  * Mark them closed; their transcripts stay replayable from the event store.
  */
 export function reconcileOnBoot() {
   for (const s of store.listSessions()) {
-    if (s.state === "spawning" || s.state === "running" || s.state === "idle") {
+    if (s.state !== "closed") {
       store.setSessionState(s.id, "closed");
     }
   }
@@ -98,22 +99,69 @@ export async function createSession(input: {
     model: input.model,
     provider: input.provider,
   });
-  live.set(id, { adapter, handle });
-
-  // pump adapter events into the sink
-  void (async () => {
-    for await (const ev of adapter.events(handle)) sink(ev);
-  })();
-
+  goLive(id, adapter, handle);
+  /* harness refs persist lazily from the event pump (goLive) */
   return store.getSession(id)!;
 }
 
-export function sendPrompt(sessionId: string, text: string) {
-  const s = live.get(sessionId);
+/** register + pump a live handle; persist the harness's session ref when it appears */
+function goLive(id: string, adapter: HarnessAdapter, handle: AdapterHandle) {
+  live.set(id, { adapter, handle });
+  void (async () => {
+    for await (const ev of adapter.events(handle)) {
+      /* harness refs can arrive late (claude: with the first turn; pi: async
+         get_state) — persist as soon as they appear or change */
+      const ref = handle.harnessRef;
+      if (ref && store.getSession(id)?.harness_ref !== ref) {
+        store.setHarnessRef(id, ref);
+      }
+      sink(ev);
+    }
+  })();
+}
+
+/**
+ * Resume a previously-closed session whose harness persisted its own session
+ * (pi session file / ACP resume / claude --resume). Returns false if the
+ * harness can't resume — the caller surfaces the error.
+ */
+export async function resumeSession(id: string): Promise<boolean> {
+  const row = store.getSession(id);
+  if (!row?.harness_ref) return false;
+  const adapter = adapters.get(row.harness);
+  if (!adapter) return false;
+  try {
+    const handle = await adapter.spawn({
+      sessionId: id,
+      cwd: row.cwd,
+      model: row.model ?? undefined,
+      resumeRef: row.harness_ref,
+    });
+    goLive(id, adapter, handle);
+    if (handle.harnessRef && handle.harnessRef !== row.harness_ref) {
+      store.setHarnessRef(id, handle.harnessRef);
+    }
+    store.setSessionState(id, "idle");
+    sink({ type: "session.state", sessionId: id, state: "idle" });
+    return true;
+  } catch (err) {
+    console.error(`resume failed for ${id}:`, err);
+    return false;
+  }
+}
+
+export async function sendPrompt(sessionId: string, text: string) {
+  let s = live.get(sessionId);
   if (!s) {
     const row = store.getSession(sessionId);
     if (!row) throw new Error(`no such session: ${sessionId}`);
-    throw new Error(`session is ${row.state} — harness process not running`);
+    /* dead but resumable (closed by restart, or adapter died into error) —
+       the harness persisted its own session */
+    if ((row.state === "closed" || row.state === "error") && row.harness_ref) {
+      const ok = await resumeSession(sessionId);
+      if (ok) s = live.get(sessionId);
+    }
+    if (!s) throw new Error(`session is ${row.state} — harness process not running`);
   }
   // the user bubble is a local echo: instant in UI, persisted like everything else
   const messageId = `u-${Date.now()}`;
@@ -126,7 +174,7 @@ export function sendPrompt(sessionId: string, text: string) {
     const title = text.replace(/\s+/g, " ").trim().slice(0, 48);
     if (title) store.setSessionTitle(sessionId, title);
   }
-  s.adapter.send(s.handle, text);
+  s!.adapter.send(s!.handle, text);
 }
 
 export function interrupt(sessionId: string) {

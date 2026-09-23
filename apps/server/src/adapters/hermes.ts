@@ -76,10 +76,21 @@ export const hermesAdapter: HarnessAdapter = {
   async spawn(opts: SessionOpts): Promise<AcpSessionState> {
     await client.ensure();
 
-    const res = (await client.call("session/new", { cwd: opts.cwd, mcpServers: [] })) as {
-      sessionId: string;
-      models?: HermesModelState;
-    };
+    let res: { sessionId: string; models?: HermesModelState };
+    if (opts.resumeRef) {
+      /* hermes-acp advertises sessionCapabilities.resume; cwd is required */
+      res = { sessionId: opts.resumeRef };
+      await client.call("session/resume", {
+        sessionId: opts.resumeRef,
+        cwd: opts.cwd,
+        mcpServers: [],
+      });
+    } else {
+      res = (await client.call("session/new", { cwd: opts.cwd, mcpServers: [] })) as {
+        sessionId: string;
+        models?: HermesModelState;
+      };
+    }
 
     if (res.models?.availableModels?.length) {
       discoveredModels = res.models.availableModels.map((m) => ({
@@ -99,6 +110,7 @@ export const hermesAdapter: HarnessAdapter = {
     }
 
     const h = makeSessionState(opts.sessionId, res.sessionId, model);
+    h.harnessRef = res.sessionId;
     client.onSession(res.sessionId, (rec) => handleServerMessage(h, rec));
     h.queue.push({ type: "session.state", sessionId: opts.sessionId, state: "idle" });
     return h;
