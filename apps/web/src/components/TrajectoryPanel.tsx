@@ -40,6 +40,7 @@ export function TrajectoryPanel({ sessionId }: { sessionId: string | null }) {
   const span = Math.max(t1 - t0, 30_000);
   const tickCount = 5;
   const ticks = Array.from({ length: tickCount }, (_, i) => t0 + (span * i) / (tickCount - 1));
+  const tickFmt = span < 10 * 60_000 ? fmtClockS : fmtClock;
 
   const maxLatency = Math.max(...calls.map((c) => c.latencyMs ?? 0), 1000);
   const totalIn = calls.reduce((a, c) => a + (c.tokensIn ?? 0), 0);
@@ -52,7 +53,7 @@ export function TrajectoryPanel({ sessionId }: { sessionId: string | null }) {
       <div className="tl">
         <div className="tl-ticks">
           {ticks.map((t, i) => (
-            <span key={i}>{calls.length ? fmtClock(t) : "—"}</span>
+            <span key={i}>{calls.length ? tickFmt(t) : "—"}</span>
           ))}
         </div>
         <div className="tl-track">

@@ -130,23 +130,30 @@ class TrussStore {
   applyEvent(ev: ProtoEvent, defer = false) {
     switch (ev.type) {
       case "session.created": {
-        this.sessions.set(ev.sessionId, {
-          id: ev.sessionId,
-          harness: ev.harness,
-          title: ev.title,
-          cwd: ev.cwd,
-          model: ev.model ?? null,
-          project: ev.project ?? null,
-          state: "spawning",
-          created_at: ev.at,
-          updated_at: ev.at,
-          live: true,
-        });
+        /* live creation path only — on replay the REST row (with its real
+           current state) is already in the map and must win */
+        if (!this.sessions.has(ev.sessionId)) {
+          this.sessions.set(ev.sessionId, {
+            id: ev.sessionId,
+            harness: ev.harness,
+            title: ev.title,
+            cwd: ev.cwd,
+            model: ev.model ?? null,
+            project: ev.project ?? null,
+            state: "spawning",
+            created_at: ev.at,
+            updated_at: ev.at,
+            live: true,
+          });
+        }
         break;
       }
       case "session.state": {
         const s = this.sessions.get(ev.sessionId);
-        if (s) this.sessions.set(ev.sessionId, { ...s, state: ev.state, updated_at: Date.now() });
+        /* closed is terminal client-side: replayed history must not resurrect a session */
+        if (s && s.state !== "closed") {
+          this.sessions.set(ev.sessionId, { ...s, state: ev.state, updated_at: Date.now() });
+        }
         break;
       }
       case "msg.start": {

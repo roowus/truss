@@ -64,8 +64,9 @@ const insertEvent = db.prepare(`
   INSERT INTO events (session_id, type, payload, at) VALUES (@session_id, @type, @payload, @at)
 `);
 
+/* closed sessions stay listed — their transcripts remain replayable history */
 const listSessionsStmt = db.prepare(`
-  SELECT * FROM sessions WHERE state != 'closed' ORDER BY updated_at DESC
+  SELECT * FROM sessions ORDER BY updated_at DESC
 `);
 
 const getSessionStmt = db.prepare(`SELECT * FROM sessions WHERE id = ?`);

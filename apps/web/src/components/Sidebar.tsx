@@ -37,7 +37,6 @@ export function Sidebar({
   );
 
   const activeCtx = activeSessionId ? s.data.get(activeSessionId)?.ctx : null;
-  const runningCount = sessions.filter((x) => x.state === "running").length;
 
   return (
     <div className="side">
@@ -167,7 +166,6 @@ export function Sidebar({
         <span className="nm" style={{ opacity: 0.6 }}>
           subagents
         </span>
-        {runningCount > 0 && <span className="meta livemeta">{runningCount} live</span>}
       </div>
       <div className="sess bub" onClick={() => onOpenPanel("memory")}>
         <span className="hlogo none" data-name="Memory">

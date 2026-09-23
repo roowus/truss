@@ -107,12 +107,17 @@ export function App() {
       if (existing) {
         existing.api.setActive();
       } else {
+        /* chats tab together: later chats join the first chat's group,
+           only the first chat carves out the left window */
+        const anyChat = a.panels.find((p) => p.id.startsWith("chat:"));
         a.addPanel({
           id,
           component: "chat",
           title: sess.title,
           params: { sessionId: sess.id },
-          position: { direction: "left" },
+          position: anyChat
+            ? { referencePanel: anyChat.id, direction: "within" }
+            : { direction: "left" },
         });
       }
       setActiveSessionId(sess.id);
@@ -160,9 +165,8 @@ export function App() {
   function openInitialSession() {
     if (!dockReady.current || initialOpened.current || store.sessions.size === 0) return;
     initialOpened.current = true;
-    const latest = [...store.sessions.values()]
-      .filter((x) => x.state !== "closed")
-      .sort((x, y) => y.updated_at - x.updated_at)[0];
+    /* latest session even if closed — its transcript is the point of persistence */
+    const latest = [...store.sessions.values()].sort((x, y) => y.updated_at - x.updated_at)[0];
     if (latest) openChatPanel(latest);
   }
 
