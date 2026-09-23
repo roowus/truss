@@ -8,6 +8,7 @@ import {
 import "dockview/dist/styles/dockview.css";
 import { api, type SessionMeta } from "./api";
 import { connectEvents, store, useStore, useStoreVersion } from "./store";
+import { dockBus } from "./dockBus";
 import { Sprite } from "./icons";
 import { Sidebar } from "./components/Sidebar";
 import { ChatPanel } from "./components/ChatPanel";
@@ -264,21 +265,26 @@ export function App() {
   );
 
   /** spawn a fresh pty and open it as a terminal tab in the bottom-right stack */
-  async function openTerminalPanel() {
+  async function openTerminalPanel(cwd?: string, title?: string) {
     const a = dockApi.current;
     if (!a) return;
-    const t = await api.createTerminal({});
+    const t = await api.createTerminal({ cwd, title });
     const anyTerm = a.panels.find((p) => p.id.startsWith("term:"));
     a.addPanel({
       id: `term:${t.id}`,
       component: "terminal",
-      title: t.title,
+      title: title ?? t.title,
       params: { terminalId: t.id },
       position: anyTerm
         ? { referencePanel: anyTerm.id, direction: "within" }
         : { referencePanel: "trajectory", direction: "below" },
     });
   }
+
+  /* agent-shell: chat panels ask for a shell in their session's cwd */
+  useEffect(() => {
+    dockBus.openShell = (cwd, title) => void openTerminalPanel(cwd, title);
+  }, []);
 
   const onOpenPanel = useCallback((kind: string) => {
     const a = dockApi.current;

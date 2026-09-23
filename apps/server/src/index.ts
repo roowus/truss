@@ -9,6 +9,7 @@ import { store } from "./db.js";
 import {
   closeSession,
   createSession,
+  deleteSession,
   interrupt,
   isLive,
   listHarnesses,
@@ -130,7 +131,9 @@ app.post("/api/sessions/:id/permission", async (req, reply) => {
 
 app.delete("/api/sessions/:id", async (req) => {
   const { id } = req.params as { id: string };
-  closeSession(id);
+  const { hard } = req.query as { hard?: string };
+  if (hard === "1") deleteSession(id);
+  else closeSession(id);
   return { ok: true };
 });
 

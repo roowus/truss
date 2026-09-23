@@ -98,10 +98,10 @@ class TrussStore {
     this.bump();
   }
 
-  /** refresh the sessions list (e.g. after server-side auto-title) */
+  /** refresh the sessions list — replaces wholesale so hard-deleted rows vanish */
   async refreshSessions() {
     const { sessions } = await api.sessions();
-    for (const row of sessions) this.sessions.set(row.id, row);
+    this.sessions = new Map(sessions.map((row) => [row.id, row]));
     this.bump();
   }
 

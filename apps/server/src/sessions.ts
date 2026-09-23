@@ -199,6 +199,17 @@ export function closeSession(sessionId: string) {
   store.setSessionState(sessionId, "closed");
 }
 
+/** close (if live) + delete the row and its entire event log */
+export function deleteSession(sessionId: string) {
+  closeSession(sessionId);
+  store.deleteSession(sessionId);
+  /* clients drop it from the sidebar — state event with a tombstone */
+  broadcastFn({
+    seq: 0,
+    ev: { type: "session.state", sessionId, state: "closed", detail: "deleted" },
+  });
+}
+
 export function listHarnesses() {
   return [...adapters.values()].map((a) => ({
     id: a.id,

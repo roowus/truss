@@ -151,6 +151,11 @@ export const store = {
     return getSessionStmt.get(id) as SessionRow | undefined;
   },
 
+  /** hard delete — row + full event log (CASCADE) */
+  deleteSession(id: string) {
+    db.prepare(`DELETE FROM sessions WHERE id = ?`).run(id);
+  },
+
   listSessions(): SessionRow[] {
     return listSessionsStmt.all() as SessionRow[];
   },

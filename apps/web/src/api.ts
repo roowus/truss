@@ -78,6 +78,10 @@ export const api = {
     }).then((r) => json<{ id: string; title: string }>(r)),
   closeTerminal: (id: string) =>
     fetch(`/api/terminals/${id}`, { method: "DELETE" }).then((r) => json<{ ok: true }>(r)),
+  deleteSession: (id: string, hard = false) =>
+    fetch(`/api/sessions/${id}${hard ? "?hard=1" : ""}`, { method: "DELETE" }).then((r) =>
+      json<{ ok: true }>(r),
+    ),
   resolvePermission: (sessionId: string, requestId: string, choice: string) =>
     fetch(`/api/sessions/${sessionId}/permission`, {
       method: "POST",

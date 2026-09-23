@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { api } from "../api";
 import { Icon } from "../icons";
 import { fmtTokens, useStore, type ChatEntry, type PermCard } from "../store";
+import { dockBus } from "../dockBus";
 
 /** agent→user permission card — the bidirectional contract in the UI */
 function PermissionCard({ sessionId, perm }: { sessionId: string; perm: PermCard }) {
@@ -246,6 +247,14 @@ export function ChatPanel({ sessionId }: { sessionId: string }) {
           <span className="chipc" title={sess.cwd}>
             <Icon name="folder" className="ic sm" />
             <b>{shortenHome(sess.cwd)}</b>
+          </span>
+          <span
+            className="chipc"
+            title="open a shell in this session's directory"
+            onClick={() => dockBus.openShell(sess.cwd, `${sess.harness} shell`)}
+          >
+            <Icon name="term" className="ic sm" />
+            <b>shell</b>
           </span>
           {d?.ctx && (
             <span className="chipc" style={{ marginLeft: "auto", cursor: "default" }}>
