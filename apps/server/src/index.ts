@@ -21,6 +21,7 @@ import {
 } from "./sessions.js";
 import { attachTerminal, closeTerminal, createTerminal, listTerminals } from "./terminal.js";
 import { listSkills } from "./skills.js";
+import { registerMcpPerms } from "./mcp-perms.js";
 
 const PORT = Number(process.env.TRUSS_PORT ?? 4040);
 const app = Fastify({ logger: true });
@@ -159,6 +160,9 @@ app.get("/api/skills", async (req) => {
   const { cwd } = req.query as { cwd?: string };
   return { skills: listSkills(cwd) };
 });
+
+/* MCP permission host for claude-code sessions */
+registerMcpPerms(app);
 
 /* ── static hosting: serve the built web app when dist exists (prod mode) ── */
 const here = dirname(fileURLToPath(import.meta.url));
