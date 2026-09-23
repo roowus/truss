@@ -408,6 +408,16 @@ function handleEvent(h: ClaudeHandle, rec: ClaudeEvent, emit: (ev: ProtoEvent) =
             args: block.input,
             callId: h.turnCallId ?? undefined,
           });
+          /* the Task/Agent tool IS a subagent — feed the team tree too */
+          if (block.name === "Task" || block.name === "Agent") {
+            const inp = (block.input ?? {}) as { description?: string; subagent_type?: string };
+            emit({
+              type: "subagent.spawn",
+              sessionId: sid,
+              agentId: block.id,
+              label: inp.description ?? inp.subagent_type ?? "subagent",
+            });
+          }
         }
       }
       return;
@@ -420,7 +430,9 @@ function handleEvent(h: ClaudeHandle, rec: ClaudeEvent, emit: (ev: ProtoEvent) =
       for (const block of content) {
         if (block.type === "tool_result" && block.tool_use_id) {
           const started = h.toolStartedAt.get(block.tool_use_id);
+          const name = h.toolNames.get(block.tool_use_id);
           h.toolStartedAt.delete(block.tool_use_id);
+          h.toolNames.delete(block.tool_use_id);
           emit({
             type: "tool.done",
             sessionId: sid,
@@ -429,6 +441,14 @@ function handleEvent(h: ClaudeHandle, rec: ClaudeEvent, emit: (ev: ProtoEvent) =
             durationMs: started ? Date.now() - started : undefined,
             output: textFromContent(block.content).slice(0, 8000),
           });
+          if (name === "Task" || name === "Agent") {
+            emit({
+              type: "subagent.done",
+              sessionId: sid,
+              agentId: block.tool_use_id,
+              ok: !block.is_error,
+            });
+          }
         }
       }
       return;
