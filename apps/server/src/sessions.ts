@@ -14,6 +14,14 @@ const adapters = new Map<HarnessId, HarnessAdapter>([
   [hermesAdapter.id, hermesAdapter],
 ]);
 
+/** node-agents register remote harnesses (e.g. "pi@rew2") at runtime */
+export function registerAdapter(id: HarnessId, a: HarnessAdapter) {
+  adapters.set(id, a);
+}
+export function unregisterAdapter(id: HarnessId) {
+  adapters.delete(id);
+}
+
 interface LiveSession {
   adapter: HarnessAdapter;
   handle: AdapterHandle;

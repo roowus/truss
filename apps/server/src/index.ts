@@ -23,6 +23,14 @@ import {
 import { attachTerminal, closeTerminal, createTerminal, listTerminals } from "./terminal.js";
 import { listSkills } from "./skills.js";
 import { registerMcpPerms } from "./mcp-perms.js";
+import {
+  agentBye,
+  agentFrame,
+  agentHello,
+  listAgents,
+  wireRemoteRegistry,
+} from "./remote.js";
+import { registerAdapter, unregisterAdapter } from "./sessions.js";
 
 const PORT = Number(process.env.TRUSS_PORT ?? 4040);
 const app = Fastify({ logger: true });
@@ -46,6 +54,73 @@ app.get("/events", { websocket: true }, (socket) => {
   clients.add(socket);
   socket.on("close", () => clients.delete(socket));
 });
+
+/* ── node-agent channel (remote hosts dial OUT to here) ── */
+const AGENT_TOKEN = process.env.TRUSS_AGENT_TOKEN ?? "truss-dev";
+
+wireRemoteRegistry({
+  register: registerAdapter,
+  unregister: unregisterAdapter,
+  sessionGone: (sessionId, detail) => {
+    if (store.getSession(sessionId)) store.setSessionState(sessionId, "error");
+    app.log.warn(`remote session ${sessionId} lost: ${detail}`);
+  },
+});
+
+app.get("/agent/connect", { websocket: true }, (socket, req) => {
+  const { host, token } = req.query as { host?: string; token?: string };
+  if (token !== AGENT_TOKEN || !host) {
+    socket.close(4403, "unauthorized");
+    return;
+  }
+  let helloed = false;
+
+  /* heartbeat: agents that stop ponging are dead (killed mid-frame leaves
+     no close handshake) — terminate so the registry reaps them */
+  let alive = true;
+  socket.on("pong", () => {
+    alive = true;
+  });
+  const heartbeat = setInterval(() => {
+    if (!alive) {
+      clearInterval(heartbeat);
+      socket.terminate();
+      return;
+    }
+    alive = false;
+    socket.ping();
+  }, 15000);
+
+  socket.on("message", (raw: Buffer) => {
+    let msg: Record<string, unknown>;
+    try {
+      msg = JSON.parse(String(raw));
+    } catch {
+      return;
+    }
+    if (!helloed) {
+      if (msg.type !== "hello") {
+        socket.close(4400, "hello first");
+        return;
+      }
+      helloed = true;
+      agentHello(
+        host,
+        String(msg.hostname ?? host),
+        (msg.adapters ?? []) as { id: string; capabilities: never }[],
+        socket,
+      );
+      return;
+    }
+    agentFrame(host, msg);
+  });
+  socket.on("close", () => {
+    clearInterval(heartbeat);
+    if (helloed) agentBye(host);
+  });
+});
+
+app.get("/api/agents", async () => ({ agents: listAgents() }));
 
 /* ── REST ── */
 
