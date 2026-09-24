@@ -690,6 +690,7 @@ export function createDemoBackend(): Backend {
       await net(40);
       return { layout: localStorage.getItem("truss.demo.layout") };
     },
+    costs: async () => ({ sessions: [], totals: { calls: 0, tokensIn: 0, tokensOut: 0, costUsd: 0, hasCost: false } }),
     async putLayout(layout) {
       localStorage.setItem("truss.demo.layout", layout);
       return { ok: true };

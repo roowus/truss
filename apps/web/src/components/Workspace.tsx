@@ -17,7 +17,7 @@ import { getDockApi, renameSessionPanels, renameHostPanels } from "@/lib/workspa
 import { ChatPanel } from "@/panels/ChatPanel";
 import { TrajectoryPanel } from "@/panels/TrajectoryPanel";
 import { TerminalPanel } from "@/panels/TerminalPanel";
-import { ContextPanel, SkillsPanel, TeamPanel, WelcomePanel } from "@/panels/Inspectors";
+import { ContextPanel, CostPanel, SkillsPanel, TeamPanel, WelcomePanel } from "@/panels/Inspectors";
 import { HostPanel } from "@/panels/HostPanel";
 import { SettingsPanel } from "@/panels/SettingsPanel";
 import { DesktopStrip } from "./DesktopStrip";
@@ -35,11 +35,12 @@ const components = {
   welcome: WelcomePanel,
   host: HostPanel,
   settings: SettingsPanel,
+  cost: CostPanel,
 } as any;
 
 const KIND_ICON: Record<string, string> = {
   chat: "chat", trajectory: "wave", terminal: "term", context: "gauge",
-  team: "tree", skills: "spark", welcome: "layout", host: "host", settings: "settings",
+  team: "tree", skills: "spark", welcome: "layout", host: "host", settings: "settings", cost: "cost",
 };
 
 const theme: DockviewTheme = { ...themeDark, name: "truss", className: "dockview-theme-dark", gap: 6, dndTabIndicator: "line" };

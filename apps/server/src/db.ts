@@ -202,4 +202,33 @@ export const store = {
     const rows = listEventsStmt.all(sessionId) as { id: number; payload: string }[];
     return rows.map((r) => ({ seq: r.id, ev: JSON.parse(r.payload) as ProtoEvent }));
   },
+
+  /** per-session cost rollup from llm.call.done events (null cost = none reported) */
+  costRollup(): {
+    id: string;
+    title: string;
+    harness: string;
+    state: string;
+    updated_at: number;
+    calls: number;
+    tokensIn: number;
+    tokensOut: number;
+    costUsd: number | null;
+  }[] {
+    return db
+      .prepare(
+        `
+      SELECT s.id, s.title, s.harness, s.state, s.updated_at,
+             COUNT(*) AS calls,
+             COALESCE(SUM(json_extract(e.payload, '$.tokensIn')), 0) AS tokensIn,
+             COALESCE(SUM(json_extract(e.payload, '$.tokensOut')), 0) AS tokensOut,
+             SUM(json_extract(e.payload, '$.costUsd')) AS costUsd
+      FROM sessions s
+      JOIN events e ON e.session_id = s.id AND e.type = 'llm.call.done'
+      GROUP BY s.id
+      ORDER BY costUsd IS NULL, costUsd DESC, s.updated_at DESC
+      `,
+      )
+      .all() as never;
+  },
 };

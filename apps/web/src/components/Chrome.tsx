@@ -54,7 +54,11 @@ export function StatusBar({ onToggleSidebar }: { onToggleSidebar: () => void }) 
         </SBItem>
       )}
       <div className="flex-1" />
-      {totalCost !== undefined && <SBItem title="Total reported cost across loaded sessions">{fmtCost(totalCost)}</SBItem>}
+      {totalCost !== undefined && (
+        <SBItem onClick={() => openPanel("cost")} title="Cost & tokens by session — open the ledger">
+          <Icon name="cost" size={11} /> {fmtCost(totalCost)}
+        </SBItem>
+      )}
       {mode === "demo" && (
         <SBItem title="No Truss server detected — harnesses are simulated in-browser against the real contract">
           <span className="text-[var(--t-violet)]">demo</span>

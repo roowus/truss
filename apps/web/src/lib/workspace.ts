@@ -3,7 +3,7 @@ import { store } from "./store";
 import { desktops } from "./desktops";
 
 /** Bridge between the rest of the app and the Dockview instance (the "dockBus"). */
-export type PanelKind = "chat" | "trajectory" | "terminal" | "context" | "team" | "skills" | "welcome" | "host" | "settings";
+export type PanelKind = "chat" | "trajectory" | "terminal" | "context" | "team" | "skills" | "welcome" | "host" | "settings" | "cost";
 
 export const getDockApi = (spaceId?: string) => desktops.getApi(spaceId);
 
@@ -17,6 +17,7 @@ const TITLES: Record<PanelKind, string> = {
   welcome: "Welcome",
   host: "Host",
   settings: "Settings",
+  cost: "Cost",
 };
 
 export function panelId(kind: PanelKind, key?: string) {

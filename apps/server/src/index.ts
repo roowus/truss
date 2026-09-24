@@ -255,6 +255,22 @@ registerMcpPerms(app);
 /* import persisted dsh sessions (transcripts + resumable refs) */
 app.post("/api/import/dsh", async () => importDshSessions());
 
+/* cost rollup across every session (not just hydrated ones) */
+app.get("/api/costs", async () => {
+  const sessions = store.costRollup();
+  const totals = sessions.reduce(
+    (a, s) => ({
+      calls: a.calls + s.calls,
+      tokensIn: a.tokensIn + s.tokensIn,
+      tokensOut: a.tokensOut + s.tokensOut,
+      costUsd: a.costUsd + (s.costUsd ?? 0),
+      hasCost: a.hasCost || s.costUsd != null,
+    }),
+    { calls: 0, tokensIn: 0, tokensOut: 0, costUsd: 0, hasCost: false },
+  );
+  return { sessions, totals };
+});
+
 /* ── layout persistence (dockview serialized state) ── */
 app.get("/api/layout", async () => ({ layout: store.getKv("dockview-layout") ?? null }));
 app.put("/api/layout", async (req) => {

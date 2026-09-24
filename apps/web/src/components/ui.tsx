@@ -21,6 +21,7 @@ const paths: Record<string, ReactNode> = {
   down: <path d="M4 6l4 4 4-4" />,
   folder: <path d="M2 4h4l1.5 1.5H14V12H2z" />,
   tag: <><path d="M2 2h4.5l5.5 5.5a1 1 0 0 1 0 1.4l-3.1 3.1a1 1 0 0 1-1.4 0L2 6.5z" /><circle cx="4.8" cy="4.8" r="0.9" /></>,
+  cost: <><circle cx="8" cy="8" r="6" /><path d="M8 4.5v7M10.2 5.8c-.5-.7-1.3-1-2.2-1-1.4 0-2.3.8-2.3 1.9 0 2.5 4.7 1.3 4.7 3.4 0 1.2-1.1 1.9-2.4 1.9-1 0-1.9-.4-2.4-1.1" /></>,
   lock: <><rect x="3" y="7" width="10" height="7" rx="1" /><path d="M5 7V5a3 3 0 0 1 6 0v2" /></>,
   check: <path d="M3 8.5l3 3 7-7" />,
   alert: <><path d="M8 2l6.5 11.5h-13z" /><path d="M8 6.5v3M8 11.5v.5" /></>,

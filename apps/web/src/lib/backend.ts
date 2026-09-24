@@ -51,6 +51,8 @@ export interface Backend {
   deleteTerminal(id: string): Promise<unknown>;
   skills(cwd: string): Promise<{ skills: SkillInfo[] }>;
   getLayout(): Promise<{ layout: string | null }>;
+  /** server-aggregated cost + token ledger across all sessions */
+  costs(): Promise<any>;
   putLayout(layout: string): Promise<unknown>;
   connectEvents(onFrame: (f: Frame) => void, onStatus: (s: ConnStatus) => void): () => void;
   connectTerminal(id: string, h: TerminalHandlers): TerminalConn;
@@ -120,6 +122,7 @@ export function createLiveBackend(): Backend {
       const r = await req<any>("GET", "/api/layout");
       return { layout: r?.layout ?? null };
     },
+    costs: () => req("GET", "/api/costs"),
     putLayout: (layout) => req("PUT", "/api/layout", { layout }),
 
     connectEvents(onFrame, onStatus) {

@@ -328,3 +328,105 @@ export function WelcomePanel() {
     </div>
   );
 }
+
+/* ================= Cost ================= */
+
+interface CostRow {
+  id: string;
+  title: string;
+  harness: string;
+  state: string;
+  updated_at: number;
+  calls: number;
+  tokensIn: number;
+  tokensOut: number;
+  costUsd: number | null;
+}
+interface CostData {
+  sessions: CostRow[];
+  totals: { calls: number; tokensIn: number; tokensOut: number; costUsd: number; hasCost: boolean };
+}
+
+/** Global cost + token ledger across all sessions (server-aggregated). */
+export function CostPanel() {
+  const [data, setData] = useState<CostData | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [at, setAt] = useState<number>(0);
+  const now = useNow(30_000);
+
+  const load = () => {
+    if (!store.be) return;
+    store.be.costs().then((d) => { setData(d); setErr(null); setAt(Date.now()); }).catch((e) => setErr(e.message ?? String(e)));
+  };
+  useEffect(load, [store.be]);
+  /* live-ish: refetch when a llm.call.done lands anywhere */
+  const tick = useApp((s) => Object.values(s.views).reduce((n, v) => n + v.callOrder.filter((c) => v.calls[c].done).length, 0));
+  useEffect(() => { if (tick > 0) load(); }, [tick]);
+
+  if (err) return <Empty icon="alert" title="Couldn't load costs">{err}</Empty>;
+  if (!data) return <div className="h-full grid place-items-center"><Spinner /></div>;
+
+  const t = data.totals;
+  const withCost = data.sessions.filter((s) => s.costUsd != null);
+  return (
+    <div className="h-full flex flex-col bg-[var(--t-bg1)] t-panel">
+      <div className="shrink-0 flex items-center gap-2 px-3 h-9 border-b border-[var(--t-line)]">
+        <Icon name="cost" size={13} className="text-[var(--t-amber)]" />
+        <span className="text-[12px] text-[var(--t-fg)] font-medium">Cost & tokens</span>
+        <span className="ml-auto font-mono text-[10px] text-[var(--t-dim)]">
+          {at ? `updated ${ago(at, now)}` : ""}
+        </span>
+        <Btn size="xs" variant="ghost" icon="retry" onClick={load} title="Refresh from the server">Refresh</Btn>
+      </div>
+      <div className="flex-1 min-h-0 overflow-auto t-scroll">
+        <div className="p-4 pb-2 flex items-end gap-6 flex-wrap">
+          <div>
+            <div className="text-[24px] font-semibold tabular-nums text-[var(--t-fg)]">{t.hasCost ? fmtCost(t.costUsd) : "—"}</div>
+            <div className="text-[10.5px] uppercase tracking-wider text-[var(--t-dim)]">total reported cost</div>
+          </div>
+          <div>
+            <div className="text-[16px] font-medium tabular-nums text-[var(--t-fg2)]">{t.calls.toLocaleString()}</div>
+            <div className="text-[10.5px] uppercase tracking-wider text-[var(--t-dim)]">llm calls</div>
+          </div>
+          <div>
+            <div className="text-[16px] font-medium tabular-nums text-[var(--t-fg2)]">{fmtTokens(t.tokensIn)} → {fmtTokens(t.tokensOut)}</div>
+            <div className="text-[10.5px] uppercase tracking-wider text-[var(--t-dim)]">tokens in → out</div>
+          </div>
+        </div>
+        {!t.hasCost && (
+          <div className="mx-4 mb-3 rounded-md border border-[var(--t-line)] bg-[var(--t-bg2)] px-3 py-2 text-[11px] text-[var(--t-mute)]">
+            No harness has reported cost yet — pi and claude-code report per-call cost; dsh and hermes report tokens only. Token columns are always real.
+          </div>
+        )}
+        <div className="px-2 pb-4">
+          <div className="grid grid-cols-[1fr_64px_72px_64px_56px] gap-2 px-2 h-7 items-center text-[10px] font-medium uppercase tracking-[0.08em] text-[var(--t-dim)] border-b border-[var(--t-line)]">
+            <span>session</span><span className="text-right">calls</span><span className="text-right">in → out</span><span className="text-right">cost</span><span></span>
+          </div>
+          {data.sessions.map((s) => (
+            <button
+              key={s.id}
+              onClick={() => openDailyDriver(s.id)}
+              className="w-full grid grid-cols-[1fr_64px_72px_64px_56px] gap-2 px-2 h-8 items-center text-left border-b border-[var(--t-line)]/50 hover:bg-white/[0.03] transition-colors"
+              title={`${s.title}\n${s.harness} · open chat + trajectory + context`}
+            >
+              <span className="flex items-center gap-2 min-w-0">
+                <HarnessMark harness={s.harness} size={14} />
+                <span className="truncate text-[12px] text-[var(--t-fg2)]">{s.title}</span>
+                <StateDot state={s.state as never} size={5} />
+              </span>
+              <span className="text-right font-mono text-[11px] tabular-nums text-[var(--t-mute)]">{s.calls}</span>
+              <span className="text-right font-mono text-[11px] tabular-nums text-[var(--t-mute)]">{fmtTokens(s.tokensIn)} → {fmtTokens(s.tokensOut)}</span>
+              <span className={cn("text-right font-mono text-[11px] tabular-nums", s.costUsd != null ? "text-[var(--t-amber)]" : "text-[var(--t-dim)]")}>
+                {s.costUsd != null ? fmtCost(s.costUsd) : "—"}
+              </span>
+              <span />
+            </button>
+          ))}
+          {withCost.length === 0 && data.sessions.length === 0 && (
+            <Empty icon="gauge" title="No LLM calls yet">Run a session and the ledger fills in.</Empty>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
