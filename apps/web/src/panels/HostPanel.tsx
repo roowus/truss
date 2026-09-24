@@ -4,7 +4,7 @@ import { store, useApp } from "@/lib/store";
 import { desktops, useDesktops, type HostPreference } from "@/lib/desktops";
 import { harnessStyle, hostOf, shortPath } from "@/lib/format";
 import { openPanel, renameHostPanels } from "@/lib/workspace";
-import { Btn, HarnessMark, Icon, StateDot } from "@/components/ui";
+import { Btn, HarnessMark, Icon, Select, StateDot } from "@/components/ui";
 import { cn } from "@/utils/cn";
 
 const blank: HostPreference = { alias: "", defaultCwd: "", defaultProject: "", preferredAdapter: "" };
@@ -147,10 +147,16 @@ export function HostPanel({ params }: IDockviewPanelProps<{ hostId: string }>) {
               <input className="t-input" value={form.alias} onChange={(e) => edit({ alias: e.target.value })} placeholder={host?.hostname || hostId} maxLength={40} />
             </Field>
             <Field label="Preferred adapter">
-              <select className="t-input" value={form.preferredAdapter} onChange={(e) => edit({ preferredAdapter: e.target.value })}>
-                <option value="">First available</option>
-                {remoteHarnesses.map((h) => <option key={h.id} value={h.id}>{h.id}</option>)}
-              </select>
+              <Select
+                className="w-full"
+                value={form.preferredAdapter}
+                onChange={(v) => edit({ preferredAdapter: v })}
+                ariaLabel="Preferred adapter"
+                options={[
+                  { value: "", label: "First available" },
+                  ...remoteHarnesses.map((h) => ({ value: h.id, label: h.id })),
+                ]}
+              />
             </Field>
             <Field label="Default working directory">
               <input className="t-input font-code" value={form.defaultCwd} onChange={(e) => edit({ defaultCwd: e.target.value })} placeholder="/home/user/project" />

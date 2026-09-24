@@ -3,7 +3,7 @@ import { store, useApp } from "@/lib/store";
 import { useDesktops } from "@/lib/desktops";
 import { harnessStyle, hostOf, shortPath } from "@/lib/format";
 import { openPanel, openSession } from "@/lib/workspace";
-import { Btn, HarnessMark, Icon, Kbd, Spinner } from "./ui";
+import { Btn, HarnessMark, Icon, Kbd, Select, Spinner } from "./ui";
 import { cn } from "@/utils/cn";
 
 export interface NewSessionPreset {
@@ -128,22 +128,28 @@ export function NewSessionDialog({ onClose, preset }: { onClose: () => void; pre
           )}
 
           <Field label="model">
-            <select value={model} onChange={(e) => setModel(e.target.value)} className="t-input">
-              <option value="">harness default</option>
-              {hModels.map((m) => (
-                <option key={m.provider + m.model} value={`${m.provider}/${m.model}`}>{m.label} — {m.provider}/{m.model}</option>
-              ))}
-            </select>
+            <Select
+              value={model}
+              onChange={setModel}
+              ariaLabel="Model"
+              className="w-full"
+              options={[
+                { value: "", label: "harness default" },
+                ...hModels.map((m) => ({
+                  value: `${m.provider}/${m.model}`,
+                  label: m.label,
+                  hint: `${m.provider}/${m.model}`,
+                })),
+              ]}
+            />
           </Field>
 
           <div className="grid grid-cols-[1fr_180px] gap-3">
             <Field label="working directory" error={cwdErr}>
-              <input value={cwd} onChange={(e) => setCwd(e.target.value)} list="cwd-list" placeholder="/home/you/code/project" className="t-input font-mono" autoFocus />
-              <datalist id="cwd-list">{recentCwds.map((c) => <option key={c} value={c}>{shortPath(c)}</option>)}</datalist>
+              <input value={cwd} onChange={(e) => setCwd(e.target.value)} placeholder="/home/you/code/project" className="t-input font-mono" autoFocus />
             </Field>
             <Field label="project (optional)">
-              <input value={project} onChange={(e) => setProject(e.target.value)} list="proj-list" placeholder="none" className="t-input" />
-              <datalist id="proj-list">{projects.map((p) => <option key={p} value={p} />)}</datalist>
+              <input value={project} onChange={(e) => setProject(e.target.value)} placeholder="none" className="t-input" />
             </Field>
           </div>
           {recentCwds.length > 0 && (
@@ -151,6 +157,16 @@ export function NewSessionDialog({ onClose, preset }: { onClose: () => void; pre
               {recentCwds.slice(0, 5).map((c) => (
                 <button key={c} onClick={() => setCwd(c)} className={cn("font-mono text-[10.5px] px-1.5 h-5 rounded border", cwd === c ? "border-[var(--t-line2)] text-[var(--t-fg)] bg-[var(--t-bg2)]" : "border-[var(--t-line)] text-[var(--t-dim)] hover:text-[var(--t-mute)]")}>
                   {shortPath(c)}
+                </button>
+              ))}
+            </div>
+          )}
+          {projects.length > 0 && (
+            <div className="-mt-3 flex flex-wrap gap-1 items-center">
+              <span className="text-[10px] text-[var(--t-dim)] uppercase tracking-wider mr-0.5">projects:</span>
+              {projects.map((p) => (
+                <button key={p} onClick={() => setProject(project === p ? "" : p)} className={cn("font-mono text-[10.5px] px-1.5 h-5 rounded border", project === p ? "border-[var(--t-amber)]/50 text-[var(--t-amber)] bg-[color-mix(in_oklab,var(--t-amber)_10%,transparent)]" : "border-[var(--t-line)] text-[var(--t-dim)] hover:text-[var(--t-mute)]")}>
+                  {p}
                 </button>
               ))}
             </div>

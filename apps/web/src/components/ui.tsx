@@ -1,6 +1,8 @@
-import type { ReactNode, ButtonHTMLAttributes } from "react";
+import { useEffect, useRef, useState, type ReactNode, type ButtonHTMLAttributes } from "react";
+import { createPortal } from "react-dom";
 import { cn } from "@/utils/cn";
 import { harnessStyle, hostOf } from "@/lib/format";
+import { HarnessLogo } from "./harnessLogos";
 import type { SessionState } from "@/lib/proto";
 
 /* ---------- icons (1.5px stroke, 16px grid) ---------- */
@@ -62,13 +64,14 @@ export function TrussLogo({ size = 22 }: { size?: number }) {
 export function HarnessMark({ harness, size = 20, className }: { harness: string; size?: number; className?: string }) {
   const h = harnessStyle(harness);
   const host = hostOf(harness);
+  const logo = <HarnessLogo harness={harness} size={size} />;
   return (
     <span
-      className={cn("relative inline-grid place-items-center rounded-[5px] font-mono font-semibold leading-none shrink-0", className)}
-      style={{ width: size, height: size, fontSize: size * 0.58, color: h.color, background: `color-mix(in oklab, ${h.color} 14%, transparent)`, boxShadow: `inset 0 0 0 1px color-mix(in oklab, ${h.color} 35%, transparent)` }}
+      className={cn("relative inline-grid place-items-center rounded-[5px] font-mono font-semibold leading-none shrink-0 overflow-hidden", className)}
+      style={logo ? { width: size, height: size, boxShadow: `inset 0 0 0 1px color-mix(in oklab, ${h.color} 35%, transparent)` } : { width: size, height: size, fontSize: size * 0.58, color: h.color, background: `color-mix(in oklab, ${h.color} 14%, transparent)`, boxShadow: `inset 0 0 0 1px color-mix(in oklab, ${h.color} 35%, transparent)` }}
       title={harness}
     >
-      {h.glyph}
+      {logo ?? h.glyph}
       {host && <span className="absolute -right-1 -bottom-1 w-2 h-2 rounded-full bg-[var(--t-sky)] ring-2 ring-[var(--t-bg1)]" title={`remote: ${host}`} />}
     </span>
   );
@@ -183,5 +186,136 @@ export function Spinner({ size = 12, color = "var(--t-amber)" }: { size?: number
       <circle cx="8" cy="8" r="6" fill="none" stroke={color} strokeOpacity=".25" strokeWidth="2" />
       <path d="M8 2a6 6 0 0 1 6 6" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" />
     </svg>
+  );
+}
+
+/* ---------- custom select (no native dropdowns) ---------- */
+export interface SelectOption {
+  value: string;
+  label: ReactNode;
+  hint?: string;
+}
+
+/** A dropdown that matches the app: portal list, typeahead, arrows+enter+esc, click-outside. */
+export function Select({
+  value,
+  options,
+  onChange,
+  className,
+  disabled,
+  ariaLabel,
+  width,
+}: {
+  value: string;
+  options: SelectOption[];
+  onChange: (value: string) => void;
+  className?: string;
+  disabled?: boolean;
+  ariaLabel?: string;
+  width?: number | string;
+}) {
+  const [open, setOpen] = useState(false);
+  const [highlight, setHighlight] = useState(0);
+  const btnRef = useRef<HTMLButtonElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+  const current = options.find((o) => o.value === value);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: PointerEvent) => {
+      if (!btnRef.current?.contains(e.target as Node) && !listRef.current?.contains(e.target as Node)) setOpen(false);
+    };
+    window.addEventListener("pointerdown", onDown);
+    return () => window.removeEventListener("pointerdown", onDown);
+  }, [open]);
+
+  useEffect(() => {
+    if (open) listRef.current?.querySelector<HTMLElement>("[data-hl]")?.scrollIntoView({ block: "nearest" });
+  }, [open, highlight]);
+
+  const pick = (v: string) => {
+    onChange(v);
+    setOpen(false);
+    btnRef.current?.focus();
+  };
+
+  const onKeyDown = (e: React.KeyboardEvent) => {
+    if (!open) {
+      if (["Enter", " ", "ArrowDown", "ArrowUp"].includes(e.key)) {
+        e.preventDefault();
+        setHighlight(Math.max(0, options.findIndex((o) => o.value === value)));
+        setOpen(true);
+      }
+      return;
+    }
+    if (e.key === "Escape") { e.preventDefault(); setOpen(false); btnRef.current?.focus(); }
+    else if (e.key === "ArrowDown") { e.preventDefault(); setHighlight((h) => Math.min(options.length - 1, h + 1)); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); setHighlight((h) => Math.max(0, h - 1)); }
+    else if (e.key === "Enter" || e.key === " ") { e.preventDefault(); const o = options[highlight]; if (o) pick(o.value); }
+    else if (e.key.length === 1 && /\S/.test(e.key)) {
+      const q = e.key.toLowerCase();
+      const hit = options.findIndex((o, i) => i > highlight && String(typeof o.label === "string" ? o.label : "").toLowerCase().startsWith(q));
+      if (hit >= 0) setHighlight(hit);
+      else {
+        const wrap = options.findIndex((o) => String(typeof o.label === "string" ? o.label : "").toLowerCase().startsWith(q));
+        if (wrap >= 0) setHighlight(wrap);
+      }
+    }
+  };
+
+  const rect = btnRef.current?.getBoundingClientRect();
+  return (
+    <>
+      <button
+        ref={btnRef}
+        type="button"
+        disabled={disabled}
+        aria-label={ariaLabel}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        onClick={() => { setHighlight(Math.max(0, options.findIndex((o) => o.value === value))); setOpen((v) => !v); }}
+        onKeyDown={onKeyDown}
+        className={cn(
+          "t-input inline-flex items-center justify-between gap-2 text-left select-none cursor-pointer",
+          "focus-visible:outline-2 focus-visible:outline-[var(--t-amber)] focus-visible:outline-offset-1",
+          disabled && "opacity-40 cursor-not-allowed",
+          className,
+        )}
+        style={width ? { width } : undefined}
+      >
+        <span className="min-w-0 truncate">{current ? current.label : <span className="text-[var(--t-dim)]">—</span>}</span>
+        <Icon name="down" size={11} className={cn("shrink-0 text-[var(--t-dim)] transition-transform", open && "rotate-180")} />
+      </button>
+      {open && rect && createPortal(
+        <div
+          ref={listRef}
+          role="listbox"
+          aria-label={ariaLabel}
+          className="fixed z-[170] max-h-[280px] overflow-auto t-scroll rounded-lg bg-[var(--t-bg2)] border border-[var(--t-line2)] shadow-2xl py-1 t-pop"
+          style={{ top: Math.min(rect.bottom + 5, window.innerHeight - 290), left: rect.left, minWidth: rect.width }}
+        >
+          {options.map((o, i) => (
+            <div
+              key={o.value}
+              role="option"
+              aria-selected={o.value === value}
+              data-hl={i === highlight ? "" : undefined}
+              onPointerEnter={() => setHighlight(i)}
+              onClick={() => pick(o.value)}
+              className={cn(
+                "flex items-center gap-2 px-3 h-8 cursor-pointer text-[12px]",
+                i === highlight ? "bg-white/[0.06] text-[var(--t-fg)]" : "text-[var(--t-fg2)]",
+                o.value === value && "text-[var(--t-amber)]",
+              )}
+            >
+              <span className="w-3 shrink-0">{o.value === value && <Icon name="check" size={11} />}</span>
+              <span className="min-w-0 truncate flex-1">{o.label}</span>
+              {o.hint && <span className="shrink-0 text-[10px] text-[var(--t-dim)]">{o.hint}</span>}
+            </div>
+          ))}
+        </div>,
+        document.body,
+      )}
+    </>
   );
 }

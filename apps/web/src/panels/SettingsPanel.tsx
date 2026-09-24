@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { desktops, useDesktops, type UiSettings } from "@/lib/desktops";
 import { useApp } from "@/lib/store";
-import { Btn, Icon } from "@/components/ui";
+import { Btn, Icon, Select } from "@/components/ui";
 import { cn } from "@/utils/cn";
 
 export function SettingsPanel() {
@@ -38,9 +38,13 @@ export function SettingsPanel() {
             <Toggle options={[{ id: "comfortable", name: "Comfortable" }, { id: "compact", name: "Compact" }]} value={settings.density} onChange={(v) => change("density", v as UiSettings["density"])} />
           </Row>
           <Row label="Terminal font size" description="Applies to all shell tabs. Code and terminal keep their monospace font.">
-            <select aria-label="Terminal font size" className="t-input !w-[120px]" value={settings.terminalFontSize} onChange={(e) => change("terminalFontSize", Number(e.target.value))}>
-              {[11, 12, 13, 14, 16].map((n) => <option key={n} value={n}>{n} px</option>)}
-            </select>
+            <Select
+              ariaLabel="Terminal font size"
+              className="!w-[150px]"
+              value={String(settings.terminalFontSize)}
+              onChange={(v) => change("terminalFontSize", Number(v))}
+              options={[11, 12, 13, 14, 16].map((n) => ({ value: String(n), label: `${n} px` }))}
+            />
           </Row>
         </section>
 
