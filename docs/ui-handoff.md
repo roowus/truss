@@ -1,146 +1,133 @@
-# Truss — UI rebuild handoff
+# Truss — UI handoff
 
-> **To the model rebuilding the UI:** the backend is done, verified, and stable. This document is everything you need: what the product is, the design contract, the exact API/event surface, what exists today, the behaviors the new UI must have, and the bugs I already hit so you don't rediscover them. Read `docs/ui-design.md` and `docs/mockups/variant-11-nocturne-abyss.html` first — they are the visual source of truth — then this file for the data side.
+> **To whoever builds the UI:** the backend is done, verified, and stable. This document splits deliberately into two parts:
+>
+> - **The contract (non-negotiable)** — the API, the event model, and the functional behaviors the product needs. These exist and are tested; build against them as-is.
+> - **The canvas (yours)** — layout, visual language, interaction patterns, typography, color. You have full creative freedom. Nothing about the current UI's look is sacred — it was a functional first pass, and the owner has explicitly released you from it.
+>
+> A previous design iteration lives in `docs/mockups/` (v1–v11) with a token/pattern summary in `docs/ui-design.md` — keep them as *reference material* (one direction that was explored), not as a spec.
 
 ---
 
 ## 1. What Truss is
 
-A **plugin-based, universal "head" for AI agentic-loop harnesses** — Truss is NOT a harness. It hosts them. The user runs pi, Claude Code, DeepSeek Harness, and Hermes side by side, one chat per harness, in one consistent interface. Single-user, self-hosted, tailnet-reachable. (Minecraft-with-mods philosophy: everything is a plugin; the two plugin levels are *harness adapters* and *UI panels*.)
+A **universal "head" for AI agentic-loop harnesses** — Truss is not a harness, it hosts them. One user, self-hosted, reachable from any of their devices. The product thesis: every agentic harness (today: pi, Claude Code, DeepSeek Harness, Hermes; tomorrow: anything speaking ACP or stream-json) deserves one great interface, and the interface should treat harnesses like plugins.
 
-Core UX promise: **dockable workspace** — sidebar + windows with per-window tab bars; tabs hold chats, terminals, or panels; windows split to quarters; the layout persists across reloads (already implemented — see §7).
+The interesting UI problem: the user runs *several harnesses at once* and watches them work — streaming text, tool calls firing, subagents fanning out, permissions needing answers, tokens burning. Truss is closer to an observability console crossed with a chat client than to either alone. The signature idea from the original brief: a **trajectory view** — "the Chrome network tab for LLM calls."
 
-The signature surface is the **trajectory panel**: a Chrome-network-tab-for-LLM-calls. Every LLM turn is a row with a latency bar; rows expand into the tools that ran in that turn, token counts, cost, retry lineage.
+## 2. Live deployment & dev loop
 
-## 2. Live deployment
+- Prod: `https://truss.rewis` — Caddy → systemd `truss.service` → Fastify `127.0.0.1:4040`, which serves the built web app (`apps/web/dist`) + REST + both WS channels. Deploy: `pnpm -C apps/web build && sudo systemctl restart truss`.
+- Dev: `pnpm dev` → Vite `:4041` proxying `/api`, `/events`, `/api/terminal/*` to Fastify `:4040` (tsx watch). Stop the systemd service first, or set `TRUSS_PORT`.
+- The frontend stack today is React 19 + Vite + Tailwind 4 + Dockview + xterm.js. **Dockview and xterm.js carry real weight** (window management, terminal emulation); you may replace anything else, and you may replace those too if you have something better — but read §6 first.
 
-- Prod: `https://truss.rewis` (Caddy → `truss.service` → Fastify `127.0.0.1:4040`, serves `apps/web/dist` + API + WS).
-- Dev: `pnpm dev` (Fastify `:4040` tsx-watch + Vite `:4041` proxying `/api`, `/events`, `/api/terminal`). Stop the systemd service first or set `TRUSS_PORT`.
-- The whole thing is event-sourced: **every UI state derives from one event log** (SQLite `events` table) + live WS frames. If you keep that model, the UI rewrite is mostly mechanical.
+## 3. THE CONTRACT — API surface (non-negotiable)
 
-## 3. The API surface (REST)
-
-Base URL: same origin (Vite proxies in dev).
+Same-origin REST; in dev these proxy through Vite.
 
 | Route | Shape | Notes |
 |---|---|---|
-| `GET /health` | `{ok, service, time}` | liveness |
-| `GET /api/harnesses` | `{harnesses: [{id, capabilities}], models: [{harness, provider, model, label}]}` | `capabilities`: `permissions`, `subagents`, `streaming`, `queueWhileRunning`. Harness ids: `pi`, `dsh`, `claude-code`, `hermes`, plus remote `pi@<host>` / `claude-code@<host>` when node-agents are connected (`GET /api/agents`). |
-| `GET /api/sessions` | `{sessions: [SessionMeta]}` | `SessionMeta`: `id, harness, title, cwd, model?, project?, state, created_at, updated_at, live`. `state ∈ spawning \| idle \| running \| error \| closed`. Ordered by `updated_at` desc. |
-| `POST /api/sessions` | body `{harness, cwd, model?, provider?, title?, project?}` → `{session}` | Spawns the harness. First `dsh` session boots the shared ACP process (~5–10s). |
+| `GET /health` | `{ok, service, time}` | |
+| `GET /api/harnesses` | `{harnesses: [{id, capabilities}], models: [{harness, provider, model, label}]}` | `capabilities = {permissions, subagents, streaming, queueWhileRunning}`. Harness ids: `pi`, `dsh`, `claude-code`, `hermes`, and remote `<adapter>@<host>` ids when node-agents are connected (`GET /api/agents` → `{agents:[{hostId, hostname, adapters}]}`). |
+| `GET /api/sessions` | `{sessions: [SessionMeta]}` | `SessionMeta = {id, harness, title, cwd, model?, project?, state, created_at, updated_at, live}`; `state ∈ spawning \| idle \| running \| error \| closed`; newest activity first. |
+| `POST /api/sessions` | `{harness, cwd, model?, provider?, title?, project?}` → `{session}` | Spawns the harness process. |
 | `GET /api/sessions/:id` | `{session}` | |
-| `GET /api/sessions/:id/events` | `{events: [{seq, ev}]}` | **Full event replay** for hydration. `seq` = SQLite rowid, monotonic — dedupe key against live frames. |
-| `POST /api/sessions/:id/prompt` | `{text}` → `{ok}` | Prompting a `closed`/`error` session with a harness ref **resumes it transparently** (pi `--session`, claude `--resume`, dsh/hermes `session/resume`). 409 if truly dead. |
-| `POST /api/sessions/:id/interrupt` | → `{ok}` | Aborts the running turn. |
-| `POST /api/sessions/:id/permission` | `{requestId, choice}` → `{ok}` | Answers a permission card (`choice` = one of `perm.request.options`). |
-| `DELETE /api/sessions/:id` | `?hard=1` to also delete history | Soft close disposes the harness process; hard deletes row + events. |
-| `GET /api/terminals` · `POST /api/terminals` `{cwd?, title?}` · `DELETE /api/terminals/:id` | | Free shells. Terminals die with the server (no persistence). |
-| `GET /api/skills?cwd=` | `{skills: [{name, description, source, scope}]}` | Agent-Skills-spec dirs (pi global + project). |
-| `GET /api/layout` · `PUT /api/layout` `{layout: string}` | | Dockview serialized JSON blob. |
+| `GET /api/sessions/:id/events` | `{events: [{seq, ev}]}` | Full replay for hydration — see the seq rule in §5. |
+| `POST /api/sessions/:id/prompt` | `{text}` → `{ok}` | Prompting a `closed`/`error` session with a stored harness ref **resumes the harness transparently** (pi `--session`, claude `--resume`, dsh/hermes `session/resume`). 409 if unresumable. |
+| `POST /api/sessions/:id/interrupt` | → `{ok}` | Abort the running turn. |
+| `POST /api/sessions/:id/permission` | `{requestId, choice}` → `{ok}` | Answers a permission card; `choice` must be one of the `perm.request.options`. |
+| `DELETE /api/sessions/:id` | `?hard=1` deletes history too | Soft close disposes the process; hard deletes the row + events. |
+| `GET /api/terminals` · `POST /api/terminals {cwd?, title?}` · `DELETE /api/terminals/:id` | | Free shells on the server host. |
+| `GET /api/skills?cwd=` | `{skills: [{name, description, source, scope}]}` | Agent-Skills-spec dirs visible to that cwd. |
+| `GET /api/layout` · `PUT /api/layout {layout: string}` | | Opaque serialized layout blob, stored server-side (currently Dockview's `toJSON`; if you switch layout engines, keep the same two endpoints with your format). |
 
 ### WebSocket channels
 
-- **`/events`** — the global event bus. Every frame: `{"seq": <rowid>, "ev": <ProtoEvent>}`. All sessions' events flow here.
-- **`/api/terminal/:id/ws`** — terminal I/O. Server→client: `{type:"hello", title, alive}`, `{type:"out", data}`, `{type:"exit", code}`. Client→server: `{type:"in", data}`, `{type:"resize", cols, rows}`. On attach the server replays a 128KB scrollback ring buffer as one `out` frame — paint it before live data.
+- **`/events`** — the global event bus; every frame is `{"seq": <int>, "ev": <ProtoEvent>}` covering all sessions.
+- **`/api/terminal/:id/ws`** — terminal I/O. Server→client: `{type:"hello", title, alive}`, `{type:"out", data}` (on attach, one `out` frame replays up to 128KB of scrollback before live data), `{type:"exit", code}`. Client→server: `{type:"in", data}`, `{type:"resize", cols, rows}`.
 
-## 4. The event schema (`packages/proto`)
+## 4. THE CONTRACT — events (`packages/proto`)
 
-Every event has `sessionId`. The wire types:
+All events carry `sessionId`. Everything the UI renders derives from these:
 
 | Event | Fields | Semantics |
 |---|---|---|
 | `session.created` | `harness, title, cwd, model?, project?, at` | |
-| `session.state` | `state, detail?` | Drives sidebar "live" dots, composer enablement, status bar. |
-| `msg.start` | `messageId, role (user/assistant/system), at` | Open a bubble. |
-| `msg.chunk` | `messageId, text, channel?` | Append text. `channel: "thinking"` = model reasoning → render as the dimmed italic scaffold, NOT body text. |
-| `msg.done` | `messageId, stopReason?` | Close the bubble. `stopReason` starting `error:` = render as error. |
-| `tool.call` | `toolCallId, name, args, callId?` | Open a scaffold row. `callId` links it to a trajectory row. |
+| `session.state` | `state, detail?` | Drives "is this chat alive / busy / dead" everywhere. |
+| `msg.start` | `messageId, role (user\|assistant\|system), at` | Open a message. |
+| `msg.chunk` | `messageId, text, channel?` | Append text. `channel:"thinking"` = model reasoning — keep it visually distinct from the answer (this is a user-facing contract, not decoration). |
+| `msg.done` | `messageId, stopReason?` | Settle. `stopReason` starting `error:` = failure. |
+| `tool.call` | `toolCallId, name, args, callId?` | A tool started. `callId` links it to a trajectory row (`llm.call.start`). |
 | `tool.update` | `toolCallId, output?` | Partial output while running. |
-| `tool.done` | `toolCallId, ok, durationMs?, output?` | Settle the row. |
-| `perm.request` | `requestId, tool, reason, options[]` | **Permission card** — block the turn until the user answers. |
-| `perm.resolve` | `requestId, choice` | Card answered (remove it). |
-| `llm.call.start` | `callId, model, at` | Open a trajectory row. |
-| `llm.call.done` | `callId, status, latencyMs, tokensIn?, tokensOut?, costUsd?, retryOf?` | Close it. `retryOf` links a retry to the failed call (orange). **Note:** dsh/hermes report no per-call tokens (ACP gives per-turn usage only) — render `—` when absent, not `0`. |
-| `subagent.spawn` | `agentId, label, parentAgentId?` | Team tree node. |
+| `tool.done` | `toolCallId, ok, durationMs?, output?` | Settled. |
+| `perm.request` | `requestId, tool, reason, options[]` | **A permission card that blocks the turn** until the user answers. This is the bidirectional core of the product — it must be prominent, never a footnote. |
+| `perm.resolve` | `requestId, choice` | Answered (drop the card). |
+| `llm.call.start` | `callId, model, at` | A trajectory row opens. |
+| `llm.call.done` | `callId, status, latencyMs, tokensIn?, tokensOut?, costUsd?, retryOf?` | Row closes. `retryOf` links a retry to the failed call. **dsh/hermes report no per-call tokens** — show absence honestly (`—`), not `0`. |
+| `subagent.spawn` | `agentId, label, parentAgentId?` | Team tree node (claude-code emits these for its Task/Agent tool). |
 | `subagent.done` | `agentId, ok` | |
-| `ctx.usage` | `used, total, by?` | Context occupancy. `by` (per-category) only exists when a harness reports it — none do yet; render the honest fallback. |
+| `ctx.usage` | `used, total, by?` | Context-window occupancy. `by` (per-category) is reserved for harnesses that report it — none do yet; don't invent it. |
 
-### Harness behavioral differences (they matter for UX)
+## 5. THE CONTRACT — state model (non-negotiable mechanics)
+
+However you structure client state, these rules are load-bearing:
+
+1. **Seq dedupe.** Every frame has `seq` (SQLite rowid, monotonic per row). Per session track `lastSeq` and drop anything `<=` it. Hydration (`GET .../events`) and the live bus overlap constantly — without this every message renders twice.
+2. **Replay never resurrects.** History contains old `session.state: idle` events. The REST session row is authoritative for current state; a `closed` session stays closed until a prompt resumes it.
+3. **Auto-title refresh.** The server renames "new session" from the first prompt — refetch the session list on user `msg.done`.
+4. **Id uniqueness across resume.** Adapters restart processes on resume; message/call ids carry per-spawn prefixes server-side. If you mint ids client-side, include spawn/session context — never a bare counter.
+5. **Terminal lifecycle.** Closing a terminal's UI must `DELETE /api/terminals/:id` or the pty leaks server-side. Attach replays scrollback before live data.
+
+### Harness behavior differences (drive the interaction design)
 
 | | pi | dsh | claude-code | hermes |
 |---|---|---|---|---|
-| wire | `--mode rpc` JSONL | ACP stdio (shared proc) | stream-json stdio | ACP stdio (`hermes-acp`) |
-| queue while running | **yes** (follow-up) | no | no | no |
-| streaming | token deltas | committed chunks | committed blocks | small chunks |
-| thinking channel | yes | yes (thought chunks) | yes (thinking blocks) | yes |
-| per-call tokens | yes | no (turn-level) | turn-level | turn-level |
-| context usage | yes (per turn) | yes (usage_update) | — | yes |
-| permissions | — | cards | cards (MCP host) | cards |
-| subagents | — | — | Task/Agent tool → tree | — |
-| resume | `--session` | `session/resume` | `--resume` | `session/resume` |
+| accepts input mid-run | **yes** (queues) | no | no | no |
+| streaming granularity | token deltas | committed chunks | committed blocks | small chunks |
+| thinking stream | yes | yes | yes | yes |
+| permission cards | — | ✓ | ✓ | ✓ |
+| subagent events | — | — | ✓ (Task/Agent tool) | — |
+| per-call tokens | ✓ | — (turn-level) | turn-level | turn-level |
+| ctx usage | ✓ | ✓ | — | ✓ |
 
-Composer behavior: while a session is `running`, pi can accept a follow-up (queue it); the others must show the composer as waiting (their `capabilities.queueWhileRunning` says which).
+`capabilities.queueWhileRunning` from `/api/harnesses` tells you which composers may accept input during a run — disable/hold with explanation for the others.
 
-## 5. Current UI inventory (what you're replacing)
+## 6. THE CANVAS — your creative freedom
 
-Everything works but is utilitarian — the user's verdict is "buggy, redo from the ground up." Keep the data wiring, replace the presentation:
+Everything visual and spatial is yours. To scope "bare essential functionality," the product must let the user:
 
-- `App.tsx` — Dockview shell, layout persistence, panel registry, new-session modal (harness/model/cwd/project), sidebar splitter drag.
-- `components/Sidebar.tsx` — project groups (Chrome-style collapse, color chips), harness logo chips with hover tooltips, panels list, context-gauge footer.
-- `components/ChatPanel.tsx` — messages (user bubbles / assistant with who-label / thinking rows / tool scaffold rows with expandable mono output / run-state), permission cards, timeline rail (tick per user turn), composer dock (status stack when tools run, input well, context chips: harness · model · cwd · shell · ctx).
-- `components/TrajectoryPanel.tsx` — time-axis ruler (marks per call, cyan "now" line), rows with latency bars, expandable detail (tools + tokens + cost + retry link), aggregate footer.
-- `components/TerminalPanel.tsx` — xterm.js + FitAddon over the terminal WS.
-- `components/ContextPanel.tsx` — big gauge + input-tokens-per-call bars.
-- `components/SubagentsPanel.tsx` — tree from subagent events (real data exists for claude-code).
-- `components/SkillsPanel.tsx` — skill rows with scope chips.
-- `components/StatusBar.tsx` — agents count, ctx, cost, ws state, clock.
-- `store.ts` — the event-sourced client store (see §6). `api.ts` — REST client. `icons.tsx` — SVG sprite + harness logos. `theme.css` — v11 tokens.
-- `dockBus.ts` — bridge so dockview panels (which get params-only props) can ask the App to open tabs.
+- **Browse and manage sessions** across harnesses (list, state, open, close, delete, group by project — the `project` field exists for this).
+- **Create sessions**: harness picker, model picker (from `/api/harnesses` `models`), working directory, optional project.
+- **Chat**: stream answers live, distinguish thinking from output, see tool calls with status/duration/output, answer permission cards inline, interrupt a run, know when a session is dead and what happens if you prompt it (resurrection).
+- **Trajectory**: see every LLM call with when/hownlong/what-model/tokens/cost, expand into the tools that ran inside it, spot retries/failures at a glance.
+- **Terminals**: real shells in the UI (xterm-grade), free shells and "a shell in this session's cwd" (agent-shell).
+- **Panels**: context usage, subagent tree, skills — as first-class openable surfaces.
+- **Workspace**: multiple simultaneous views (chat next to trajectory next to terminal is the daily-driver arrangement), rearranged by the user, **persisting across reloads** via `/api/layout`.
+- **Multi-device**: two browsers stay in sync through the event bus for free — don't break that (i.e., stay event-driven, don't fetch-poll).
+- **Status**: connection state, running agents, context, cost — ambient, glanceable.
 
-## 6. State management (the part to keep)
+The reference implementation (`apps/web/src/` today) is a *working* answer to all of the above with intentionally plain presentation — mine it for wiring (dockBus bridge, store shape, api client) and replace the rest freely. `docs/mockups/variant-11-nocturne-abyss.html` shows one dark, dense, Dracula-flavored direction that was previously explored; it is explicitly **not** a requirement.
 
-One store, three sources merged:
+## 7. Technical pitfalls (physics, not taste)
 
-1. `GET /api/sessions` — the session list (authoritative current state).
-2. `GET /api/sessions/:id/events` — hydration replay for a session when it's opened (once).
-3. `/events` WS — live frames forever after.
+These are integration-level traps I already hit — they apply under any design:
 
-**The dedupe rule that matters:** every frame carries `seq` (SQLite rowid). Per session keep `lastSeq`; drop frames with `seq <= lastSeq`. Hydration and live overlap constantly (an event can arrive on WS while you're fetching history) — without this every message doubles.
+1. **Dockview theming** (if you keep it): theme through its `--dv-*` CSS variables; class-selector overrides lose specificity wars.
+2. **Dockview mount race**: never `addPanel` synchronously inside `onReady` — defer a frame or you get `Invalid grid element`.
+3. **xterm**: `fit()` throws on a zero-size host — guard dimensions, refit on `ResizeObserver`, and push `resize` frames to the server after every fit.
+4. **JSONL framing** (adapters/parsers): split on LF only; U+2028/U+2029 are legal inside JSON strings (Node `readline` gets this wrong).
+5. **Fonts/GPU**: terminals and chat timelines are hot paths — keep them out of layout-thrash loops and respect `prefers-reduced-motion`.
+6. **Service restarts drop WS**: reconnect with backoff; on reconnect, rehydrate active sessions (events may have been missed).
+7. **Harness boot latency**: the first `dsh` session takes 5–10s (its plugin stack boots). Show spawning honestly.
 
-Derived per-session state: `entries` (chat timeline: messages + tool rows in arrival order), `calls` (trajectory rows), `ctx` (latest usage), `agents` (subagent tree), `perms` (open permission cards).
+## 8. Acceptance (functional — verify with Playwright, don't claim without proof)
 
-Auto-title: the server renames "new session" from the first prompt; refetch the session list on user `msg.done`.
-
-## 7. Layout persistence contract
-
-`dockviewApi.toJSON()` → debounce 800ms → `PUT /api/layout`. On boot: `GET /api/layout` → `fromJSON` **before** adding any default panel; only build the default workspace (trajectory right, terminal below it, latest session's chat left) when no layout exists. Restored chat panels carry `params.sessionId` — reopening a chat tab for a `closed` session shows its replayed transcript with a disabled composer; prompting it resumes the harness (server handles it).
-
-## 8. Known pitfalls (I hit every one of these)
-
-1. **Dockview theming**: theme via the `--dv-*` CSS variables (`--dv-activegroup-visiblepanel-tab-background-color` etc.), NOT class selectors — specificity fights lose otherwise. The v11 "active tab lifted to pane color" needs `--dv-activegroup-visiblepanel-tab-background-color: var(--bg-focus)` + inactive to `--bg-pane` + strip to `#0e0f15`.
-2. **Dockview mount race**: don't `addPanel` synchronously inside `onReady` — defer with `requestAnimationFrame` or you get `Invalid grid element` (parentless DOM during portal attach).
-3. **xterm fit()**: throws on a zero-size host. Guard `clientWidth/Height < 20` and refit on `ResizeObserver`. Also send `{type:"resize"}` after every fit.
-4. **Message/call id uniqueness across resume**: harness processes restart on resume; adapter-side counters reset. Ids already carry a per-spawn prefix server-side — if you regenerate ids client-side, include spawn/session context, never a bare counter.
-5. **Closed-session replay**: history contains `session.state: idle` events — never let replay resurrect a closed session. The REST row is authoritative; closed is terminal (prompting is the only way back, via resume).
-6. **JSONL framing** (if you ever touch adapters): split on LF only; Node `readline` also splits U+2028/U+2029 which are legal inside JSON strings.
-7. **Terminal lifecycle**: closing a terminal tab must `DELETE /api/terminals/:id` or the pty leaks (there's a `onDidRemovePanel` hook for this in App.tsx).
-8. **Fonts**: Inter (+ Inter Tight for the wordmark) for UI, JetBrains Mono ONLY for terminal/code. Data flavor via Inter OpenType `tnum`/`zero`/`cv11` — never a second family for numbers.
-9. **`prefers-reduced-motion`**: blanket-disable animations (the CSS has the media query — keep it).
-10. **No `·` separators, no glow** — the user vetoed both explicitly. Hover = soft `--hover` bubble only.
-
-## 9. What the new UI must demonstrate (acceptance)
-
-Verify each with Playwright screenshots — don't claim without proof:
-
-1. Create a session per harness from the new-session flow; all four answer a chat.
-2. Mid-stream: text grows token-by-token (pi) / chunk-by-chunk (ACP); thinking renders dimmed; tool rows tick and settle with ✓ + duration.
-3. A risky claude/dsh tool call produces a permission card; answering "allow" runs the tool (visible in the row + a file on disk).
-4. Trajectory: rows accumulate with latency bars; expanding a row shows its tools + tokens; retries render orange when they happen.
-5. Terminal: type a command, see output, resize the window (fit follows), reload the page and the scrollback repaints.
-6. `systemctl restart truss` mid-session: sessions go closed; the UI shows it honestly; prompting the closed session resumes the harness and it REMEMBERS context (the adapters do — test with a codeword).
-7. Layout: rearrange windows, reload, identical arrangement.
-8. Two browser windows (two "devices") stay in sync through the event bus.
-
-## 10. Design contract
-
-`docs/ui-design.md` = tokens + locked patterns (Dracula-at-Night palette, per-window tab bars, 1px overlay splitters, composer dock, scaffold 67% dimming, hover bubbles, project groups, harness logo chips, unfocused-pane recession, no-green rule). `docs/mockups/variant-11-nocturne-abyss.html` = the reference implementation to match. The user iterated 11 variants to lock this — treat it as law, not suggestion. Changes to *locked* elements need explicit user sign-off; everything else (craft, motion, micro-detail) is yours to elevate.
+1. Create one session per harness; each answers a chat.
+2. Mid-run: streaming is visibly live, thinking distinct from output, tool rows show lifecycle, interrupt works.
+3. A risky tool call on claude/dsh/hermes raises a permission card; "allow" executes it (prove with a file on disk).
+4. Trajectory accumulates rows with latency; expansion shows the turn's tools; dsh rows show `—` for tokens, pi shows real numbers.
+5. Terminal: type → output; resize → reflow; reload → scrollback repaints.
+6. `systemctl restart truss` mid-session → UI shows sessions honestly dead → prompting one resumes it and it **remembers context** (codeword test).
+7. Rearrange the workspace → reload → identical.
+8. Two browser windows stay in sync.
+9. Layout/API errors surface as readable UI, never silent voids.
