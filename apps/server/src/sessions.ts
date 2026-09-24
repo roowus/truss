@@ -205,6 +205,17 @@ export function closeSession(sessionId: string) {
     live.delete(sessionId);
   }
   store.setSessionState(sessionId, "closed");
+  /* any permission card left open can never be answered now — settle them
+     as cancelled so clients don't badge them forever */
+  const frames = store.listEvents(sessionId).map((f) => f.ev);
+  for (const ev of frames) {
+    if (ev.type === "perm.request") {
+      const resolved = frames.some((e) => e.type === "perm.resolve" && e.requestId === ev.requestId);
+      if (!resolved) {
+        sink({ type: "perm.resolve", sessionId, requestId: ev.requestId, choice: "cancelled" });
+      }
+    }
+  }
 }
 
 /** close (if live) + delete the row and its entire event log */

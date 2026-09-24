@@ -481,6 +481,27 @@ function handleRecord(h: PiHandle, rec: PiRecord, emit: (ev: ProtoEvent) => void
       return; // per-run; turn_end already closed the llm.call row
 
     case "agent_settled": {
+      /* user-aborted turns can leave an assistant message open with no
+         content — close it as interrupted so it doesn't stream forever */
+      if (h.aborting && h.currentMessageId) {
+        emit({
+          type: "msg.done",
+          sessionId: sid,
+          messageId: h.currentMessageId,
+          stopReason: "interrupted",
+        });
+        h.currentMessageId = null;
+      }
+      if (h.aborting && h.currentCallId) {
+        emit({
+          type: "llm.call.done",
+          sessionId: sid,
+          callId: h.currentCallId,
+          status: 499,
+          latencyMs: Date.now() - h.currentCallStartedAt,
+        });
+        h.currentCallId = null;
+      }
       h.busy = false;
       h.aborting = false;
       emit({ type: "session.state", sessionId: sid, state: "idle" });
