@@ -1,5 +1,7 @@
 # Truss — UI Design Contract
 
+> **SUPERSEDED (2026-09-24).** The v11 "Nocturne Abyss" direction was the locked design through M1. The shipped UI is a ground-up rebuild ("graphite & signal") by another author with full creative freedom — see `docs/ui-handoff.md` for what holds now (contract vs canvas). This file stays as the record of that iteration.
+
 Reference implementation: `docs/mockups/variant-11-nocturne-abyss.html`. This file is the source of truth; the web app must match it.
 
 ## Theme — Dracula at Night
