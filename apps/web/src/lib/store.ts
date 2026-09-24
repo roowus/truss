@@ -375,6 +375,25 @@ class Store {
     const id = ev.sessionId;
     if (ev.type === "session.created" && !this.state.sessions[id]) this.refreshSessionsSoon();
 
+    /* metadata changes (archive/retitle/regroup) patch the row in place */
+    if (ev.type === "session.updated") {
+      const meta = this.state.sessions[id];
+      if (meta) {
+        this.set((s) => ({
+          sessions: {
+            ...s.sessions,
+            [id]: {
+              ...meta,
+              ...(ev.title !== undefined ? { title: ev.title } : {}),
+              ...(ev.project !== undefined ? { project: ev.project ?? undefined } : {}),
+              ...(ev.archived !== undefined ? { archived: ev.archived ? 1 : 0 } : {}),
+            },
+          },
+        }));
+      }
+      return;
+    }
+
     // Live session.state is authoritative for the session row (replay never is).
     if (ev.type === "session.state") {
       const meta = this.state.sessions[id];
@@ -446,6 +465,29 @@ class Store {
       this.toast("error", "Couldn't close session", e.message);
     }
   }
+    async archiveSession(id: string, archived = true) {
+    const be = this.state.backend;
+    if (!be) return;
+    try {
+      await be.archiveSession(id, archived);
+      this.set((s) => ({ sessions: { ...s.sessions, [id]: { ...s.sessions[id], archived: archived ? 1 : 0 } } }));
+    } catch (e: any) {
+      this.toast("error", archived ? "Couldn't archive the session" : "Couldn't restore the session", e?.message ?? String(e));
+    }
+  }
+
+  async archiveProject(project: string, archived = true) {
+    const be = this.state.backend;
+    if (!be) return;
+    try {
+      const r: any = await be.archiveProject(project, archived);
+      await this.refreshSessions();
+      this.toast("ok", archived ? "Project archived" : "Project restored", `${r?.sessions ?? "?"} session(s)`);
+    } catch (e: any) {
+      this.toast("error", "Couldn't change the project", e?.message ?? String(e));
+    }
+  }
+
   async deleteSession(id: string) {
     try {
       await this.be.deleteSession(id, true);

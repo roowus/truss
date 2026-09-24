@@ -41,6 +41,10 @@ const sessionCols = db.prepare(`PRAGMA table_info(sessions)`).all() as { name: s
 if (!sessionCols.some((c) => c.name === "harness_ref")) {
   db.exec(`ALTER TABLE sessions ADD COLUMN harness_ref TEXT`);
 }
+/* migration: archived hides a session from the sidebar without deleting it */
+if (!sessionCols.some((c) => c.name === "archived")) {
+  db.exec(`ALTER TABLE sessions ADD COLUMN archived INTEGER NOT NULL DEFAULT 0`);
+}
 
 /* server-level key-value store (layout persistence, future settings) */
 db.exec(`
@@ -62,6 +66,7 @@ export interface SessionRow {
   created_at: number;
   updated_at: number;
   harness_ref: string | null;
+  archived: number;
 }
 
 const insertSession = db.prepare(`
@@ -162,6 +167,17 @@ export const store = {
 
   setHarnessRef(id: string, ref: string) {
     updateHarnessRef.run({ id, ref, at: Date.now() });
+  },
+
+  setArchived(id: string, archived: boolean) {
+    db.prepare(`UPDATE sessions SET archived = @a, updated_at = @at WHERE id = @id`).run({
+      id, a: archived ? 1 : 0, at: Date.now(),
+    });
+  },
+
+  /** every session carrying a project tag (for bulk archive) */
+  sessionsInProject(project: string): SessionRow[] {
+    return db.prepare(`SELECT * FROM sessions WHERE project = @p`).all({ p: project }) as SessionRow[];
   },
 
   getKv(key: string): string | undefined {

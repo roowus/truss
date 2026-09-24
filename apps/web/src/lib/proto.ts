@@ -41,6 +41,7 @@ export interface SessionMeta {
   model?: string;
   project?: string;
   state: SessionState;
+  archived?: number;
   created_at: string | number;
   updated_at: string | number;
   live: boolean;
@@ -75,6 +76,7 @@ type At = string | number;
 export type ProtoEvent =
   | (Base & { type: "session.created"; harness: HarnessId; title: string; cwd: string; model?: string; project?: string; at: At })
   | (Base & { type: "session.state"; state: SessionState; detail?: string })
+  | (Base & { type: "session.updated"; title?: string; project?: string | null; archived?: boolean })
   | (Base & { type: "msg.start"; messageId: string; role: "user" | "assistant" | "system"; at: At })
   | (Base & { type: "msg.chunk"; messageId: string; text: string; channel?: string })
   | (Base & { type: "msg.done"; messageId: string; stopReason?: string })

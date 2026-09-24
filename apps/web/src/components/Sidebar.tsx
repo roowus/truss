@@ -21,18 +21,24 @@ export function Sidebar({ onNew }: { onNew: () => void }) {
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const now = useNow(15_000);
 
-  /* group sessions by project tag, or by workspace folder (cwd) */
-  const groups = useMemo(() => {
+  /* group sessions by project tag, or by workspace folder (cwd);
+     archived sessions leave the main list and collect below */
+  const [groups, archived] = useMemo(() => {
     const g = new Map<string, SessionMeta[]>();
+    const arch: SessionMeta[] = [];
     for (const id of order) {
       const s = sessions[id];
       if (!s) continue;
       if (q && !(s.title + " " + s.cwd + " " + (s.project ?? "") + " " + s.harness).toLowerCase().includes(q.toLowerCase())) continue;
+      if (s.archived) {
+        arch.push(s);
+        continue;
+      }
       const k = groupMode === "folder" ? shortPath(s.cwd) || s.cwd : s.project || "";
       if (!g.has(k)) g.set(k, []);
       g.get(k)!.push(s);
     }
-    return [...g.entries()].sort((a, b) => (a[0] === "" ? 1 : b[0] === "" ? -1 : a[0].localeCompare(b[0])));
+    return [[...g.entries()].sort((a, b) => (a[0] === "" ? 1 : b[0] === "" ? -1 : a[0].localeCompare(b[0]))), arch] as const;
   }, [order, sessions, q, groupMode]);
 
   return (
@@ -90,18 +96,45 @@ export function Sidebar({ onNew }: { onNew: () => void }) {
             const running = list.filter((s) => s.state === "running").length;
             const single = groups.length === 1 && !project;
             return (
-              <div key={key} className="mb-1">
+              <div key={key} className="mb-1 group/grp">
                 {!single && (
-                  <button onClick={() => setCollapsed((c) => ({ ...c, [key]: !c[key] }))} className="w-full flex items-center gap-1.5 px-2 h-7 text-[10.5px] font-medium uppercase tracking-[0.08em] text-[var(--t-dim)] hover:text-[var(--t-mute)]">
-                    <Icon name="chev" size={9} className={cn("transition-transform", !isCol && "rotate-90")} />
-                    <span className="truncate">{project || "unfiled"}</span>
-                    {running > 0 && <span className="text-[var(--t-amber)]">{running}</span>}
-                  </button>
+                  <div className="w-full flex items-center gap-1.5 px-2 h-7 text-[10.5px] font-medium uppercase tracking-[0.08em] text-[var(--t-dim)] hover:text-[var(--t-mute)]">
+                    <button className="flex items-center gap-1.5 min-w-0 flex-1 text-left" onClick={() => setCollapsed((c) => ({ ...c, [key]: !c[key] }))}>
+                      <Icon name="chev" size={9} className={cn("transition-transform", !isCol && "rotate-90")} />
+                      <span className="truncate">{project || "unfiled"}</span>
+                      {running > 0 && <span className="text-[var(--t-amber)]">{running}</span>}
+                    </button>
+                    {groupMode === "project" && !!project && (
+                      <button
+                        className="opacity-0 group-hover/grp:opacity-70 hover:!opacity-100 shrink-0"
+                        title={`Archive the whole “${project}” project (${list.length} session${list.length === 1 ? "" : "s"}) — history kept`}
+                        onClick={() => void store.archiveProject(project, true)}
+                      >
+                        <Icon name="archive" size={11} />
+                      </button>
+                    )}
+                  </div>
                 )}
                 {!isCol && list.map((s) => <SessionRow key={s.id} s={s} now={now} />)}
               </div>
             );
           })
+        )}
+
+        {/* archived sessions collect here, collapsed by default */}
+        {archived.length > 0 && (
+          <div className="mt-2">
+            <button
+              className="w-full flex items-center gap-1.5 px-2 h-7 text-[10.5px] font-medium uppercase tracking-[0.08em] text-[var(--t-dim)] hover:text-[var(--t-mute)]"
+              onClick={() => setCollapsed((c) => ({ ...c, __archived: !c.__archived }))}
+            >
+              <Icon name="chev" size={9} className={cn("transition-transform", collapsed.__archived && "rotate-90")} />
+              <Icon name="archive" size={10} />
+              <span>archived</span>
+              <span className="ml-auto tabular-nums">{archived.length}</span>
+            </button>
+            {collapsed.__archived && archived.map((s) => <SessionRow key={s.id} s={s} now={now} archived />)}
+          </div>
         )}
 
         <Section title="shells" action={<IconBtn icon="plus" label="New shell" onClick={() => openFreeShell()} className="w-6 h-6" />}>
@@ -163,7 +196,7 @@ function Section({ title, action, children }: { title: string; action?: ReactNod
   );
 }
 
-function SessionRow({ s, now }: { s: SessionMeta; now: number }) {
+function SessionRow({ s, now, archived }: { s: SessionMeta; now: number; archived?: boolean }) {
   const focused = useApp((st) => st.focused === s.id);
   const pending = useApp((st) => st.views[s.id]?.pending.length ?? 0);
   const [confirm, setConfirm] = useState(false);
@@ -178,11 +211,11 @@ function SessionRow({ s, now }: { s: SessionMeta; now: number }) {
       onClick={() => openSession(s.id)}
       onDoubleClick={() => openDailyDriver(s.id)}
       className={cn("group relative mx-0.5 flex items-center gap-2 px-2 t-session-row rounded-md cursor-pointer transition-colors", focused ? "bg-[var(--t-bg2)]" : "hover:bg-white/[0.03]")}
-      title={`${s.title}\n${s.harness}${s.model ? ` · ${s.model}` : ""}\n${shortPath(s.cwd)}\n${STATE_META[s.state]?.hint ?? s.state}\n(double-click: chat + trajectory + context)`}
+      title={`${s.title}\n${s.harness}${s.model ? ` · ${s.model}` : ""}\n${shortPath(s.cwd)}\n${STATE_META[s.state]?.hint ?? s.state}${archived ? "\narchived — hidden from the main list" : ""}\n(double-click: chat + trajectory + context)`}
     >
       {focused && <span className="absolute left-0 top-2 bottom-2 w-[2px] rounded-full bg-[var(--t-amber)]" />}
       <HarnessMark harness={s.harness} size={17} className={dead ? "opacity-45" : ""} />
-      <span className={cn("flex-1 min-w-0 truncate text-[12.5px]", dead ? "text-[var(--t-mute)]" : "text-[var(--t-fg)]")}>{s.title}</span>
+      <span className={cn("flex-1 min-w-0 truncate text-[12.5px]", dead ? "text-[var(--t-mute)]" : "text-[var(--t-fg)]", archived && "opacity-60")}>{s.title}</span>
       {pending > 0 && (
         <span className="shrink-0 inline-grid place-items-center w-4 h-4 rounded-full bg-[var(--t-amber)] text-[#1b1305] text-[9.5px] font-bold t-pulse-soft" title="Permission waiting">{pending}</span>
       )}
@@ -191,8 +224,15 @@ function SessionRow({ s, now }: { s: SessionMeta; now: number }) {
         <StateDot state={s.state} size={6} />
       </span>
       <span className="hidden group-hover:flex items-center shrink-0" onClick={(e) => e.stopPropagation()}>
-        <IconBtn icon="term" label="Shell in cwd" className="w-6 h-6" onClick={() => openAgentShell(s.id)} />
-        {!dead && <IconBtn icon="power" label="Close (stop process, keep history)" className="w-6 h-6" onClick={() => store.closeSession(s.id)} />}
+        {archived ? (
+          <IconBtn icon="archive" label="Restore to the sidebar" className="w-6 h-6" onClick={() => store.archiveSession(s.id, false)} />
+        ) : (
+          <>
+            <IconBtn icon="term" label="Shell in cwd" className="w-6 h-6" onClick={() => openAgentShell(s.id)} />
+            <IconBtn icon="archive" label="Archive (hide from sidebar; keeps history)" className="w-6 h-6" onClick={() => store.archiveSession(s.id, true)} />
+          </>
+        )}
+        {!dead && !archived && <IconBtn icon="power" label="Close (stop process, keep history)" className="w-6 h-6" onClick={() => store.closeSession(s.id)} />}
         <IconBtn
           icon="trash"
           label={confirm ? "Click again to delete permanently" : "Delete session + history"}

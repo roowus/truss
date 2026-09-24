@@ -46,6 +46,8 @@ export interface Backend {
   interrupt(id: string): Promise<{ ok: boolean }>;
   permission(id: string, requestId: string, choice: string): Promise<{ ok: boolean }>;
   deleteSession(id: string, hard: boolean): Promise<unknown>;
+  archiveSession(id: string, archived: boolean): Promise<unknown>;
+  archiveProject(project: string, archived: boolean): Promise<unknown>;
   listTerminals(): Promise<{ terminals: TerminalInfo[] }>;
   createTerminal(body: { cwd?: string; title?: string }): Promise<{ terminal: TerminalInfo }>;
   deleteTerminal(id: string): Promise<unknown>;
@@ -108,6 +110,10 @@ export function createLiveBackend(): Backend {
       req("POST", `/api/sessions/${encodeURIComponent(id)}/permission`, { requestId, choice }),
     deleteSession: (id, hard) =>
       req("DELETE", `/api/sessions/${encodeURIComponent(id)}${hard ? "?hard=1" : ""}`),
+    archiveSession: (id, archived) =>
+      req("POST", `/api/sessions/${encodeURIComponent(id)}/archive`, { archived }),
+    archiveProject: (project, archived) =>
+      req("POST", `/api/projects/archive`, { project, archived }),
     listTerminals: async () => {
       const r = await req<any>("GET", "/api/terminals");
       return { terminals: r.terminals ?? r ?? [] };

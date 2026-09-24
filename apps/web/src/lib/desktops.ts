@@ -7,6 +7,8 @@ export interface Desktop {
   id: string;
   name: string;
   layout: SerializedDockview | null;
+  /** archived workspaces hide from the strip but keep their layout */
+  archived?: boolean;
 }
 
 export interface HostPreference {
@@ -72,7 +74,7 @@ function parseSaved(raw: string): DesktopState {
   }
   const spaces: Desktop[] = doc.spaces.map((s: any) => {
     if (!s || typeof s.id !== "string" || typeof s.name !== "string") throw new Error("invalid workspace entry");
-    return { id: s.id, name: s.name, layout: s.layout?.grid && s.layout?.panels ? s.layout : null };
+    return { id: s.id, name: s.name, layout: s.layout?.grid && s.layout?.panels ? s.layout : null, archived: s.archived === true };
   });
   const ids = new Set(spaces.map((s) => s.id));
   if (ids.size !== spaces.length) throw new Error("duplicate workspace ids");
@@ -282,6 +284,15 @@ class DesktopManager {
     const trimmed = name.trim().slice(0, 32);
     if (!trimmed) return;
     this.set({ spaces: this.state.spaces.map((s) => (s.id === id ? { ...s, name: trimmed } : s)) });
+    this.queueSave();
+  }
+
+  archive(id: string, archived = true) {
+    const live = this.state.spaces.filter((s) => !s.archived);
+    if (archived && live.length < 2) return; // never archive the last visible workspace
+    let activeId = this.state.activeId;
+    if (archived && id === activeId) activeId = live.find((s) => s.id !== id)?.id ?? live[0]?.id ?? activeId;
+    this.set({ spaces: this.state.spaces.map((s) => (s.id === id ? { ...s, archived } : s)), activeId });
     this.queueSave();
   }
 

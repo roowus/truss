@@ -73,6 +73,18 @@ export function SettingsPanel() {
             <Btn variant="outline" icon="plus" className="ml-auto" onClick={() => desktops.create()}>New workspace</Btn>
           </div>
           <p className="mt-2 text-[11.5px] text-[var(--t-dim)]">Switch in the bar above, or with Alt+1–9. Right-click a tab to copy or move it to another desktop.</p>
+          {spaces.some((sp) => sp.archived) && (
+            <div className="mt-3">
+              <div className="text-[10.5px] font-medium uppercase tracking-[0.08em] text-[var(--t-dim)] mb-1.5">Archived</div>
+              {spaces.filter((sp) => sp.archived).map((sp) => (
+                <div key={sp.id} className="flex items-center gap-2 py-1">
+                  <Icon name="archive" size={11} className="text-[var(--t-dim)]" />
+                  <span className="text-[12px] text-[var(--t-mute)] truncate">{sp.name}</span>
+                  <Btn size="xs" variant="ghost" className="ml-auto" onClick={() => desktops.archive(sp.id, false)}>Restore</Btn>
+                </div>
+              ))}
+            </div>
+          )}
         </section>
 
         <div className="mt-9 pt-4 border-t border-[var(--t-line)] text-[11.5px] text-[var(--t-dim)] leading-relaxed">

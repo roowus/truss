@@ -222,6 +222,24 @@ export function closeSession(sessionId: string) {
   settleOrphanedPerms(sessionId);
 }
 
+/** archive/unarchive — hidden from the sidebar, history kept, still resumable */
+export function setSessionArchived(sessionId: string, archived: boolean) {
+  const row = store.getSession(sessionId);
+  if (!row) throw new Error(`no such session: ${sessionId}`);
+  store.setArchived(sessionId, archived);
+  sink({ type: "session.updated", sessionId, archived });
+}
+
+/** every session under a project tag */
+export function setProjectArchived(project: string, archived: boolean): number {
+  const rows = store.sessionsInProject(project);
+  for (const r of rows) {
+    store.setArchived(r.id, archived);
+    sink({ type: "session.updated", sessionId: r.id, archived });
+  }
+  return rows.length;
+}
+
 /** close (if live) + delete the row and its entire event log */
 export function deleteSession(sessionId: string) {
   closeSession(sessionId);

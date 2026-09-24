@@ -690,6 +690,18 @@ export function createDemoBackend(): Backend {
       await net(40);
       return { layout: localStorage.getItem("truss.demo.layout") };
     },
+    archiveSession: async (id, archived) => {
+      const sess = sessions.get(id);
+      if (sess) (sess.meta as any).archived = archived ? 1 : 0;
+      return { ok: true };
+    },
+    archiveProject: async (project, archived) => {
+      let n = 0;
+      for (const sess of sessions.values()) {
+        if ((sess.meta as any).project === project) { (sess.meta as any).archived = archived ? 1 : 0; n++; }
+      }
+      return { ok: true, sessions: n };
+    },
     costs: async () => ({ sessions: [], totals: { calls: 0, tokensIn: 0, tokensOut: 0, costUsd: 0, hasCost: false } }),
     async putLayout(layout) {
       localStorage.setItem("truss.demo.layout", layout);

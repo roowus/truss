@@ -35,6 +35,14 @@ export interface SessionStateEvent {
   state: SessionState;
   detail?: string;
 }
+/** metadata changed (archive, retitle, regroup) without a lifecycle change */
+export interface SessionUpdated {
+  type: "session.updated";
+  sessionId: string;
+  title?: string;
+  project?: string | null;
+  archived?: boolean;
+}
 
 /* ── message stream ── */
 export interface MsgStart {
@@ -155,6 +163,7 @@ export interface CtxUsage {
 export type ProtoEvent =
   | SessionCreated
   | SessionStateEvent
+  | SessionUpdated
   | MsgStart
   | MsgChunk
   | MsgDone

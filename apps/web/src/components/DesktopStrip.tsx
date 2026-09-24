@@ -47,7 +47,7 @@ export function DesktopStrip() {
         <Icon name="desktop" size={14} />
       </div>
       <div role="tablist" aria-label="Workspaces" className="flex items-center gap-0.5 min-w-0 overflow-x-auto t-scroll-x h-full">
-        {spaces.map((space, index) => (
+        {spaces.filter((sp) => !sp.archived).map((space, index) => (
           <div key={space.id} className={cn("group relative shrink-0 flex items-center h-[30px] rounded-md", space.id === activeId ? "bg-[var(--t-bg2)]" : "hover:bg-white/[0.03]")}>
             {space.id === activeId && <span className="absolute left-2 right-2 -bottom-[5px] h-[2px] bg-[var(--t-amber)] rounded-full" />}
             {editing === space.id ? (
@@ -109,6 +109,7 @@ export function DesktopStrip() {
           <div className="fixed z-[161] w-48 rounded-lg bg-[var(--t-bg2)] border border-[var(--t-line2)] shadow-2xl py-1 t-pop" style={menuPosition(menuRef.current)}>
             <MenuItem icon="edit" onClick={() => beginRename(menu)}>Rename</MenuItem>
             <MenuItem icon="copy" onClick={() => { desktops.duplicate(menu); setMenu(null); }}>Duplicate layout</MenuItem>
+            <MenuItem icon="archive" onClick={() => { desktops.archive(menu, true); setMenu(null); }}>Archive workspace</MenuItem>
             <div className="my-1 border-t border-[var(--t-line)]" />
             <MenuItem icon="trash" dangerous disabled={spaces.length < 2} onClick={() => {
               if (!deleteConfirm) { setDeleteConfirm(true); return; }

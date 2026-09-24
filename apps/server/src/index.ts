@@ -10,6 +10,8 @@ import {
   closeSession,
   createSession,
   deleteSession,
+  setProjectArchived,
+  setSessionArchived,
   interrupt,
   isLive,
   listHarnesses,
@@ -203,6 +205,24 @@ app.post("/api/sessions/:id/permission", async (req, reply) => {
   } catch (err) {
     return reply.code(409).send({ error: String(err) });
   }
+});
+
+app.post("/api/sessions/:id/archive", async (req, reply) => {
+  const { id } = req.params as { id: string };
+  const { archived } = (req.body ?? {}) as { archived?: boolean };
+  try {
+    setSessionArchived(id, archived !== false);
+    return { ok: true };
+  } catch (err) {
+    return reply.code(404).send({ error: String(err) });
+  }
+});
+
+app.post("/api/projects/archive", async (req, reply) => {
+  const { project, archived } = (req.body ?? {}) as { project?: string; archived?: boolean };
+  if (project == null) return reply.code(400).send({ error: "project required" });
+  const n = setProjectArchived(project, archived !== false);
+  return { ok: true, archived: archived !== false, sessions: n };
 });
 
 app.delete("/api/sessions/:id", async (req) => {
