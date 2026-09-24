@@ -63,6 +63,7 @@ export interface AppState {
   harnesses: HarnessInfo[];
   models: ModelInfo[];
   agents: AgentInfo[];
+  agentsError?: string;
   sessions: Record<string, SessionMeta>;
   order: string[];
   sessionsLoaded: boolean;
@@ -253,7 +254,7 @@ class Store {
       backend.harnesses().then((r) => this.set({ harnesses: r.harnesses, models: r.models })).catch((e) =>
         this.toast("error", "Couldn't load harnesses", String(e.message ?? e)),
       ),
-      backend.agents().then((r) => this.set({ agents: r.agents })).catch(() => {}),
+      this.refreshAgents(),
       this.refreshSessions(),
       this.refreshTerminals(),
     ]);
@@ -276,8 +277,28 @@ class Store {
   async resync() {
     await this.refreshSessions();
     await this.refreshTerminals();
+    await this.refreshAgents();
     for (const id of Object.keys(this.state.views)) {
       if (this.state.sessions[id]) void this.rehydrate(id);
+    }
+  }
+
+  async refreshAgents() {
+    try {
+      const { agents } = await this.be.agents();
+      this.set({ agents, agentsError: undefined });
+    } catch (e: any) {
+      this.set({ agentsError: e?.message ?? String(e) });
+      this.toast("error", "Could not load remote hosts", e?.message ?? String(e));
+    }
+  }
+
+  async refreshHarnesses() {
+    try {
+      const { harnesses, models } = await this.be.harnesses();
+      this.set({ harnesses, models });
+    } catch (e: any) {
+      this.toast("error", "Could not load harnesses", e?.message ?? String(e));
     }
   }
 

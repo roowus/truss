@@ -95,7 +95,7 @@ export function createLiveBackend(): Backend {
   return {
     mode: "live",
     harnesses: () => req("GET", "/api/harnesses"),
-    agents: () => req<{ agents: AgentInfo[] }>("GET", "/api/agents").catch(() => ({ agents: [] })),
+    agents: () => req<{ agents: AgentInfo[] }>("GET", "/api/agents"),
     listSessions: () => req("GET", "/api/sessions"),
     createSession: (b) => req("POST", "/api/sessions", b),
     getSession: (id) => req("GET", `/api/sessions/${encodeURIComponent(id)}`),

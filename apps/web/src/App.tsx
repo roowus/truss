@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useState } from "react";
 import { detectBackend } from "@/lib/backend";
 import { store, useApp } from "@/lib/store";
+import { desktops, useDesktops } from "@/lib/desktops";
 import { Sidebar } from "@/components/Sidebar";
 import { Workspace } from "@/components/Workspace";
 import { StatusBar, Toasts, CommandPalette } from "@/components/Chrome";
-import { NewSessionDialog } from "@/components/NewSessionDialog";
+import { NewSessionDialog, type NewSessionPreset } from "@/components/NewSessionDialog";
+import { openPanel } from "@/lib/workspace";
 import { TrussLogo, Spinner } from "@/components/ui";
 import { cn } from "@/utils/cn";
 
@@ -19,6 +21,7 @@ export default function App() {
         const be = await detectBackend();
         if (off) return;
         await store.init(be);
+        await desktops.load(be);
         if (!off) setPhase("ready");
       } catch (e: any) {
         setErr(e?.message ?? String(e));
@@ -51,24 +54,37 @@ export default function App() {
 
 function Shell() {
   const [dialog, setDialog] = useState(false);
+  const [newPreset, setNewPreset] = useState<NewSessionPreset | null>(null);
   const [palette, setPalette] = useState(false);
   const [sidebar, setSidebar] = useState(() => window.innerWidth >= 900);
-  const openNew = useCallback(() => {
+  const density = useDesktops((s) => s.settings.density);
+  const sidebarWidth = density === "compact" ? 246 : 276;
+  const openNew = useCallback((preset?: NewSessionPreset) => {
     setPalette(false);
+    setNewPreset(preset ?? null);
     setDialog(true);
   }, []);
 
   useEffect(() => {
-    const onNewEv = () => setDialog(true);
+    const onNewEv = (e: Event) => openNew((e as CustomEvent<NewSessionPreset>).detail);
     const key = (e: KeyboardEvent) => {
       const t = e.target as HTMLElement;
       const typing = t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.isContentEditable || t.closest(".xterm"));
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
         e.preventDefault();
         setPalette((p) => !p);
+      } else if (!typing && e.altKey && e.shiftKey && e.key.toLowerCase() === "t") {
+        e.preventDefault();
+        window.dispatchEvent(new Event("truss:add-tab"));
+      } else if ((e.metaKey || e.ctrlKey) && e.key === ",") {
+        e.preventDefault();
+        openPanel("settings");
+      } else if (!typing && !e.ctrlKey && !e.metaKey && e.altKey && !e.shiftKey && /^[1-9]$/.test(e.key)) {
+        const space = desktops.state.spaces[Number(e.key) - 1];
+        if (space) { e.preventDefault(); desktops.switchTo(space.id); }
       } else if (!typing && !e.metaKey && !e.ctrlKey && !e.altKey && e.key.toLowerCase() === "n") {
         e.preventDefault();
-        setDialog(true);
+        openNew();
       } else if ((e.metaKey || e.ctrlKey) && e.key === "b") {
         e.preventDefault();
         setSidebar((s) => !s);
@@ -80,7 +96,7 @@ function Shell() {
       window.removeEventListener("truss:new", onNewEv);
       window.removeEventListener("keydown", key);
     };
-  }, []);
+  }, [openNew]);
 
   // Ambient title: pending permissions beat everything, then running agents.
   const pending = useApp((s) => Object.values(s.views).reduce((n, v) => n + v.pending.length, 0));
@@ -90,22 +106,22 @@ function Shell() {
   }, [pending, running]);
 
   return (
-    <div className="h-full flex flex-col bg-[var(--t-bg0)]">
+    <div className="h-full flex flex-col bg-[var(--t-bg0)]" data-density={density}>
       <div className="flex-1 min-h-0 flex relative">
-        <div className={cn("shrink-0 h-full transition-[width] duration-200 overflow-hidden", sidebar ? "w-[276px]" : "w-0", "max-[899px]:absolute max-[899px]:z-30 max-[899px]:shadow-2xl")}>
-          <div className="w-[276px] h-full">
-            <Sidebar onNew={openNew} />
+        <div className={cn("shrink-0 h-full transition-[width] duration-200 overflow-hidden", "max-[899px]:absolute max-[899px]:z-30 max-[899px]:shadow-2xl")} style={{ width: sidebar ? sidebarWidth : 0 }}>
+          <div className="h-full" style={{ width: sidebarWidth }}>
+            <Sidebar onNew={() => openNew()} />
           </div>
         </div>
         {sidebar && <div className="min-[900px]:hidden absolute inset-0 z-20 bg-black/40" onClick={() => setSidebar(false)} />}
-        <main className="flex-1 min-w-0 h-full p-1.5">
+        <main className="flex-1 min-w-0 h-full">
           <Workspace />
         </main>
       </div>
       <StatusBar onToggleSidebar={() => setSidebar((s) => !s)} />
       <Toasts />
-      {dialog && <NewSessionDialog onClose={() => setDialog(false)} />}
-      {palette && <CommandPalette onClose={() => setPalette(false)} onNew={openNew} />}
+      {dialog && <NewSessionDialog preset={newPreset ?? undefined} onClose={() => { setDialog(false); setNewPreset(null); }} />}
+      {palette && <CommandPalette onClose={() => setPalette(false)} onNew={() => openNew()} />}
     </div>
   );
 }

@@ -1,0 +1,110 @@
+import { useEffect, useState } from "react";
+import { desktops, useDesktops, type UiSettings } from "@/lib/desktops";
+import { useApp } from "@/lib/store";
+import { Btn, Icon } from "@/components/ui";
+import { cn } from "@/utils/cn";
+
+export function SettingsPanel() {
+  const settings = useDesktops((s) => s.settings);
+  const saveStatus = useDesktops((s) => s.saveStatus);
+  const spaces = useDesktops((s) => s.spaces);
+  const mode = useApp((s) => s.backend?.mode);
+  const [cwd, setCwd] = useState(settings.defaultCwd);
+  const [error, setError] = useState("");
+
+  useEffect(() => setCwd(settings.defaultCwd), [settings.defaultCwd]);
+  const change = <K extends keyof UiSettings>(key: K, value: UiSettings[K]) => desktops.updateSettings({ [key]: value });
+
+  return (
+    <div className="h-full overflow-y-auto t-scroll bg-[var(--t-bg1)]">
+      <div className="max-w-[580px] mx-auto px-6 py-7">
+        <div className="flex items-start gap-3">
+          <div className="w-9 h-9 rounded-lg border border-[var(--t-line2)] grid place-items-center text-[var(--t-amber)]">
+            <Icon name="settings" size={18} />
+          </div>
+          <div>
+            <h1 className="text-[18px] font-semibold text-[var(--t-fg)] leading-tight">Settings</h1>
+            <p className="mt-1 text-[12px] text-[var(--t-dim)]">Your Truss interface. Changes are saved to /api/layout.</p>
+          </div>
+          <span className={cn("ml-auto text-[11px]", saveStatus === "error" ? "text-[var(--t-red)]" : "text-[var(--t-dim)]")}>
+            {saveStatus === "saving" ? "Saving…" : saveStatus === "error" ? "Save failed" : saveStatus === "saved" ? "Saved" : ""}
+          </span>
+          {saveStatus === "error" && <Btn variant="outline" size="xs" icon="retry" onClick={() => desktops.retrySave()}>Retry</Btn>}
+        </div>
+
+        <section className="mt-9">
+          <SectionTitle>Appearance</SectionTitle>
+          <Row label="Density" description="How much space navigation and tabs use.">
+            <Toggle options={[{ id: "comfortable", name: "Comfortable" }, { id: "compact", name: "Compact" }]} value={settings.density} onChange={(v) => change("density", v as UiSettings["density"])} />
+          </Row>
+          <Row label="Terminal font size" description="Applies to all shell tabs. Code and terminal keep their monospace font.">
+            <select aria-label="Terminal font size" className="t-input !w-[120px]" value={settings.terminalFontSize} onChange={(e) => change("terminalFontSize", Number(e.target.value))}>
+              {[11, 12, 13, 14, 16].map((n) => <option key={n} value={n}>{n} px</option>)}
+            </select>
+          </Row>
+        </section>
+
+        <section className="mt-8">
+          <SectionTitle>Sessions</SectionTitle>
+          <Row label="Open sessions" description="What happens when you click a session in the sidebar.">
+            <Toggle options={[{ id: "chat", name: "Chat" }, { id: "daily", name: "Full view" }]} value={settings.openMode} onChange={(v) => change("openMode", v as UiSettings["openMode"])} />
+          </Row>
+          <div className="py-3 border-b border-[var(--t-line)]">
+            <div className="text-[12.5px] text-[var(--t-fg)]">Default working directory</div>
+            <p className="mt-0.5 mb-2 text-[11.5px] text-[var(--t-dim)]">Prefills new sessions when a host has no specific default.</p>
+            <div className="flex gap-2">
+              <input aria-label="Default working directory" className="t-input font-code flex-1" value={cwd} onChange={(e) => { setCwd(e.target.value); setError(""); }} placeholder="Use most recent session" />
+              <Btn variant="outline" onClick={() => {
+                if (cwd.trim() && !cwd.trim().startsWith("/")) { setError("Use an absolute path."); return; }
+                change("defaultCwd", cwd.trim());
+              }}>Save</Btn>
+            </div>
+            {error && <div role="alert" className="mt-1 text-[11.5px] text-[var(--t-red)]">{error}</div>}
+          </div>
+        </section>
+
+        <section className="mt-8">
+          <SectionTitle>Workspaces</SectionTitle>
+          <p className="text-[12px] text-[var(--t-mute)] leading-relaxed mb-3">
+            Think of workspaces as desktops. Each keeps its own tab groups and layout; the same session can appear in several.
+          </p>
+          <div className="flex items-center gap-2">
+            <span className="text-[12px] text-[var(--t-fg2)]">{spaces.length} workspace{spaces.length === 1 ? "" : "s"}</span>
+            <Btn variant="outline" icon="plus" className="ml-auto" onClick={() => desktops.create()}>New workspace</Btn>
+          </div>
+          <p className="mt-2 text-[11.5px] text-[var(--t-dim)]">Switch in the bar above, or with Alt+1–9. Right-click a tab to copy or move it to another desktop.</p>
+        </section>
+
+        <div className="mt-9 pt-4 border-t border-[var(--t-line)] text-[11.5px] text-[var(--t-dim)] leading-relaxed">
+          {mode === "demo" ? "Demo mode: preferences persist in this browser." : "Preferences and workspace layouts are saved on this Truss server via /api/layout."} Harness and remote node-agent configuration isn't writable through the current API.
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SectionTitle({ children }: { children: React.ReactNode }) {
+  return <h2 className="text-[11px] uppercase tracking-[0.1em] font-medium text-[var(--t-dim)] mb-1">{children}</h2>;
+}
+
+function Row({ label, description, children }: { label: string; description: string; children: React.ReactNode }) {
+  return (
+    <div className="flex flex-wrap items-center gap-x-4 gap-y-2 py-3 border-b border-[var(--t-line)]">
+      <div className="flex-1 min-w-[180px]">
+        <div className="text-[12.5px] text-[var(--t-fg)]">{label}</div>
+        <p className="mt-0.5 text-[11.5px] text-[var(--t-dim)]">{description}</p>
+      </div>
+      {children}
+    </div>
+  );
+}
+
+function Toggle({ options, value, onChange }: { options: { id: string; name: string }[]; value: string; onChange: (v: string) => void }) {
+  return (
+    <div className="inline-flex gap-0.5 rounded-md border border-[var(--t-line2)] p-0.5" role="group">
+      {options.map((o) => (
+        <button key={o.id} onClick={() => onChange(o.id)} aria-pressed={value === o.id} className={cn("h-7 px-2.5 rounded text-[11.5px] transition-colors", value === o.id ? "bg-[var(--t-bg3)] text-[var(--t-fg)]" : "text-[var(--t-dim)] hover:text-[var(--t-fg2)]")}>{o.name}</button>
+      ))}
+    </div>
+  );
+}

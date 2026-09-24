@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import type { IDockviewPanelProps } from "dockview-react";
 import { store, useApp, useNow, capsOf, type Agent, type SessionView } from "@/lib/store";
-import { baseHarness, fmtCost, fmtMs, fmtTokens, shortPath, ago, HARNESS } from "@/lib/format";
+import { baseHarness, fmtCost, fmtMs, fmtTokens, shortPath, ago } from "@/lib/format";
 import { Btn, Empty, HarnessMark, Icon, Kbd, Spinner, StateDot, TrussLogo } from "@/components/ui";
-import { openDailyDriver, openFreeShell, openPanel } from "@/lib/workspace";
+import { openDailyDriver, openFreeShell } from "@/lib/workspace";
 import type { SkillInfo } from "@/lib/proto";
 import { cn } from "@/utils/cn";
 
@@ -314,34 +314,16 @@ export function WelcomePanel() {
             </div>
           </div>
         )}
-        <div className="mt-10 grid sm:grid-cols-2 gap-x-6 gap-y-2">
-          {Object.entries(HARNESS).map(([k, h]) => (
-            <div key={k} className="flex gap-2.5 items-start">
-              <HarnessMark harness={k} size={18} className="mt-0.5" />
-              <div className="min-w-0">
-                <div className="text-[12px] text-[var(--t-fg)]">{h.name}</div>
-                <div className="text-[11px] text-[var(--t-dim)] leading-snug">{h.blurb}</div>
-              </div>
-            </div>
-          ))}
-        </div>
         <div className="mt-10 text-[11px] text-[var(--t-dim)] flex flex-wrap gap-x-4 gap-y-1">
           <span><Kbd>N</Kbd> new session</span>
-          <span><Kbd>⌘</Kbd><Kbd>K</Kbd> jump to session</span>
-          <span><Kbd>Esc</Kbd> interrupt (composer)</span>
-          <span><Kbd>1</Kbd>–<Kbd>9</Kbd> answer permission (empty composer)</span>
-          <span>drag tabs to rearrange · layout persists</span>
+          <span><Kbd>⌘</Kbd><Kbd>K</Kbd> jump anywhere</span>
+          <span>drag tabs to arrange · layout persists</span>
         </div>
         {mode === "demo" && (
-          <div className="mt-8 rounded-lg border border-dashed border-[var(--t-line2)] px-4 py-3 text-[12px] text-[var(--t-mute)] leading-relaxed">
-            <b className="text-[var(--t-fg)]">Demo backend.</b> No Truss server answered <span className="font-mono">/health</span>, so the harnesses are simulated in your browser with the real event contract. Try asking Claude Code to “audit with a team”, telling dsh to “write a file” (permission card → check with <span className="font-mono">ls</span> in a shell), or <span className="font-mono">Simulate restart</span> from the status bar and then prompt a dead session.
+          <div className="mt-8 text-[12px] text-[var(--t-dim)] leading-relaxed max-w-[520px]">
+            No Truss server answered <span className="font-code">/health</span>, so harnesses are simulated in-browser against the real event contract. Try “audit with a team” on Claude Code, “write a file” on dsh (permission card), or the restart button in the status bar.
           </div>
         )}
-        <div className="mt-6 text-[11px] text-[var(--t-dim)]">
-          <button className="underline decoration-dotted" onClick={() => recent[0] && openPanel("trajectory", { sessionId: recent[0].id })}>
-            {recent[0] ? `Open trajectory for “${recent[0].title}”` : ""}
-          </button>
-        </div>
       </div>
     </div>
   );

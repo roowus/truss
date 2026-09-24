@@ -1,22 +1,32 @@
 import { useEffect, useMemo, useState } from "react";
 import { store, useApp } from "@/lib/store";
+import { useDesktops } from "@/lib/desktops";
 import { harnessStyle, hostOf, shortPath } from "@/lib/format";
-import { openPanel } from "@/lib/workspace";
+import { openPanel, openSession } from "@/lib/workspace";
 import { Btn, HarnessMark, Icon, Kbd, Spinner } from "./ui";
 import { cn } from "@/utils/cn";
 
-export function NewSessionDialog({ onClose }: { onClose: () => void }) {
+export interface NewSessionPreset {
+  harness?: string;
+  cwd?: string;
+  project?: string;
+  spaceId?: string;
+  groupId?: string;
+}
+
+export function NewSessionDialog({ onClose, preset }: { onClose: () => void; preset?: NewSessionPreset }) {
   const harnesses = useApp((s) => s.harnesses);
   const models = useApp((s) => s.models);
   const order = useApp((s) => s.order);
   const sessions = useApp((s) => s.sessions);
+  const defaultCwd = useDesktops((s) => s.settings.defaultCwd);
   const recentCwds = useMemo(() => [...new Set(order.map((i) => sessions[i]?.cwd).filter(Boolean))].slice(0, 8), [order, sessions]);
   const projects = useMemo(() => [...new Set(order.map((i) => sessions[i]?.project).filter(Boolean) as string[])], [order, sessions]);
 
-  const [harness, setHarness] = useState<string>(harnesses[0]?.id ?? "");
+  const [harness, setHarness] = useState<string>(preset?.harness ?? harnesses[0]?.id ?? "");
   const [model, setModel] = useState("");
-  const [cwd, setCwd] = useState(recentCwds[0] ?? "");
-  const [project, setProject] = useState(sessions[order[0]]?.project ?? "");
+  const [cwd, setCwd] = useState(preset?.cwd || defaultCwd || recentCwds[0] || "");
+  const [project, setProject] = useState(preset?.project ?? sessions[order[0]]?.project ?? "");
   const [title, setTitle] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -45,7 +55,8 @@ export function NewSessionDialog({ onClose }: { onClose: () => void }) {
         ...(title.trim() ? { title: title.trim() } : {}),
         ...(project.trim() ? { project: project.trim() } : {}),
       });
-      openPanel("chat", { sessionId: s.id });
+      if (preset?.groupId) openPanel("chat", { sessionId: s.id, groupId: preset.groupId, spaceId: preset.spaceId });
+      else openSession(s.id);
       onClose();
     } catch (e: any) {
       setErr(e.message ?? String(e));

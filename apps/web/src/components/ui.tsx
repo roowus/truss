@@ -30,6 +30,12 @@ const paths: Record<string, ReactNode> = {
   host: <><rect x="2" y="3" width="12" height="4" rx=".5" /><rect x="2" y="9" width="12" height="4" rx=".5" /><path d="M4.5 5h.01M4.5 11h.01" /></>,
   brain: <path d="M6 3a2 2 0 0 0-2 2 2 2 0 0 0-1.5 3A2 2 0 0 0 4 11a2 2 0 0 0 2 2h0V3zM10 3a2 2 0 0 1 2 2 2 2 0 0 1 1.5 3A2 2 0 0 1 12 11a2 2 0 0 1-2 2V3z" />,
   restart: <><path d="M3 8a5 5 0 0 1 8.5-3.5L13 6" /><path d="M13 2.5V6H9.5" /><path d="M13 8a5 5 0 0 1-8.5 3.5L3 10" /></>,
+  dots: <g fill="currentColor" stroke="none"><circle cx="3.2" cy="8" r="1.2" /><circle cx="8" cy="8" r="1.2" /><circle cx="12.8" cy="8" r="1.2" /></g>,
+  settings: <><circle cx="8" cy="8" r="2.3" /><path d="M6.6 1.7h2.8l.4 1.5 1.2.7 1.5-.3 1.4 2.4-1.1 1.1v1.4l1.1 1.1-1.4 2.4-1.5-.3-1.2.7-.4 1.5H6.6l-.4-1.5-1.2-.7-1.5.3-1.4-2.4 1.1-1.1V7.1L2.1 6l1.4-2.4 1.5.3 1.2-.7z" /></>,
+  desktop: <><rect x="1.5" y="2" width="10" height="8" rx="1" /><path d="M4 12h10V5.5M6.5 12v2M4 14h6" /></>,
+  copy: <><rect x="5" y="5" width="9" height="9" rx="1" /><path d="M11 5V3a1 1 0 0 0-1-1H3a1 1 0 0 0-1 1v7a1 1 0 0 0 1 1h2" /></>,
+  edit: <><path d="M3 11.5V13h1.5l8-8-1.5-1.5-8 8zM10.5 4l1.5-1.5 1.5 1.5L12 5.5" /></>,
+  arrow: <path d="M2.5 8h10M8.5 4l4 4-4 4" />,
 };
 export function Icon({ name, size = 14, className }: { name: keyof typeof paths | string; size?: number; className?: string }) {
   return (

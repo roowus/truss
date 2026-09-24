@@ -1,12 +1,11 @@
-import type { DockviewApi, AddPanelOptions } from "dockview-react";
+import type { AddPanelOptions } from "dockview-react";
 import { store } from "./store";
+import { desktops } from "./desktops";
 
 /** Bridge between the rest of the app and the Dockview instance (the "dockBus"). */
-export type PanelKind = "chat" | "trajectory" | "terminal" | "context" | "team" | "skills" | "welcome";
+export type PanelKind = "chat" | "trajectory" | "terminal" | "context" | "team" | "skills" | "welcome" | "host" | "settings";
 
-let api: DockviewApi | null = null;
-export const setDockApi = (a: DockviewApi | null) => (api = a);
-export const getDockApi = () => api;
+export const getDockApi = (spaceId?: string) => desktops.getApi(spaceId);
 
 const TITLES: Record<PanelKind, string> = {
   chat: "Chat",
@@ -16,6 +15,8 @@ const TITLES: Record<PanelKind, string> = {
   team: "Team",
   skills: "Skills",
   welcome: "Welcome",
+  host: "Host",
+  settings: "Settings",
 };
 
 export function panelId(kind: PanelKind, key?: string) {
@@ -28,10 +29,24 @@ function titleFor(kind: PanelKind, sessionId?: string, fallback?: string) {
   return s ? `${TITLES[kind]} · ${s.title}` : fallback ?? TITLES[kind];
 }
 
-/** Open or focus a panel. Side panels dock next to the session's chat when it's open. */
-export function openPanel(kind: PanelKind, opts: { sessionId?: string; terminalId?: string; cwd?: string; title?: string } = {}) {
-  if (!api) return;
-  const key = kind === "terminal" ? opts.terminalId : kind === "skills" ? opts.sessionId ?? opts.cwd : opts.sessionId;
+export interface OpenPanelOptions {
+  sessionId?: string;
+  terminalId?: string;
+  hostId?: string;
+  cwd?: string;
+  title?: string;
+  spaceId?: string;
+  groupId?: string;
+}
+
+/** Open in the current desktop. A session can have a tab in *every* desktop. */
+export function openPanel(kind: PanelKind, opts: OpenPanelOptions = {}) {
+  const api = getDockApi(opts.spaceId);
+  if (!api || !desktops.isReady(opts.spaceId)) {
+    store.toast("info", "Workspace is still opening", "Try adding the tab again in a moment.");
+    return;
+  }
+  const key = kind === "terminal" ? opts.terminalId : kind === "host" ? opts.hostId : kind === "skills" ? opts.sessionId ?? opts.cwd : opts.sessionId;
   const id = panelId(kind, key);
   const existing = api.getPanel(id);
   if (existing) {
@@ -39,10 +54,14 @@ export function openPanel(kind: PanelKind, opts: { sessionId?: string; terminalI
     return existing;
   }
   const welcome = api.getPanel("welcome");
-  const params = { sessionId: opts.sessionId, terminalId: opts.terminalId, cwd: opts.cwd };
+  const params = { sessionId: opts.sessionId, terminalId: opts.terminalId, hostId: opts.hostId, cwd: opts.cwd };
   let position: AddPanelOptions["position"] | undefined;
   const chat = opts.sessionId ? api.getPanel(panelId("chat", opts.sessionId)) : undefined;
-  if (kind === "chat") {
+  if (opts.groupId && api.getGroup(opts.groupId)) {
+    position = { referenceGroup: opts.groupId, direction: "within" };
+  } else if (kind === "host" || kind === "settings" || kind === "welcome") {
+    if (api.activePanel) position = { referencePanel: api.activePanel.id, direction: "within" };
+  } else if (kind === "chat") {
     const anyChat = api.panels.find((p) => p.id.startsWith("chat:"));
     if (anyChat) position = { referencePanel: anyChat.id, direction: "within" };
     else if (welcome) position = { referencePanel: "welcome", direction: "within" };
@@ -76,37 +95,62 @@ export function openPanel(kind: PanelKind, opts: { sessionId?: string; terminalI
 }
 
 export function renameSessionPanels(sessionId: string, title: string) {
-  if (!api) return;
-  for (const kind of ["chat", "trajectory", "context", "team", "skills"] as PanelKind[]) {
-    const p = api.getPanel(panelId(kind, sessionId));
-    const want = kind === "chat" ? title : `${TITLES[kind]} · ${title}`;
-    if (p && p.title !== want) p.api.setTitle(want);
+  for (const space of desktops.state.spaces) {
+    const api = getDockApi(space.id);
+    if (!api) continue;
+    for (const kind of ["chat", "trajectory", "context", "team", "skills"] as PanelKind[]) {
+      const p = api.getPanel(panelId(kind, sessionId));
+      const want = kind === "chat" ? title : `${TITLES[kind]} · ${title}`;
+      if (p && p.title !== want) p.api.setTitle(want);
+    }
   }
 }
 
+export function renameHostPanels(hostId: string, title: string) {
+  for (const space of desktops.state.spaces) {
+    const panel = getDockApi(space.id)?.getPanel(`host:${hostId}`);
+    if (panel && panel.title !== title) panel.api.setTitle(title);
+  }
+}
+
+export function openSession(sessionId: string) {
+  if (desktops.state.settings.openMode === "daily") return openDailyDriver(sessionId);
+  openPanel("chat", { sessionId });
+}
+
 /** The daily driver: chat | trajectory over context, shell below. */
-export async function openDailyDriver(sessionId: string) {
+export function openDailyDriver(sessionId: string) {
   openPanel("chat", { sessionId });
   openPanel("trajectory", { sessionId });
   openPanel("context", { sessionId });
 }
 
-export async function openAgentShell(sessionId: string) {
+export async function openAgentShell(sessionId: string, opts: { spaceId?: string; groupId?: string } = {}) {
   const s = store.state.sessions[sessionId];
   if (!s) return;
+  const spaceId = opts.spaceId ?? desktops.state.activeId;
+  let terminalId: string | undefined;
   try {
     const t = await store.createTerminal({ cwd: s.cwd, title: `shell · ${s.title}` });
-    openPanel("terminal", { terminalId: t.id, sessionId, title: t.title ?? `shell · ${s.title}` });
+    terminalId = t.id;
+    const panel = openPanel("terminal", { terminalId: t.id, sessionId, title: t.title ?? `shell · ${s.title}`, spaceId, groupId: opts.groupId });
+    if (!panel) await store.deleteTerminal(t.id);
   } catch (e: any) {
+    if (terminalId) await store.deleteTerminal(terminalId);
     store.toast("error", "Couldn't start agent shell", e.message);
   }
 }
 
-export async function openFreeShell(cwd?: string) {
+export async function openFreeShell(cwd?: string, opts: { spaceId?: string; groupId?: string } = {}) {
+  const spaceId = opts.spaceId ?? desktops.state.activeId;
+  let terminalId: string | undefined;
   try {
     const t = await store.createTerminal({ cwd, title: "shell" });
-    openPanel("terminal", { terminalId: t.id, title: t.title ?? "shell" });
+    terminalId = t.id;
+    const panel = openPanel("terminal", { terminalId: t.id, title: t.title ?? "shell", spaceId, groupId: opts.groupId });
+    if (!panel) await store.deleteTerminal(t.id);
   } catch (e: any) {
+    if (terminalId) await store.deleteTerminal(terminalId);
     store.toast("error", "Couldn't start shell", e.message);
   }
 }

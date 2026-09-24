@@ -3,7 +3,7 @@ import type { IDockviewPanelProps } from "dockview-react";
 import { store, useApp, useNow, capsOf, type Msg, type ToolRun, type Perm, type SessionView } from "@/lib/store";
 import { argSummary, fmtMs, harnessStyle, shortPath, baseHarness } from "@/lib/format";
 import { openPanel, openAgentShell, renameSessionPanels } from "@/lib/workspace";
-import { Btn, Empty, HarnessMark, Icon, IconBtn, Kbd, Spinner, StatePill } from "@/components/ui";
+import { Btn, Empty, HarnessMark, Icon, IconBtn, Spinner, StateDot, STATE_META } from "@/components/ui";
 import { Markdown } from "./Markdown";
 import { cn } from "@/utils/cn";
 
@@ -35,12 +35,12 @@ export function ChatPanel({ params }: IDockviewPanelProps<P>) {
       <ChatHeader id={id} />
       {!view || view.hydration === "loading" ? (
         <div className="flex-1 grid place-items-center text-[12px] text-[var(--t-mute)]">
-          <span className="inline-flex items-center gap-2"><Spinner /> hydrating history…</span>
+          <span className="inline-flex items-center gap-2"><Spinner /> loading history…</span>
         </div>
       ) : view.hydration === "error" ? (
         <div className="flex-1">
           <Empty icon="alert" title="Couldn't load this session's history">
-            <span className="font-mono text-[11px] text-[var(--t-red)] break-all">{view.hydrationError}</span>
+            <span className="font-code text-[11px] text-[var(--t-red)] break-all">{view.hydrationError}</span>
             <div className="mt-3"><Btn variant="outline" icon="retry" onClick={() => store.ensureHydrated(id)}>Retry</Btn></div>
           </Empty>
         </div>
@@ -61,35 +61,49 @@ function ChatHeader({ id }: { id: string }) {
   const caps = useApp((s) => capsOf(s, meta.harness));
   const busy = meta.state === "running";
   const now = useNow(1000, busy || meta.state === "spawning");
-  const h = harnessStyle(meta.harness);
+  const abnormal = meta.state === "spawning" || meta.state === "error" || meta.state === "closed";
+  const [menu, setMenu] = useState(false);
+  const tooltip = [meta.harness, meta.model, shortPath(meta.cwd), meta.project && `project: ${meta.project}`, detail]
+    .filter(Boolean)
+    .join("\n");
   return (
-    <div className="shrink-0 flex items-center gap-2.5 px-3 h-11 border-b border-[var(--t-line)]">
-      <HarnessMark harness={meta.harness} size={22} />
-      <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-2 min-w-0">
-          <span className="truncate text-[13px] font-medium text-[var(--t-fg)]">{meta.title}</span>
-          <StatePill state={meta.state} detail={detail} />
-          {(busy || meta.state === "spawning") && since && <span className="font-mono text-[10.5px] text-[var(--t-amber)] tabular-nums">{fmtMs(now - since)}</span>}
-        </div>
-        <div className="flex items-center gap-1.5 text-[11px] text-[var(--t-dim)] font-mono truncate">
-          <span style={{ color: h.color }}>{meta.harness}</span>
-          {meta.model && <><span>·</span><span className="truncate">{meta.model}</span></>}
-          <span>·</span>
-          <span className="truncate" title={meta.cwd}>{shortPath(meta.cwd)}</span>
-        </div>
-      </div>
-      <div className="flex items-center gap-0.5">
-        <IconBtn icon="wave" label="Trajectory" onClick={() => openPanel("trajectory", { sessionId: id })} />
-        <IconBtn icon="gauge" label="Context usage" onClick={() => openPanel("context", { sessionId: id })} />
-        {caps?.subagents && <IconBtn icon="tree" label="Subagent team" onClick={() => openPanel("team", { sessionId: id })} />}
-        <IconBtn icon="spark" label="Skills" onClick={() => openPanel("skills", { sessionId: id, cwd: meta.cwd })} />
-        <IconBtn icon="term" label="Shell in this session's cwd" onClick={() => openAgentShell(id)} />
+    <div className="relative shrink-0 flex items-center gap-2 px-3 h-10 border-b border-[var(--t-line)]">
+      <HarnessMark harness={meta.harness} size={18} />
+      <span className="min-w-0 truncate text-[13px] font-medium text-[var(--t-fg)]" title={tooltip}>{meta.title}</span>
+      <span className="flex items-center gap-1.5 shrink-0" title={STATE_META[meta.state]?.hint}>
+        <StateDot state={meta.state} size={6} />
+        {abnormal && <span className="text-[11px] text-[var(--t-mute)]">{STATE_META[meta.state].label}</span>}
+        {(busy || meta.state === "spawning") && since && <span className="text-[11px] text-[var(--t-amber)] tabular-nums">{fmtMs(now - since)}</span>}
+      </span>
+      <div className="ml-auto flex items-center gap-0.5">
         {busy && (
-          <Btn variant="danger" size="xs" icon="stop" className="ml-1" onClick={() => store.interrupt(id)} title="Interrupt (Esc in composer)">
-            Stop
-          </Btn>
+          <Btn variant="danger" size="xs" icon="stop" onClick={() => store.interrupt(id)} title="Interrupt (Esc in composer)">Stop</Btn>
         )}
+        <IconBtn icon="wave" label="Trajectory" onClick={() => openPanel("trajectory", { sessionId: id })} />
+        <IconBtn icon="dots" label="More panels" active={menu} onClick={() => setMenu((m) => !m)} />
       </div>
+      {menu && (
+        <>
+          <div className="fixed inset-0 z-40" onClick={() => setMenu(false)} />
+          <div className="absolute right-2 top-[42px] z-50 w-52 rounded-lg bg-[var(--t-bg2)] border border-[var(--t-line2)] shadow-2xl py-1 t-pop">
+            {[
+              { icon: "gauge", label: "Context usage", run: () => openPanel("context", { sessionId: id }) },
+              ...(caps?.subagents ? [{ icon: "tree", label: "Subagent team", run: () => openPanel("team", { sessionId: id }) }] : []),
+              { icon: "spark", label: "Skills", run: () => openPanel("skills", { sessionId: id, cwd: meta.cwd }) },
+              { icon: "term", label: "Shell in this cwd", run: () => openAgentShell(id) },
+            ].map((it) => (
+              <button key={it.label} onClick={() => { setMenu(false); it.run(); }} className="w-full flex items-center gap-2.5 px-3 h-8 text-left text-[12.5px] text-[var(--t-fg2)] hover:bg-white/[0.05]">
+                <Icon name={it.icon} size={13} className="text-[var(--t-mute)]" />
+                {it.label}
+              </button>
+            ))}
+            <div className="my-1 border-t border-[var(--t-line)]" />
+            <div className="px-3 py-1.5 text-[11px] text-[var(--t-dim)] leading-relaxed break-all">
+              {meta.harness}{meta.model && ` · ${meta.model}`}<br />{shortPath(meta.cwd)}
+            </div>
+          </div>
+        </>
+      )}
     </div>
   );
 }
@@ -124,7 +138,7 @@ function Timeline({ id, view }: { id: string; view: SessionView }) {
         {view.items.length === 0 ? (
           <EmptyChat id={id} />
         ) : (
-          <div className="max-w-[860px] mx-auto px-4 py-4 space-y-3">
+          <div className="max-w-[760px] mx-auto px-4 py-5 space-y-4">
             {view.items.map((it) =>
               it.kind === "msg" ? (
                 <MessageView key={it.id} m={view.msgs[it.id]} harness={meta.harness} live={it.id === lastMsgId && meta.state === "running"} />
@@ -156,21 +170,16 @@ function Timeline({ id, view }: { id: string; view: SessionView }) {
 function EmptyChat({ id }: { id: string }) {
   const meta = useApp((s) => s.sessions[id]);
   const h = harnessStyle(meta.harness);
-  const ideas = ["Summarize this repository's layout", "Find where the event bus is wired and explain it", "Create a file named truss-check.txt", "The codeword is marmalade"];
+  const ideas = ["Summarize this repository's layout", "Create a file named truss-check.txt", "The codeword is marmalade"];
   if (baseHarness(meta.harness) === "claude-code") ideas.splice(1, 0, "Audit the server with a team of agents");
   return (
     <div className="h-full grid place-items-center p-6">
-      <div className="max-w-[420px] w-full">
-        <div className="flex items-center gap-3 mb-3">
-          <HarnessMark harness={meta.harness} size={32} />
-          <div>
-            <div className="text-[14px] text-[var(--t-fg)] font-medium">{h.name}</div>
-            <div className="text-[11.5px] text-[var(--t-mute)]">{h.blurb}</div>
-          </div>
-        </div>
-        <div className="grid gap-1.5">
+      <div className="max-w-[380px] w-full text-center">
+        <HarnessMark harness={meta.harness} size={30} className="mx-auto" />
+        <div className="mt-2 text-[13px] text-[var(--t-fg)]">{h.name}</div>
+        <div className="mt-4 grid gap-1.5">
           {ideas.map((t) => (
-            <button key={t} onClick={() => window.dispatchEvent(new CustomEvent("truss:draft", { detail: { id, text: t } }))} className="text-left px-3 py-2 rounded-md border border-[var(--t-line)] hover:border-[var(--t-line2)] hover:bg-white/[0.02] text-[12.5px] text-[var(--t-mute)] hover:text-[var(--t-fg)]">
+            <button key={t} onClick={() => window.dispatchEvent(new CustomEvent("truss:draft", { detail: { id, text: t } }))} className="px-3 py-1.5 rounded-md text-[12.5px] text-[var(--t-mute)] hover:text-[var(--t-fg)] hover:bg-white/[0.03]">
               {t}
             </button>
           ))}
@@ -180,30 +189,32 @@ function EmptyChat({ id }: { id: string }) {
   );
 }
 
-/* ---------------- messages ---------------- */
+/* ---------------- messages (texting layout: role above content) ---------------- */
 const MessageView = memo(function MessageView({ m, harness, live }: { m: Msg; harness: string; live: boolean }) {
   const h = harnessStyle(harness);
   if (m.role === "user") {
     const text = m.segments.map((s) => s.text).join("");
     return (
-      <div className="flex gap-3 t-in">
-        <div className="w-14 shrink-0 pt-2 text-right font-mono text-[10.5px] uppercase tracking-wider text-[var(--t-dim)]">you</div>
-        <div className="flex-1 min-w-0 rounded-lg bg-[var(--t-bg2)] border border-[var(--t-line)] px-3.5 py-2.5 text-[13.5px] text-[var(--t-fg)] whitespace-pre-wrap break-words">{text}</div>
+      <div className="t-in flex flex-col items-end">
+        <div className="mb-1 mr-1 text-[10px] font-medium uppercase tracking-[0.08em] text-[var(--t-dim)]">you</div>
+        <div className="max-w-[85%] rounded-xl rounded-br-[4px] bg-[var(--t-bg3)] px-3.5 py-2 text-[13.5px] leading-relaxed text-[var(--t-fg)] whitespace-pre-wrap break-words">{text}</div>
       </div>
     );
   }
   if (m.role === "system") {
-    return <div className="text-center text-[11.5px] font-mono text-[var(--t-dim)] py-1">{m.segments.map((s) => s.text).join("")}</div>;
+    return <div className="text-center text-[11.5px] text-[var(--t-dim)] py-1">{m.segments.map((s) => s.text).join("")}</div>;
   }
   const streaming = !m.done && live;
   const err = m.stopReason?.startsWith("error");
   const lastIdx = m.segments.length - 1;
+  const name = baseHarness(harness) === "claude-code" ? "claude" : baseHarness(harness);
   return (
-    <div className="flex gap-3 t-in">
-      <div className="w-14 shrink-0 pt-1 flex justify-end">
-        <span className="font-mono text-[10.5px] uppercase tracking-wider pt-1" style={{ color: h.color }}>{h.glyph} {baseHarness(harness) === "claude-code" ? "claude" : baseHarness(harness)}</span>
+    <div className="t-in">
+      <div className="mb-1 ml-0.5 flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-[0.08em]" style={{ color: h.color }}>
+        <span>{h.glyph}</span>
+        <span>{name}</span>
       </div>
-      <div className="flex-1 min-w-0 space-y-2">
+      <div className="space-y-2">
         {m.segments.length === 0 && streaming && <div className="h-6 flex items-center"><span className="t-caret" /></div>}
         {m.segments.map((seg, i) =>
           seg.channel === "thinking" ? (
@@ -216,9 +227,9 @@ const MessageView = memo(function MessageView({ m, harness, live }: { m: Msg; ha
           ),
         )}
         {(err || m.stopReason === "interrupted") && (
-          <div className={cn("inline-flex items-center gap-1.5 text-[11px] font-mono px-2 py-0.5 rounded", err ? "text-[var(--t-red)] bg-[color-mix(in_oklab,var(--t-red)_10%,transparent)]" : "text-[var(--t-amber)] bg-[color-mix(in_oklab,var(--t-amber)_10%,transparent)]")}>
+          <div className={cn("inline-flex items-center gap-1.5 text-[11px] px-2 py-0.5 rounded", err ? "text-[var(--t-red)] bg-[color-mix(in_oklab,var(--t-red)_10%,transparent)]" : "text-[var(--t-amber)] bg-[color-mix(in_oklab,var(--t-amber)_10%,transparent)]")}>
             <Icon name={err ? "alert" : "stop"} size={11} />
-            {err ? m.stopReason : "interrupted by user"}
+            {err ? m.stopReason : "interrupted"}
           </div>
         )}
       </div>
@@ -229,14 +240,11 @@ const MessageView = memo(function MessageView({ m, harness, live }: { m: Msg; ha
 function Thinking({ text, active }: { text: string; active: boolean }) {
   const [open, setOpen] = useState<boolean | null>(null);
   const isOpen = open ?? active;
-  const words = text.trim().split(/\s+/).length;
   return (
     <div className="t-think">
-      <button onClick={() => setOpen(!isOpen)} className="flex items-center gap-1.5 text-[11px] font-mono uppercase tracking-wider text-[var(--t-violet)] hover:brightness-125">
-        <Icon name="chev" size={11} className={cn("transition-transform", isOpen && "rotate-90")} />
-        <Icon name="brain" size={12} />
+      <button onClick={() => setOpen(!isOpen)} className="flex items-center gap-1.5 text-[10.5px] font-medium uppercase tracking-[0.08em] text-[var(--t-violet)] hover:brightness-125">
+        <Icon name="chev" size={10} className={cn("transition-transform", isOpen && "rotate-90")} />
         {active ? <span className="t-shimmer">reasoning</span> : "reasoning"}
-        <span className="normal-case tracking-normal text-[var(--t-dim)]">· {words} words</span>
       </button>
       {isOpen ? (
         <div className="mt-1.5 text-[12.5px] leading-[1.6] italic text-[var(--t-think)] whitespace-pre-wrap">
@@ -250,7 +258,7 @@ function Thinking({ text, active }: { text: string; active: boolean }) {
   );
 }
 
-/* ---------------- tools ---------------- */
+/* ---------------- tools: quiet single lines, expandable ---------------- */
 const ToolRow = memo(function ToolRow({ t, callIndex, sessionId }: { t: ToolRun; callIndex?: number; sessionId: string }) {
   const [open, setOpen] = useState(false);
   const running = t.status === "running";
@@ -258,44 +266,39 @@ const ToolRow = memo(function ToolRow({ t, callIndex, sessionId }: { t: ToolRun;
   const dur = running ? now - t.startedAt : t.durationMs;
   const color = running ? "var(--t-amber)" : t.status === "ok" ? "var(--t-teal)" : "var(--t-red)";
   return (
-    <div className="flex gap-3 t-in">
-      <div className="w-14 shrink-0" />
-      <div className={cn("flex-1 min-w-0 rounded-md border bg-[var(--t-bg0)]/60 overflow-hidden", running ? "border-[color-mix(in_oklab,var(--t-amber)_35%,var(--t-line))]" : "border-[var(--t-line)]")}>
-        <button onClick={() => setOpen(!open)} className="w-full flex items-center gap-2 px-2.5 h-8 text-left hover:bg-white/[0.02]">
-          {running ? <Spinner size={12} /> : <Icon name={t.status === "ok" ? "check" : "x"} size={12} className="" />}
-          <span className="font-mono text-[12px] font-medium" style={{ color }}>{t.name}</span>
-          <span className="flex-1 min-w-0 truncate font-mono text-[11.5px] text-[var(--t-mute)]">{argSummary(t.args)}</span>
-          {callIndex !== undefined && (
-            <span
-              role="link"
-              onClick={(e) => {
-                e.stopPropagation();
-                openPanel("trajectory", { sessionId });
-              }}
-              className="font-mono text-[10px] text-[var(--t-dim)] hover:text-[var(--t-sky)] px-1 rounded border border-[var(--t-line)]"
-              title="LLM call that issued this tool — open trajectory"
-            >
-              call #{callIndex}
-            </span>
-          )}
-          <span className="font-mono text-[11px] tabular-nums w-14 text-right" style={{ color: running ? color : "var(--t-dim)" }}>{fmtMs(dur)}</span>
-          <Icon name="chev" size={11} className={cn("text-[var(--t-dim)] transition-transform", open && "rotate-90")} />
-        </button>
-        {(open || (running && t.output)) && (
-          <div className="border-t border-[var(--t-line)] text-[11.5px] font-mono">
-            {open && (
-              <div className="px-2.5 py-2 border-b border-[var(--t-line)]">
-                <div className="text-[10px] uppercase tracking-wider text-[var(--t-dim)] mb-1">args</div>
-                <pre className="whitespace-pre-wrap break-all text-[var(--t-fg2)]">{JSON.stringify(t.args, null, 2)}</pre>
+    <div className="t-in -my-2">
+      <button onClick={() => setOpen(!open)} className="group w-full flex items-center gap-2 h-7 px-1.5 rounded-md text-left hover:bg-white/[0.03]">
+        {running ? <Spinner size={11} /> : <Icon name={t.status === "ok" ? "check" : "x"} size={11} className={t.status === "ok" ? "text-[var(--t-dim)]" : "text-[var(--t-red)]"} />}
+        <span className="text-[12px] font-code shrink-0" style={{ color: running || t.status === "fail" ? color : "var(--t-mute)" }}>{t.name}</span>
+        <span className="min-w-0 truncate text-[11.5px] font-code text-[var(--t-dim)]">{argSummary(t.args)}</span>
+        <span className="ml-auto shrink-0 text-[10.5px] tabular-nums" style={{ color: running ? color : "var(--t-dim)" }}>{fmtMs(dur)}</span>
+        <Icon name="chev" size={10} className={cn("shrink-0 text-[var(--t-dim)] opacity-0 group-hover:opacity-100 transition-transform", open && "rotate-90 opacity-100")} />
+      </button>
+      {(open || (running && t.output)) && (
+        <div className="mt-1 mb-2 ml-5 rounded-md border border-[var(--t-line)] bg-[var(--t-bg0)]/60 text-[11.5px] font-code overflow-hidden">
+          {open && (
+            <div className="px-2.5 py-2 border-b border-[var(--t-line)]">
+              <div className="flex items-center text-[10px] uppercase tracking-wider text-[var(--t-dim)] mb-1 font-sans">
+                args
+                {callIndex !== undefined && (
+                  <button
+                    onClick={() => openPanel("trajectory", { sessionId })}
+                    className="ml-auto normal-case tracking-normal hover:text-[var(--t-sky)]"
+                    title="LLM call that issued this tool — open trajectory"
+                  >
+                    from call #{callIndex} →
+                  </button>
+                )}
               </div>
-            )}
-            <div className="px-2.5 py-2">
-              <div className="text-[10px] uppercase tracking-wider text-[var(--t-dim)] mb-1">output{running && " · streaming"}</div>
-              <pre className={cn("whitespace-pre-wrap break-all max-h-56 overflow-auto t-scroll", t.status === "fail" ? "text-[var(--t-red)]" : "text-[var(--t-mute)]")}>{t.output ?? (running ? "…" : "(no output)")}</pre>
+              <pre className="whitespace-pre-wrap break-all text-[var(--t-fg2)]">{JSON.stringify(t.args, null, 2)}</pre>
             </div>
+          )}
+          <div className="px-2.5 py-2">
+            <div className="text-[10px] uppercase tracking-wider text-[var(--t-dim)] mb-1 font-sans">output{running && " · streaming"}</div>
+            <pre className={cn("whitespace-pre-wrap break-all max-h-56 overflow-auto t-scroll", t.status === "fail" ? "text-[var(--t-red)]" : "text-[var(--t-mute)]")}>{t.output ?? (running ? "…" : "(no output)")}</pre>
           </div>
-        )}
-      </div>
+        </div>
+      )}
     </div>
   );
 });
@@ -304,16 +307,9 @@ function PermInline({ p }: { p: Perm }) {
   const pending = p.choice === undefined;
   const denied = p.choice && /deny|reject|cancel/i.test(p.choice);
   return (
-    <div className="flex gap-3">
-      <div className="w-14 shrink-0" />
-      <div className={cn("flex-1 flex items-center gap-2 text-[11.5px] font-mono px-2.5 h-7 rounded-md", pending ? "text-[var(--t-amber)] bg-[color-mix(in_oklab,var(--t-amber)_8%,transparent)] t-pulse-soft" : denied ? "text-[var(--t-red)]" : "text-[var(--t-teal)]")}>
-        <Icon name="lock" size={12} />
-        {pending ? (
-          <>permission · <b>{p.tool}</b> — turn blocked, answer below ↓</>
-        ) : (
-          <>permission · <b>{p.tool}</b> — answered “{p.choice}”</>
-        )}
-      </div>
+    <div className={cn("-my-2 flex items-center gap-2 text-[11.5px] px-1.5 h-7", pending ? "text-[var(--t-amber)]" : denied ? "text-[var(--t-red)]" : "text-[var(--t-dim)]")}>
+      <Icon name="lock" size={11} />
+      {pending ? <>permission · <b>{p.tool}</b> — waiting, answer below</> : <>permission · {p.tool} — “{p.choice}”</>}
     </div>
   );
 }
@@ -330,14 +326,13 @@ function PermDock({ id, view }: { id: string; view: SessionView }) {
         return (
           <div key={rid} className="t-perm rounded-lg p-3">
             <div className="flex items-start gap-3">
-              <div className="w-8 h-8 shrink-0 rounded-md grid place-items-center bg-[var(--t-amber)] text-[#1b1305]"><Icon name="lock" size={16} /></div>
+              <div className="w-7 h-7 shrink-0 rounded-md grid place-items-center bg-[var(--t-amber)] text-[#1b1305]"><Icon name="lock" size={14} /></div>
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2">
                   <span className="text-[12.5px] font-semibold text-[var(--t-fg)]">Permission required</span>
-                  <span className="font-mono text-[11px] px-1.5 rounded bg-black/30 text-[var(--t-amber)]">{p.tool}</span>
-                  <span className="text-[11px] text-[var(--t-mute)]">· the turn is paused until you answer</span>
+                  <span className="font-code text-[11px] px-1.5 rounded bg-black/30 text-[var(--t-amber)]">{p.tool}</span>
                 </div>
-                <div className="mt-1 font-mono text-[12px] text-[var(--t-fg2)] break-all">{p.reason}</div>
+                <div className="mt-1 font-code text-[12px] text-[var(--t-fg2)] break-all">{p.reason}</div>
                 <div className="mt-2.5 flex flex-wrap gap-1.5">
                   {p.options.map((o, i) => {
                     const deny = /deny|reject|no/i.test(o);
@@ -354,7 +349,7 @@ function PermDock({ id, view }: { id: string; view: SessionView }) {
                         }}
                       >
                         {o}
-                        {i < 9 && <span className="opacity-50 font-mono text-[10px]">{i + 1}</span>}
+                        {i < 9 && <span className="opacity-50 text-[10px]">{i + 1}</span>}
                       </Btn>
                     );
                   })}
@@ -401,9 +396,7 @@ function Composer({ id }: { id: string }) {
     el.style.height = Math.min(220, el.scrollHeight) + "px";
   }, [text]);
 
-  // Number keys answer the first pending permission when composer is empty
   const hasPending = !!pending?.length;
-
   const running = meta.state === "running";
   const dead = meta.state === "closed" || meta.state === "error";
   const spawning = meta.state === "spawning";
@@ -415,9 +408,8 @@ function Composer({ id }: { id: string }) {
     if (!canSend) return;
     setSending(true);
     setErr(null);
-    const t = text;
     try {
-      await store.prompt(id, t);
+      await store.prompt(id, text);
       setText("");
     } catch (e: any) {
       if (e.status === 409 && dead) setErr(`This session can't be resumed — the harness has no stored reference for it. Start a new session in ${shortPath(meta.cwd)}.`);
@@ -431,19 +423,18 @@ function Composer({ id }: { id: string }) {
   let tone: "amber" | "dim" | "red" = "dim";
   if (dead) {
     tone = meta.state === "error" ? "red" : "dim";
-    hint = <><Icon name="power" size={12} /> Process not running. Sending will <b className="text-[var(--t-fg)]">resume {meta.harness}</b> with its stored history.</>;
+    hint = <><Icon name="power" size={12} /> Not running — sending resumes {meta.harness} with its history.</>;
   } else if (spawning) {
     tone = "amber";
-    hint = <><Spinner size={11} /> Booting {meta.harness}… {since ? fmtMs(now - since) : ""}{baseHarness(meta.harness) === "dsh" && " — dsh's plugin stack usually takes 5–10s"}. Your draft is held.</>;
+    hint = <><Spinner size={11} /> Booting {meta.harness}… {since ? fmtMs(now - since) : ""}{baseHarness(meta.harness) === "dsh" && " (dsh takes 5–10s)"}</>;
   } else if (running && hasPending) {
     tone = "amber";
     hint = <><Icon name="lock" size={12} /> Waiting on your permission decision above.</>;
   } else if (running && queues) {
-    tone = "dim";
-    hint = <><Icon name="bolt" size={12} /> {meta.harness} accepts input mid-run — your message queues after the current step.</>;
+    hint = <><Icon name="bolt" size={12} /> Messages queue after the current step.</>;
   } else if (running) {
     tone = "amber";
-    hint = <><Icon name="lock" size={12} /> {meta.harness} doesn't accept input mid-run. Draft is held — send when the turn ends, or <button className="underline" onClick={() => store.interrupt(id)}>interrupt</button>.</>;
+    hint = <><Icon name="lock" size={12} /> {meta.harness} can't take input mid-run — draft is held, or <button className="underline" onClick={() => store.interrupt(id)}>interrupt</button>.</>;
   }
 
   return (
@@ -455,7 +446,7 @@ function Composer({ id }: { id: string }) {
           <button onClick={() => setErr(null)} className="opacity-60 hover:opacity-100"><Icon name="x" size={12} /></button>
         </div>
       )}
-      <div className={cn("rounded-lg border bg-[var(--t-bg0)] transition-colors focus-within:border-[var(--t-mute)]", dead ? "border-dashed border-[var(--t-line2)]" : "border-[var(--t-line2)]")}>
+      <div className={cn("flex items-end gap-1.5 rounded-xl border bg-[var(--t-bg0)] transition-colors focus-within:border-[var(--t-mute)] px-2 py-1.5", dead ? "border-dashed border-[var(--t-line2)]" : "border-[var(--t-line2)]")}>
         <textarea
           ref={ta}
           value={text}
@@ -478,29 +469,22 @@ function Composer({ id }: { id: string }) {
             }
           }}
           rows={1}
-          placeholder={dead ? `Message to resume ${meta.harness}…` : `Message ${meta.harness}…`}
-          className="block w-full resize-none bg-transparent px-3 pt-2.5 pb-1 text-[13.5px] text-[var(--t-fg)] placeholder:text-[var(--t-dim)] outline-none"
+          placeholder={dead ? `Message to resume ${meta.harness}…` : "Message…"}
+          className="flex-1 min-w-0 resize-none bg-transparent px-1.5 py-1 text-[13.5px] text-[var(--t-fg)] placeholder:text-[var(--t-dim)] outline-none"
         />
-        <div className="flex items-center gap-2 px-2 pb-2">
-          <div className={cn("flex-1 min-w-0 flex items-center gap-1.5 text-[11.5px] leading-tight", tone === "amber" ? "text-[var(--t-amber)]" : tone === "red" ? "text-[var(--t-red)]" : "text-[var(--t-mute)]")}>
-            {hint ?? (
-              <span className="text-[var(--t-dim)] inline-flex items-center gap-1.5">
-                <Kbd>↵</Kbd> send <Kbd>⇧↵</Kbd> newline
-              </span>
-            )}
-          </div>
-          {running && (
-            <Btn size="sm" variant="danger" icon="stop" onClick={() => store.interrupt(id)} title="Interrupt (Esc)">
-              Interrupt
-            </Btn>
-          )}
-          {(!running || queues) && (
-            <Btn size="sm" variant={dead ? "outline" : "amber"} icon={dead ? "power" : "send"} disabled={!canSend} onClick={send}>
-              {sending ? "Sending…" : dead ? "Resume & send" : running ? "Queue" : "Send"}
-            </Btn>
-          )}
-        </div>
+        {running && !queues ? (
+          <Btn size="sm" variant="danger" icon="stop" onClick={() => store.interrupt(id)} title="Interrupt (Esc)" className="mb-0.5">Stop</Btn>
+        ) : (
+          <Btn size="sm" variant={dead ? "outline" : "amber"} icon={dead ? "power" : "send"} disabled={!canSend} onClick={send} className="mb-0.5" title={dead ? "Resume the harness and send" : running ? "Queue after current step" : "Send (Enter)"}>
+            {sending ? "…" : dead ? "Resume" : running ? "Queue" : "Send"}
+          </Btn>
+        )}
       </div>
+      {hint && (
+        <div className={cn("mt-1.5 px-1 flex items-center gap-1.5 text-[11.5px] leading-tight", tone === "amber" ? "text-[var(--t-amber)]" : tone === "red" ? "text-[var(--t-red)]" : "text-[var(--t-mute)]")}>
+          {hint}
+        </div>
+      )}
     </div>
   );
 }

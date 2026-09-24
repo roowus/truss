@@ -4,6 +4,7 @@ import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
 import { store, useApp } from "@/lib/store";
+import { desktops, useDesktops } from "@/lib/desktops";
 import { shortPath } from "@/lib/format";
 import { Btn, Icon } from "@/components/ui";
 import { openFreeShell, getDockApi } from "@/lib/workspace";
@@ -26,13 +27,22 @@ const THEME = {
   white: "#d9d4ca", brightWhite: "#ffffff",
 };
 
-export function TerminalPanel({ params, api }: IDockviewPanelProps<P>) {
+export function TerminalPanel({ params, api, containerApi }: IDockviewPanelProps<P>) {
   const host = useRef<HTMLDivElement>(null);
   const [status, setStatus] = useState<{ kind: "connecting" | "live" | "exited"; code?: number }>({ kind: "connecting" });
   const meta = useApp((s) => s.terminals.find((t) => t.id === params.terminalId));
   const session = useApp((s) => (params.sessionId ? s.sessions[params.sessionId] : undefined));
   const backend = useApp((s) => s.backend);
+  const fontSize = useDesktops((s) => s.settings.terminalFontSize);
+  const workspaceActive = useDesktops((s) => desktops.getApi(s.activeId) === containerApi);
+  const activeRef = useRef(workspaceActive);
+  const refit = useRef<() => void>(() => {});
+  activeRef.current = workspaceActive;
   const [nonce, setNonce] = useState(0);
+
+  useEffect(() => {
+    if (workspaceActive) requestAnimationFrame(() => refit.current());
+  }, [workspaceActive]);
 
   useEffect(() => {
     const el = host.current;
@@ -41,7 +51,7 @@ export function TerminalPanel({ params, api }: IDockviewPanelProps<P>) {
     const term = new Terminal({
       theme: THEME,
       fontFamily: '"JetBrains Mono", "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace',
-      fontSize: 12.5,
+      fontSize,
       lineHeight: 1.25,
       cursorBlink: !reduce,
       scrollback: 5000,
@@ -50,7 +60,7 @@ export function TerminalPanel({ params, api }: IDockviewPanelProps<P>) {
     const fit = new FitAddon();
     term.loadAddon(fit);
     term.open(el);
-    let last = { cols: 0, rows: 0 };
+    let lastSent = { cols: 0, rows: 0 };
     const conn = backend.connectTerminal(params.terminalId, {
       onHello: (h) => {
         setStatus(h.alive ? { kind: "live" } : { kind: "exited" });
@@ -70,11 +80,14 @@ export function TerminalPanel({ params, api }: IDockviewPanelProps<P>) {
       } catch {
         return;
       }
-      if (term.cols !== last.cols || term.rows !== last.rows) {
-        last = { cols: term.cols, rows: term.rows };
+      // A terminal can be open in several desktops. Only the visible one owns
+      // pty sizing, so hidden copies never fight over the server's dimensions.
+      if (activeRef.current && (term.cols !== lastSent.cols || term.rows !== lastSent.rows)) {
+        lastSent = { cols: term.cols, rows: term.rows };
         conn.resize(term.cols, term.rows);
       }
     };
+    refit.current = doFit;
     let raf = 0;
     const ro = new ResizeObserver(() => {
       cancelAnimationFrame(raf);
@@ -93,18 +106,17 @@ export function TerminalPanel({ params, api }: IDockviewPanelProps<P>) {
       act?.dispose();
       conn.close();
       term.dispose();
+      refit.current = () => {};
     };
-  }, [params.terminalId, backend, nonce]);
+  }, [params.terminalId, backend, nonce, fontSize]);
 
   const cwd = meta?.cwd ?? session?.cwd ?? params.cwd;
   return (
     <div className="h-full flex flex-col bg-[#0b0c0e]">
-      <div className="shrink-0 flex items-center gap-2 px-3 h-7 border-b border-[var(--t-line)] font-mono text-[10.5px] text-[var(--t-dim)]">
+      <div className="shrink-0 flex items-center gap-2 px-3 h-6 border-b border-[var(--t-line)] text-[10.5px] text-[var(--t-dim)]" title={`${params.terminalId}${session ? ` · agent shell for “${session.title}”` : ""}`}>
         <span className={status.kind === "live" ? "text-[var(--t-teal)]" : status.kind === "exited" ? "text-[var(--t-red)]" : "text-[var(--t-amber)]"}>●</span>
-        <span>{status.kind === "live" ? "pty attached" : status.kind === "exited" ? `exited${status.code !== undefined ? ` (${status.code})` : ""}` : "attaching…"}</span>
+        <span>{status.kind === "live" ? "attached" : status.kind === "exited" ? `exited${status.code !== undefined ? ` (${status.code})` : ""}` : "attaching…"}</span>
         {cwd && <><span>·</span><span className="truncate">{shortPath(cwd)}</span></>}
-        {session && <><span>·</span><span className="truncate">agent shell for “{session.title}”</span></>}
-        <span className="ml-auto">{params.terminalId}</span>
       </div>
       <div className="relative flex-1 min-h-0">
         <div ref={host} className="absolute inset-0 pl-2 pt-1" />
@@ -117,7 +129,7 @@ export function TerminalPanel({ params, api }: IDockviewPanelProps<P>) {
               size="xs"
               variant="amber"
               onClick={async () => {
-                await store.deleteTerminal(params.terminalId);
+                await desktops.killTerminal(params.terminalId);
                 await openFreeShell(cwd);
                 getDockApi()?.getPanel(api.id)?.api.close();
               }}
