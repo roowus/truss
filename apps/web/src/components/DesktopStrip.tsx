@@ -98,9 +98,8 @@ export function DesktopStrip() {
       >
         <Icon name="plus" size={13} /> Tab
       </button>
-      <button onClick={() => openPanel("settings")} title="Settings" aria-label="Settings" className="ml-auto shrink-0 inline-flex items-center gap-1.5 h-7 px-2 rounded-md text-[12px] text-[var(--t-mute)] hover:text-[var(--t-fg)] hover:bg-white/[0.06]">
-        <Icon name="settings" size={13} /> <span className="hidden min-[800px]:inline">Settings</span>
-      </button>
+      {/* one Settings entry point lives at the bottom of the sidebar */}
+      <span className="ml-auto" />
       {saveStatus === "error" && <button onClick={() => openPanel("settings")} className="shrink-0 text-[var(--t-red)]" title="Workspace save failed. Open Settings to retry." aria-label="Workspace save failed"><Icon name="alert" size={13} /></button>}
       {picker && addTabRef.current && <TabPicker anchor={addTabRef.current} spaceId={activeId} onClose={() => setPicker(false)} />}
       {menu && menuRef.current && createPortal(
