@@ -27,6 +27,8 @@ import { listSkills } from "./skills.js";
 import { registerMcpPerms } from "./mcp-perms.js";
 import { importDshSessions } from "./import-dsh.js";
 import { registerMcpTruss } from "./mcp-truss.js";
+import { controlService, deleteRoute, listCredentials, upsertRoute } from "./credentials.js";
+import { controlRouter, harnessRouting, routerStatus } from "./router.js";
 import {
   agentBye,
   agentFrame,
@@ -275,6 +277,38 @@ registerMcpPerms(app);
 
 /* MCP management server — agents get mcp__truss__* tools */
 registerMcpTruss(app);
+
+/* ── credentials (dsh-key-proxy route management; keys are write-only) ── */
+app.get("/api/credentials", async () => listCredentials());
+app.post("/api/credentials", async (req, reply) => {
+  try {
+    return upsertRoute((req.body ?? {}) as never);
+  } catch (err) {
+    return reply.code(400).send({ error: String(err) });
+  }
+});
+app.delete("/api/credentials/:port", async (req, reply) => {
+  try {
+    return deleteRoute(Number((req.params as { port: string }).port));
+  } catch (err) {
+    return reply.code(400).send({ error: String(err) });
+  }
+});
+app.post("/api/credentials/service", async (req) => {
+  const { action } = (req.body ?? {}) as { action?: "start" | "stop" | "restart" };
+  if (!action || !["start", "stop", "restart"].includes(action))
+    return { ok: false, detail: "action must be start|stop|restart" };
+  return controlService(action);
+});
+
+/* ── router (9router status/control + harness routing snapshot) ── */
+app.get("/api/router", async () => ({ ...(await routerStatus()), harnesses: harnessRouting() }));
+app.post("/api/router/service", async (req) => {
+  const { action } = (req.body ?? {}) as { action?: "start" | "stop" | "restart" };
+  if (!action || !["start", "stop", "restart"].includes(action))
+    return { ok: false, detail: "action must be start|stop|restart" };
+  return controlRouter(action);
+});
 
 /* import persisted dsh sessions (transcripts + resumable refs) */
 app.post("/api/import/dsh", async () => importDshSessions());

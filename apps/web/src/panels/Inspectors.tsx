@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import type { IDockviewPanelProps } from "dockview-react";
 import { store, useApp, useNow, capsOf, type Agent, type SessionView } from "@/lib/store";
 import { baseHarness, fmtCost, fmtMs, fmtTokens, shortPath, ago } from "@/lib/format";
-import { Btn, Empty, HarnessMark, Icon, Kbd, Spinner, StateDot, TrussLogo } from "@/components/ui";
+import { Btn, Empty, HarnessMark, Icon, Kbd, Select, Spinner, StateDot, TrussLogo } from "@/components/ui";
 import { openDailyDriver, openFreeShell } from "@/lib/workspace";
 import type { SkillInfo } from "@/lib/proto";
 import { cn } from "@/utils/cn";
@@ -425,6 +425,197 @@ export function CostPanel() {
           {withCost.length === 0 && data.sessions.length === 0 && (
             <Empty icon="gauge" title="No LLM calls yet">Run a session and the ledger fills in.</Empty>
           )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ================= Credentials (dsh-key-proxy) ================= */
+
+interface RouteView {
+  port: number;
+  host: string;
+  scheme: string;
+  upstreamPort: number;
+  auth: string;
+  enabled: boolean;
+  allowedModels?: string[];
+  description?: string;
+  hasKey: boolean;
+}
+interface CredData { routes: RouteView[]; service: string; serviceActive: boolean }
+
+export function CredentialsPanel() {
+  const [data, setData] = useState<CredData | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [form, setForm] = useState({ port: "", host: "", key: "", auth: "bearer", description: "" });
+  const [showForm, setShowForm] = useState(false);
+  const be = useApp((s) => s.backend);
+  const load = () => {
+    if (!be) return;
+    be.credentials().then((d: CredData) => setData(d)).catch((e: any) => setErr(e.message ?? String(e)));
+  };
+  useEffect(load, [be]);
+
+  const act = async (fn: () => Promise<unknown>) => {
+    setBusy(true);
+    try { await fn(); load(); } catch (e: any) { setErr(e.message ?? String(e)); } finally { setBusy(false); }
+  };
+
+  if (err && !data) return <Empty icon="alert" title="Couldn't read credentials">{err}</Empty>;
+  if (!data) return <div className="h-full grid place-items-center"><Spinner /></div>;
+
+  return (
+    <div className="h-full flex flex-col bg-[var(--t-bg1)] t-panel">
+      <div className="shrink-0 flex items-center gap-2 px-3 h-9 border-b border-[var(--t-line)]">
+        <Icon name="lock" size={13} className="text-[var(--t-amber)]" />
+        <span className="text-[12px] text-[var(--t-fg)] font-medium">Credentials</span>
+        <span className={cn("inline-block w-1.5 h-1.5 rounded-full", data.serviceActive ? "bg-[var(--t-teal)]" : "bg-[var(--t-red)]")} />
+        <span className="text-[10.5px] text-[var(--t-dim)] font-mono">{data.service}</span>
+        <span className="ml-auto" />
+        <Btn size="xs" variant="ghost" icon="retry" onClick={() => act(() => be!.credentialsService("restart"))} disabled={busy} title="Restart the key-proxy after external edits">Restart</Btn>
+        <Btn size="xs" variant="outline" icon="plus" onClick={() => setShowForm((v) => !v)}>Add route</Btn>
+      </div>
+      <div className="flex-1 min-h-0 overflow-auto t-scroll">
+        <div className="px-4 pt-2.5 pb-1 text-[11px] text-[var(--t-dim)] leading-relaxed">
+          Provider keys live only in the key-proxy file (<span className="font-mono">~/.dsh/bin/dsh-key-proxy.json</span>, owner-read only). Harnesses call loopback ports; the proxy injects the real key upstream. Keys are write-only here — never displayed.
+        </div>
+        {err && <div className="mx-4 mt-2 rounded-md border border-[color-mix(in_oklab,var(--t-red)_25%,transparent)] bg-[color-mix(in_oklab,var(--t-red)_9%,transparent)] px-3 py-2 text-[11.5px] text-[var(--t-red)]">{err}</div>}
+        {showForm && (
+          <div className="mx-4 mt-2 mb-1 rounded-lg border border-[var(--t-line2)] bg-[var(--t-bg2)] p-3 grid grid-cols-[88px_1fr_120px] gap-2 items-center">
+            <input className="t-input font-mono" placeholder="port" value={form.port} onChange={(e) => setForm({ ...form, port: e.target.value })} />
+            <input className="t-input font-mono" placeholder="upstream host (api.example.com)" value={form.host} onChange={(e) => setForm({ ...form, host: e.target.value })} />
+            <Select className="w-full" value={form.auth} onChange={(v) => setForm({ ...form, auth: v })} ariaLabel="Auth style" options={[{ value: "bearer", label: "bearer" }, { value: "x-api-key", label: "x-api-key" }]} />
+            <input className="t-input font-mono col-span-2" placeholder="description (optional)" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} />
+            <input className="t-input font-mono" type="password" placeholder="API key (write-only)" value={form.key} onChange={(e) => setForm({ ...form, key: e.target.value })} autoComplete="off" />
+            <div className="col-span-3 flex justify-end gap-2">
+              <Btn size="xs" variant="ghost" onClick={() => setShowForm(false)}>Cancel</Btn>
+              <Btn size="xs" variant="amber" disabled={busy || !form.port || !form.host} onClick={() => act(async () => {
+                await be!.upsertCredential({ port: Number(form.port), host: form.host, auth: form.auth, description: form.description || undefined, key: form.key || undefined });
+                setShowForm(false); setForm({ port: "", host: "", key: "", auth: "bearer", description: "" });
+              })}>Save + restart</Btn>
+            </div>
+          </div>
+        )}
+        <div className="px-2 pb-3 pt-1">
+          {data.routes.map((r) => (
+            <div key={r.port} className={cn("group flex items-center gap-2.5 px-2 py-1.5 rounded-md hover:bg-white/[0.03]", !r.enabled && "opacity-50")}>
+              <span className={cn("font-mono text-[11px] tabular-nums w-[52px]", r.enabled ? "text-[var(--t-teal)]" : "text-[var(--t-dim)]")}>:{r.port}</span>
+              <span className="font-mono text-[12px] text-[var(--t-fg2)] truncate">{r.host}</span>
+              {r.scheme === "http" && <span className="text-[9px] font-mono uppercase px-1 rounded bg-[var(--t-amber)]/15 text-[var(--t-amber)]">http</span>}
+              {r.allowedModels && <span className="text-[9px] font-mono px-1 rounded bg-[var(--t-violet)]/15 text-[var(--t-violet)]" title={r.allowedModels.join(", ")}>allowlist</span>}
+              {r.description && <span className="text-[10.5px] text-[var(--t-dim)] truncate">{r.description}</span>}
+              <span className="ml-auto flex items-center gap-1.5 shrink-0">
+                <span className={cn("text-[10px] font-mono px-1.5 rounded", r.hasKey ? "bg-[var(--t-teal)]/12 text-[var(--t-teal)]" : "bg-[var(--t-red)]/12 text-[var(--t-red)]")}>{r.hasKey ? "key set" : "no key"}</span>
+                <button
+                  className="opacity-0 group-hover:opacity-70 hover:!opacity-100 text-[var(--t-mute)] hover:text-[var(--t-fg)] p-1"
+                  title={r.enabled ? "Disable route (keep config)" : "Enable route"}
+                  onClick={() => act(() => be!.upsertCredential({ port: r.port, host: r.host, enabled: !r.enabled }))}
+                ><Icon name="power" size={11} /></button>
+                <button
+                  className="opacity-0 group-hover:opacity-70 hover:!opacity-100 text-[var(--t-mute)] hover:text-[var(--t-red)] p-1"
+                  title="Remove route (its key is deleted from the file)"
+                  onClick={() => act(() => be!.deleteCredential(r.port))}
+                ><Icon name="trash" size={11} /></button>
+              </span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ================= Router (9router + harness routing) ================= */
+
+interface RouterData {
+  service: string;
+  active: boolean;
+  port: number;
+  models: { id: string; owned_by?: string; capabilities?: Record<string, unknown>; context_length?: number }[];
+  providers: { id: string; models: number }[];
+  catalogSyncedAt?: string;
+  harnesses: { harness: string; model?: string; provider?: string; endpoint?: string; source: string }[];
+}
+
+export function RouterPanel() {
+  const [data, setData] = useState<RouterData | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [q, setQ] = useState("");
+  const be = useApp((s) => s.backend);
+  const load = () => {
+    if (!be) return;
+    be.router().then((d: RouterData) => setData(d)).catch((e: any) => setErr(e.message ?? String(e)));
+  };
+  useEffect(load, [be]);
+
+  if (err && !data) return <Empty icon="alert" title="Couldn't read the router">{err}</Empty>;
+  if (!data) return <div className="h-full grid place-items-center"><Spinner /></div>;
+
+  const models = data.models.filter((m) => !q || m.id.toLowerCase().includes(q.toLowerCase()));
+  const ctl = async (action: string) => {
+    setBusy(true);
+    try { await be!.routerService(action); load(); } catch (e: any) { setErr(e.message ?? String(e)); } finally { setBusy(false); }
+  };
+
+  return (
+    <div className="h-full flex flex-col bg-[var(--t-bg1)] t-panel">
+      <div className="shrink-0 flex items-center gap-2 px-3 h-9 border-b border-[var(--t-line)]">
+        <Icon name="host" size={13} className="text-[var(--t-sky)]" />
+        <span className="text-[12px] text-[var(--t-fg)] font-medium">Model router</span>
+        <span className={cn("inline-block w-1.5 h-1.5 rounded-full", data.active ? "bg-[var(--t-teal)]" : "bg-[var(--t-red)]")} />
+        <span className="text-[10.5px] text-[var(--t-dim)] font-mono">:{data.port}</span>
+        <span className="ml-auto" />
+        {data.active ? (
+          <>
+            <Btn size="xs" variant="ghost" icon="restart" onClick={() => ctl("restart")} disabled={busy}>Restart</Btn>
+            <Btn size="xs" variant="ghost" icon="stop" onClick={() => ctl("stop")} disabled={busy}>Stop</Btn>
+          </>
+        ) : (
+          <Btn size="xs" variant="amber" icon="power" onClick={() => ctl("start")} disabled={busy}>Start router</Btn>
+        )}
+      </div>
+      <div className="flex-1 min-h-0 overflow-auto t-scroll">
+        <div className="p-4 pb-2">
+          <div className="text-[10.5px] font-medium uppercase tracking-[0.08em] text-[var(--t-dim)] mb-1.5">Harness routing</div>
+          <div className="rounded-lg border border-[var(--t-line)] overflow-hidden">
+            {data.harnesses.map((h, i) => (
+              <div key={i} className="flex items-center gap-2.5 px-3 py-1.5 border-b border-[var(--t-line)]/50 last:border-b-0">
+                <HarnessMark harness={h.harness} size={15} />
+                <span className="text-[12px] text-[var(--t-fg2)] w-24 shrink-0">{h.harness}</span>
+                <span className="font-mono text-[11px] text-[var(--t-fg)] truncate">{h.model ?? "—"}</span>
+                <span className="font-mono text-[10.5px] text-[var(--t-dim)] truncate flex-1">{h.endpoint ?? h.provider ?? ""}</span>
+                <span className="text-[9.5px] font-mono text-[var(--t-dim)] shrink-0" title={h.source}>{h.source.replace(/^~\//, "~/")}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+        <div className="px-4 pb-2">
+          <div className="flex items-center mb-1.5">
+            <div className="text-[10.5px] font-medium uppercase tracking-[0.08em] text-[var(--t-dim)]">Catalog · {data.models.length} models{data.catalogSyncedAt ? "" : " (live)"}</div>
+            <div className="ml-auto flex items-center gap-1.5 h-6 px-2 rounded bg-[var(--t-bg0)] border border-[var(--t-line)]">
+              <Icon name="search" size={10} className="text-[var(--t-dim)]" />
+              <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="filter" className="w-24 bg-transparent text-[11px] outline-none text-[var(--t-fg)] placeholder:text-[var(--t-dim)]" />
+            </div>
+          </div>
+          <div className="rounded-lg border border-[var(--t-line)] overflow-hidden">
+            {models.slice(0, 200).map((m) => (
+              <div key={m.id} className="flex items-center gap-2.5 px-3 py-1 border-b border-[var(--t-line)]/40 last:border-b-0">
+                <span className="font-mono text-[11px] text-[var(--t-fg2)] truncate flex-1">{m.id}</span>
+                {!!m.capabilities?.tools && <span className="text-[9px] font-mono px-1 rounded bg-[var(--t-sky)]/15 text-[var(--t-sky)]">tools</span>}
+                {!!m.capabilities?.vision && <span className="text-[9px] font-mono px-1 rounded bg-[var(--t-violet)]/15 text-[var(--t-violet)]">vision</span>}
+                {!!m.capabilities?.reasoning && <span className="text-[9px] font-mono px-1 rounded bg-[var(--t-amber)]/15 text-[var(--t-amber)]">reasoning</span>}
+                {!!m.context_length && <span className="text-[9.5px] font-mono text-[var(--t-dim)] tabular-nums">{fmtTokens(m.context_length)}</span>}
+              </div>
+            ))}
+            {models.length === 0 && <div className="px-3 py-4 text-center text-[11.5px] text-[var(--t-dim)]">{data.active ? "No models match." : "Router is stopped — start it to load the live catalog."}</div>}
+          </div>
+          <div className="mt-2 text-[10.5px] text-[var(--t-dim)] leading-relaxed">
+            Provider keys for the router's upstreams are managed in the 9router dashboard (its own auth) — this panel covers the catalog, service, and where harnesses point.
+          </div>
         </div>
       </div>
     </div>

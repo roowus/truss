@@ -84,6 +84,15 @@ export function TabPicker({ anchor, spaceId, groupId, onClose }: Props) {
           {(!q || match("settings preferences")) && (
             <Row icon="settings" label="Settings" onClick={() => run(() => openPanel("settings", { spaceId, groupId: targetGroupId }))} />
           )}
+          {(!q || match("cost tokens ledger")) && (
+            <Row icon="cost" label="Cost & tokens" onClick={() => run(() => openPanel("cost", { spaceId, groupId: targetGroupId }))} />
+          )}
+          {(!q || match("credentials keys providers proxy")) && (
+            <Row icon="lock" label="Credentials" onClick={() => run(() => openPanel("credentials", { spaceId, groupId: targetGroupId }))} />
+          )}
+          {(!q || match("router models gateway catalog")) && (
+            <Row icon="host" label="Model router" onClick={() => run(() => openPanel("router", { spaceId, groupId: targetGroupId }))} />
+          )}
           {(!q || match("welcome")) && (
             <Row icon="layout" label="Welcome" onClick={() => run(() => openPanel("welcome", { spaceId, groupId: targetGroupId }))} />
           )}

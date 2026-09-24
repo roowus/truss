@@ -55,6 +55,12 @@ export interface Backend {
   getLayout(): Promise<{ layout: string | null }>;
   /** server-aggregated cost + token ledger across all sessions */
   costs(): Promise<any>;
+  credentials(): Promise<any>;
+  upsertCredential(route: any): Promise<any>;
+  deleteCredential(port: number): Promise<any>;
+  credentialsService(action: string): Promise<any>;
+  router(): Promise<any>;
+  routerService(action: string): Promise<any>;
   putLayout(layout: string): Promise<unknown>;
   connectEvents(onFrame: (f: Frame) => void, onStatus: (s: ConnStatus) => void): () => void;
   connectTerminal(id: string, h: TerminalHandlers): TerminalConn;
@@ -129,6 +135,12 @@ export function createLiveBackend(): Backend {
       return { layout: r?.layout ?? null };
     },
     costs: () => req("GET", "/api/costs"),
+    credentials: () => req("GET", "/api/credentials"),
+    upsertCredential: (route) => req("POST", "/api/credentials", route),
+    deleteCredential: (port) => req("DELETE", `/api/credentials/${port}`),
+    credentialsService: (action) => req("POST", "/api/credentials/service", { action }),
+    router: () => req("GET", "/api/router"),
+    routerService: (action) => req("POST", "/api/router/service", { action }),
     putLayout: (layout) => req("PUT", "/api/layout", { layout }),
 
     connectEvents(onFrame, onStatus) {

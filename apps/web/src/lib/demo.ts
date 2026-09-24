@@ -702,6 +702,12 @@ export function createDemoBackend(): Backend {
       }
       return { ok: true, sessions: n };
     },
+    credentials: async () => ({ routes: [], service: "demo", serviceActive: false }),
+    upsertCredential: async () => ({ ok: true, restarted: false }),
+    deleteCredential: async () => ({ ok: true, restarted: false }),
+    credentialsService: async () => ({ ok: true }),
+    router: async () => ({ service: "demo", active: false, port: 0, models: [], providers: [], harnesses: [] }),
+    routerService: async () => ({ ok: true }),
     costs: async () => ({ sessions: [], totals: { calls: 0, tokensIn: 0, tokensOut: 0, costUsd: 0, hasCost: false } }),
     async putLayout(layout) {
       localStorage.setItem("truss.demo.layout", layout);
