@@ -169,6 +169,12 @@ export const store = {
     updateHarnessRef.run({ id, ref, at: Date.now() });
   },
 
+  setSessionProject(id: string, project: string | null) {
+    db.prepare(`UPDATE sessions SET project = @p, updated_at = @at WHERE id = @id`).run({
+      id, p: project, at: Date.now(),
+    });
+  },
+
   setArchived(id: string, archived: boolean) {
     db.prepare(`UPDATE sessions SET archived = @a, updated_at = @at WHERE id = @id`).run({
       id, a: archived ? 1 : 0, at: Date.now(),

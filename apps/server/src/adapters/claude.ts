@@ -160,6 +160,8 @@ export const claudeAdapter: HarnessAdapter = {
     const mcpConfig = JSON.stringify({
       mcpServers: {
         truss_perms: { type: "http", url: `${MCP_BASE}/mcp/perm/${opts.sessionId}` },
+        /* agents can run the app itself: rename/archive/spawn/prompt/layout */
+        truss: { type: "http", url: `${MCP_BASE}/mcp/truss` },
       },
     });
 

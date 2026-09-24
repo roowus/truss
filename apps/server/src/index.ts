@@ -26,6 +26,7 @@ import { attachTerminal, closeTerminal, createTerminal, listTerminals } from "./
 import { listSkills } from "./skills.js";
 import { registerMcpPerms } from "./mcp-perms.js";
 import { importDshSessions } from "./import-dsh.js";
+import { registerMcpTruss } from "./mcp-truss.js";
 import {
   agentBye,
   agentFrame,
@@ -271,6 +272,9 @@ app.get("/api/skills", async (req) => {
 
 /* MCP permission host for claude-code sessions */
 registerMcpPerms(app);
+
+/* MCP management server — agents get mcp__truss__* tools */
+registerMcpTruss(app);
 
 /* import persisted dsh sessions (transcripts + resumable refs) */
 app.post("/api/import/dsh", async () => importDshSessions());

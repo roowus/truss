@@ -14,6 +14,16 @@ import {
   type AcpUpdate,
 } from "./acp.js";
 
+/** the truss management MCP server, attached to every new session */
+const TRUSS_MCP = [
+  {
+    type: "http",
+    name: "truss",
+    url: (process.env.TRUSS_MCP_BASE ?? "http://127.0.0.1:4040") + "/mcp/truss",
+    headers: [], // required by the ACP schema (hermes validates strictly)
+  },
+];
+
 /**
  * Hermes adapter — ACP via `hermes-acp` stdio server.
  *
@@ -87,7 +97,7 @@ export const hermesAdapter: HarnessAdapter = {
         mcpServers: [],
       });
     } else {
-      res = (await client.call("session/new", { cwd: resolveCwd(opts.cwd).cwd, mcpServers: [] })) as {
+      res = (await client.call("session/new", { cwd: resolveCwd(opts.cwd).cwd, mcpServers: TRUSS_MCP })) as {
         sessionId: string;
         models?: HermesModelState;
       };
