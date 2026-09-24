@@ -49,7 +49,10 @@ function loadDshEnv(): Record<string, string> {
 const client = new AcpClient({
   command: "dsh",
   args: ["--profile", "acp", "--patch", PATCH],
-  env: loadDshEnv(),
+  /* DSH_HOME pins the session store — without it a systemd-launched server
+     lands dsh-acp on ~/.dsh while the real sessions live in /opt/dsh, and
+     imports become unresumable ghosts ("not resumable" from stat misses) */
+  env: { DSH_HOME: process.env.DSH_HOME ?? "/opt/dsh", ...loadDshEnv() },
 });
 
 /* ── model discovery from session/new configOptions ── */

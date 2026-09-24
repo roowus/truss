@@ -134,6 +134,32 @@ export const store = {
     updateSessionTitle.run({ id, title, at: Date.now() });
   },
 
+  /** import path: full control of timestamps (the log's own clock) */
+  createSessionRaw(s: {
+    id: string;
+    harness: HarnessId;
+    title: string;
+    cwd: string;
+    model?: string;
+    project?: string;
+    state: SessionState;
+    created_at: number;
+    updated_at: number;
+  }) {
+    insertSession.run({
+      id: s.id,
+      harness: s.harness,
+      title: s.title,
+      cwd: s.cwd,
+      model: s.model ?? null,
+      project: s.project ?? null,
+      state: s.state,
+      created_at: s.created_at,
+      updated_at: s.updated_at,
+    });
+    return getSessionStmt.get(s.id) as SessionRow;
+  },
+
   setHarnessRef(id: string, ref: string) {
     updateHarnessRef.run({ id, ref, at: Date.now() });
   },

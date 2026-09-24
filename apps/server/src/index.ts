@@ -23,6 +23,7 @@ import {
 import { attachTerminal, closeTerminal, createTerminal, listTerminals } from "./terminal.js";
 import { listSkills } from "./skills.js";
 import { registerMcpPerms } from "./mcp-perms.js";
+import { importDshSessions } from "./import-dsh.js";
 import {
   agentBye,
   agentFrame,
@@ -250,6 +251,9 @@ app.get("/api/skills", async (req) => {
 
 /* MCP permission host for claude-code sessions */
 registerMcpPerms(app);
+
+/* import persisted dsh sessions (transcripts + resumable refs) */
+app.post("/api/import/dsh", async () => importDshSessions());
 
 /* ── layout persistence (dockview serialized state) ── */
 app.get("/api/layout", async () => ({ layout: store.getKv("dockview-layout") ?? null }));
