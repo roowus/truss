@@ -70,7 +70,10 @@ function TrussTab({ api, params }: IDockviewPanelHeaderProps<{ sessionId?: strin
       <span className="truncate max-w-[200px]">{title}</span>
       {meta && kind === "chat" && <StateDot state={meta.state} size={6} />}
       {pending > 0 && (
-        <span className="inline-grid place-items-center min-w-4 h-4 px-1 rounded-full bg-[var(--t-amber)] text-[#1b1305] text-[9.5px] font-bold t-pulse-soft" title={`${pending} permission request(s) waiting`}>!</span>
+        <span className="inline-flex items-center gap-0.5 min-w-4 h-4 px-1 rounded-full bg-[var(--t-amber)] text-[#1b1305] text-[9.5px] font-bold t-pulse-soft" title={`${pending} permission request(s) waiting`}>
+          <Icon name="lock" size={9} />
+          {pending > 1 && <span>{pending}</span>}
+        </span>
       )}
       <button onClick={(e) => { e.stopPropagation(); api.close(); }} className="ml-0.5 w-5 h-5 grid place-items-center rounded opacity-0 group-hover/tab:opacity-60 focus:opacity-100 hover:!opacity-100 hover:bg-white/10" aria-label="Close tab">
         <Icon name="x" size={10} />

@@ -4,6 +4,7 @@ import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
 import { store, useApp } from "@/lib/store";
+import { cn } from "@/utils/cn";
 import { desktops, useDesktops } from "@/lib/desktops";
 import { shortPath } from "@/lib/format";
 import { Btn, Icon } from "@/components/ui";
@@ -114,7 +115,10 @@ export function TerminalPanel({ params, api, containerApi }: IDockviewPanelProps
   return (
     <div className="h-full flex flex-col bg-[#0b0c0e]">
       <div className="shrink-0 flex items-center gap-2 px-3 h-6 border-b border-[var(--t-line)] text-[10.5px] text-[var(--t-dim)]" title={`${params.terminalId}${session ? ` · agent shell for “${session.title}”` : ""}`}>
-        <span className={status.kind === "live" ? "text-[var(--t-teal)]" : status.kind === "exited" ? "text-[var(--t-red)]" : "text-[var(--t-amber)]"}>●</span>
+        <span
+          className={cn("inline-block w-1.5 h-1.5 rounded-full shrink-0", status.kind !== "live" && status.kind !== "exited" && "t-pulse")}
+          style={{ background: status.kind === "live" ? "var(--t-teal)" : status.kind === "exited" ? "var(--t-red)" : "var(--t-amber)" }}
+        />
         <span>{status.kind === "live" ? "attached" : status.kind === "exited" ? `exited${status.code !== undefined ? ` (${status.code})` : ""}` : "attaching…"}</span>
         {cwd && <><span>·</span><span className="truncate">{shortPath(cwd)}</span></>}
       </div>
