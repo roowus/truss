@@ -230,7 +230,16 @@ app.delete("/api/terminals/:id", async (req) => {
 
 app.get("/api/terminal/:id/ws", { websocket: true }, (socket, req) => {
   const { id } = req.params as { id: string };
-  if (!attachTerminal(id, socket)) socket.close();
+  if (!attachTerminal(id, socket)) {
+    /* unknown/gone terminal (e.g. a layout-restored tab after a server
+       restart) — tell the client explicitly instead of a bare close */
+    try {
+      socket.send(JSON.stringify({ type: "exit", code: null }));
+    } catch {
+      /* already gone */
+    }
+    socket.close();
+  }
 });
 
 /* pi skills visible to a working directory (global + project) */
