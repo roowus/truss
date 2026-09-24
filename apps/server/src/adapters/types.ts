@@ -1,4 +1,6 @@
 import type { HarnessId, ProtoEvent } from "@truss/proto";
+import { existsSync, statSync } from "node:fs";
+import { homedir } from "node:os";
 
 export interface SessionOpts {
   sessionId: string;
@@ -8,6 +10,33 @@ export interface SessionOpts {
   provider?: string;
   /** resume an existing harness session (the harness's own session id) */
   resumeRef?: string;
+}
+
+/**
+ * A session cwd that no longer exists must not kill the spawn with ENOENT —
+ * fall back to the server user's home and tell the caller (so the UI can
+ * surface "working directory vanished" instead of a cryptic crash).
+ */
+export function resolveCwd(cwd: string): { cwd: string; fellBack: boolean } {
+  try {
+    if (existsSync(cwd) && statSync(cwd).isDirectory()) return { cwd, fellBack: false };
+  } catch {
+    /* unreadable → fall back */
+  }
+  return { cwd: homedir(), fellBack: true };
+}
+
+/** surface a cwd fallback in the chat transcript */
+export function cwdFallbackNote(push: (ev: ProtoEvent) => void, sessionId: string, from: string, to: string) {
+  const id = `m-sys-${Date.now()}`;
+  push({ type: "msg.start", sessionId, messageId: id, role: "system", at: Date.now() });
+  push({
+    type: "msg.chunk",
+    sessionId,
+    messageId: id,
+    text: `working directory ${from} no longer exists — running in ${to} instead`,
+  });
+  push({ type: "msg.done", sessionId, messageId: id });
 }
 
 export interface AdapterHandle {

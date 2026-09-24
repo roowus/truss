@@ -75,8 +75,46 @@ export const Markdown = memo(function Markdown({ text }: { text: string }) {
       i++;
       continue;
     }
+    /* github-style table: | header | then a |---| separator row.
+       mid-stream (no separator yet) the lines render as plain text and
+       upgrade to a table once the separator lands. */
+    if (
+      line.trim().startsWith("|") &&
+      i + 1 < lines.length &&
+      /^\s*\|?[\s:|-]*-[\s:|-]*\|?\s*$/.test(lines[i + 1])
+    ) {
+      const parseRow = (l: string) =>
+        l.trim().replace(/^\||\|$/g, "").split("|").map((c) => c.trim());
+      const header = parseRow(line);
+      i += 2;
+      const rows: string[][] = [];
+      while (i < lines.length && lines[i].trim().startsWith("|")) rows.push(parseRow(lines[i++]));
+      blocks.push(
+        <div key={k++} className="t-tablewrap">
+          <table className="t-table">
+            <thead>
+              <tr>
+                {header.map((hcell, j) => (
+                  <th key={j}>{inline(hcell, `th${k}-${j}`)}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r, ri) => (
+                <tr key={ri}>
+                  {r.map((c, ci) => (
+                    <td key={ci}>{inline(c, `td${k}-${ri}-${ci}`)}</td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>,
+      );
+      continue;
+    }
     const para: string[] = [];
-    while (i < lines.length && lines[i].trim() && !/^(```|\s*[-*]\s+|\s*\d+[.)]\s+|#{1,4}\s)/.test(lines[i])) para.push(lines[i++]);
+    while (i < lines.length && lines[i].trim() && !/^(```|\s*[-*]\s+|\s*\d+[.)]\s+|#{1,4}\s|\s*\|)/.test(lines[i])) para.push(lines[i++]);
     blocks.push(<p key={k++}>{inline(para.join("\n"), `p${k}`)}</p>);
   }
   return <div className="t-md">{blocks}</div>;

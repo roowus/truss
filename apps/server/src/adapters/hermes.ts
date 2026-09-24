@@ -1,6 +1,7 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { AdapterHandle, HarnessAdapter, SessionOpts } from "./types.js";
+import { resolveCwd } from "./types.js";
 import {
   AcpClient,
   beginAcpTurn,
@@ -86,7 +87,7 @@ export const hermesAdapter: HarnessAdapter = {
         mcpServers: [],
       });
     } else {
-      res = (await client.call("session/new", { cwd: opts.cwd, mcpServers: [] })) as {
+      res = (await client.call("session/new", { cwd: resolveCwd(opts.cwd).cwd, mcpServers: [] })) as {
         sessionId: string;
         models?: HermesModelState;
       };

@@ -254,9 +254,10 @@ registerMcpPerms(app);
 /* ── layout persistence (dockview serialized state) ── */
 app.get("/api/layout", async () => ({ layout: store.getKv("dockview-layout") ?? null }));
 app.put("/api/layout", async (req) => {
-  const { layout } = (req.body ?? {}) as { layout?: string };
-  if (typeof layout !== "string") return { ok: false };
-  store.setKv("dockview-layout", layout);
+  const { layout } = (req.body ?? {}) as { layout?: string | null };
+  /* null clears a saved layout (e.g. after a cleanup, or stale session refs) */
+  if (layout !== null && typeof layout !== "string") return { ok: false };
+  store.setKv("dockview-layout", layout ?? "");
   return { ok: true };
 });
 

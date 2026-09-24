@@ -5,6 +5,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ProtoEvent } from "@truss/proto";
 import type { AdapterHandle, HarnessAdapter, SessionOpts } from "./types.js";
+import { cwdFallbackNote, resolveCwd } from "./types.js";
 
 /**
  * pi adapter — drives `pi --mode rpc` (JSONL over stdin/stdout).
@@ -157,10 +158,16 @@ export const piAdapter: HarnessAdapter = {
     const sessionDir = join(process.env.TRUSS_DATA_DIR ?? join(here, "..", "..", "data"), "pi-sessions");
     mkdirSync(sessionDir, { recursive: true });
 
+    /* a deleted cwd kills spawn with ENOENT — fall back to ~ and say so.
+       resume needs the session's own directory: pi interactively asks to
+       fork when it differs (auto-aborts headless), so a fallen-back cwd
+       starts fresh and keeps the transcript visible instead. */
+    const { cwd: safeCwd, fellBack: cwdFellBack } = resolveCwd(opts.cwd);
+    const canResumeInPlace = !!opts.resumeRef && !cwdFellBack;
     const args = ["--mode", "rpc", "--session-dir", sessionDir, "--provider", provider, "--model", model];
-    if (opts.resumeRef) args.push("--session", opts.resumeRef);
+    if (canResumeInPlace && opts.resumeRef) args.push("--session", opts.resumeRef);
     const proc = spawn("pi", args, {
-      cwd: opts.cwd,
+      cwd: safeCwd,
       stdio: ["pipe", "pipe", "inherit"], // stderr is diagnostics, never protocol
       env: { ...process.env },
     });
@@ -223,6 +230,20 @@ export const piAdapter: HarnessAdapter = {
     });
 
     emit({ type: "session.state", sessionId: sid, state: "idle" });
+    if (cwdFellBack) {
+      cwdFallbackNote(emit, sid, opts.cwd, safeCwd);
+      if (opts.resumeRef) {
+        const id = `m-sys-${Date.now()}-r`;
+        emit({ type: "msg.start", sessionId: sid, messageId: id, role: "system", at: Date.now() });
+        emit({
+          type: "msg.chunk",
+          sessionId: sid,
+          messageId: id,
+          text: "couldn't resume the old harness session without its directory — starting fresh in the fallback; the transcript above is the stored history",
+        });
+        emit({ type: "msg.done", sessionId: sid, messageId: id });
+      }
+    }
 
     /* learn pi's own session id for restart-resume (get_state is the rpc handshake for it) */
     const stateReqId = `truss-state-${Date.now()}`;

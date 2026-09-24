@@ -1,6 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import type { ProtoEvent } from "@truss/proto";
 import type { AdapterHandle, HarnessAdapter, SessionOpts } from "./types.js";
+import { cwdFallbackNote, resolveCwd } from "./types.js";
 
 /**
  * Claude Code adapter — bidirectional stream-json over stdio.
@@ -178,8 +179,10 @@ export const claudeAdapter: HarnessAdapter = {
     ];
     if (opts.resumeRef) args.push("--resume", opts.resumeRef);
 
+    /* a deleted cwd kills spawn with ENOENT — fall back to ~ and say so */
+    const { cwd: safeCwd, fellBack: cwdFellBack } = resolveCwd(opts.cwd);
     const proc = spawn("claude", args, {
-        cwd: opts.cwd,
+        cwd: safeCwd,
         stdio: ["pipe", "pipe", "inherit"],
         env: {
           ...process.env,
@@ -246,6 +249,7 @@ export const claudeAdapter: HarnessAdapter = {
     });
 
     emit({ type: "session.state", sessionId: sid, state: "idle" });
+    if (cwdFellBack) cwdFallbackNote(emit, sid, opts.cwd, safeCwd);
 
     /* claude emits system.init (with session_id) only after the first prompt —
        the session manager picks harnessRef up lazily from the event pump */
