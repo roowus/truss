@@ -21,6 +21,7 @@ export interface UiSettings {
   openMode: "chat" | "daily";
   terminalFontSize: number;
   defaultCwd: string;
+  groupMode: "project" | "folder";
 }
 
 interface DesktopState {
@@ -45,6 +46,7 @@ const defaultSettings: UiSettings = {
   openMode: "chat",
   terminalFontSize: 13,
   defaultCwd: "",
+  groupMode: "project",
 };
 
 function freshState(): DesktopState {
@@ -84,6 +86,7 @@ function parseSaved(raw: string): DesktopState {
       openMode: cfg.openMode === "daily" ? "daily" : "chat",
       terminalFontSize: [11, 12, 13, 14, 16].includes(cfg.terminalFontSize) ? cfg.terminalFontSize : 13,
       defaultCwd: typeof cfg.defaultCwd === "string" ? cfg.defaultCwd : "",
+      groupMode: cfg.groupMode === "folder" ? "folder" : "project",
     },
     saveStatus: "idle",
   };

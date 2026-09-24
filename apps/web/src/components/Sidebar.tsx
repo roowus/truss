@@ -16,22 +16,24 @@ export function Sidebar({ onNew }: { onNew: () => void }) {
   const agents = useApp((s) => s.agents);
   const agentsError = useApp((s) => s.agentsError);
   const hostPrefs = useDesktops((s) => s.hosts);
+  const groupMode = useDesktops((s) => s.settings.groupMode);
   const [q, setQ] = useState("");
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const now = useNow(15_000);
 
+  /* group sessions by project tag, or by workspace folder (cwd) */
   const groups = useMemo(() => {
     const g = new Map<string, SessionMeta[]>();
     for (const id of order) {
       const s = sessions[id];
       if (!s) continue;
       if (q && !(s.title + " " + s.cwd + " " + (s.project ?? "") + " " + s.harness).toLowerCase().includes(q.toLowerCase())) continue;
-      const k = s.project || "";
+      const k = groupMode === "folder" ? shortPath(s.cwd) || s.cwd : s.project || "";
       if (!g.has(k)) g.set(k, []);
       g.get(k)!.push(s);
     }
     return [...g.entries()].sort((a, b) => (a[0] === "" ? 1 : b[0] === "" ? -1 : a[0].localeCompare(b[0])));
-  }, [order, sessions, q]);
+  }, [order, sessions, q, groupMode]);
 
   return (
     <aside className="h-full flex flex-col bg-[var(--t-bg0)] border-r border-[var(--t-line)]">
@@ -45,6 +47,26 @@ export function Sidebar({ onNew }: { onNew: () => void }) {
         <div className="flex items-center gap-2 h-8 px-2.5 rounded-md bg-[var(--t-bg1)] border border-[var(--t-line)] focus-within:border-[var(--t-line2)]">
           <Icon name="search" size={12} className="text-[var(--t-dim)]" />
           <input id="session-search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search" className="flex-1 min-w-0 bg-transparent text-[12.5px] outline-none text-[var(--t-fg)] placeholder:text-[var(--t-dim)]" />
+        </div>
+        {/* group sessions by project tag or by workspace folder */}
+        <div className="mt-1.5 flex items-center gap-1 px-0.5" role="group" aria-label="Group sessions by">
+          {([["project", "tag", "Project"], ["folder", "folder", "Folder"]] as const).map(([mode, icon, label]) => (
+            <button
+              key={mode}
+              onClick={() => desktops.updateSettings({ groupMode: mode })}
+              title={`Group by ${label.toLowerCase()}`}
+              aria-pressed={groupMode === mode}
+              className={cn(
+                "flex items-center gap-1 h-5 px-1.5 rounded text-[10px] font-medium uppercase tracking-[0.06em] transition-colors",
+                groupMode === mode
+                  ? "bg-[var(--t-bg3)] text-[var(--t-fg)]"
+                  : "text-[var(--t-dim)] hover:text-[var(--t-mute)]",
+              )}
+            >
+              <Icon name={icon} size={10} />
+              {label}
+            </button>
+          ))}
         </div>
       </div>
 
