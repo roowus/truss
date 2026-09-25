@@ -24,6 +24,7 @@ import { DesktopStrip } from "./DesktopStrip";
 import { TabPicker } from "./TabPicker";
 import { Btn, Icon, StateDot, TrussLogo } from "./ui";
 import { harnessStyle } from "@/lib/format";
+import { cn } from "@/utils/cn";
 
 const components = {
   chat: ChatPanel,
@@ -64,20 +65,22 @@ function TrussTab({ api, params }: IDockviewPanelHeaderProps<{ sessionId?: strin
       onMouseDown={(e) => {
         if (e.button === 1) { e.preventDefault(); api.close(); }
       }}
-      title={`${title}\nRight-click to copy or move to another workspace`}
+      title={`${title}\nRight-click to copy or move to another workspace\n(middle-click closes)`}
     >
-      <span style={{ color: kind === "chat" ? color : undefined }} className={kind === "chat" ? "" : "opacity-70"}>
+      <span style={{ color: kind === "chat" ? color : undefined }} className={cn("shrink-0", kind === "chat" ? "" : "opacity-70")}>
         <Icon name={KIND_ICON[kind] ?? "layout"} size={12} />
       </span>
-      <span className="truncate max-w-[200px]">{title}</span>
+      <span className="truncate min-w-0 max-w-[200px]">{title}</span>
       {meta && kind === "chat" && <StateDot state={meta.state} size={6} />}
       {pending > 0 && (
-        <span className="inline-flex items-center gap-0.5 min-w-4 h-4 px-1 rounded-full bg-[var(--t-amber)] text-[#1b1305] text-[9.5px] font-bold t-pulse-soft" title={`${pending} permission request(s) waiting`}>
+        <span className="inline-flex items-center gap-0.5 min-w-4 h-4 px-1 rounded-full bg-[var(--t-amber)] text-[#1b1305] text-[9.5px] font-bold t-pulse-soft shrink-0" title={`${pending} permission request(s) waiting`}>
           <Icon name="lock" size={9} />
           {pending > 1 && <span>{pending}</span>}
         </span>
       )}
-      <button onClick={(e) => { e.stopPropagation(); api.close(); }} className="ml-0.5 w-5 h-5 grid place-items-center rounded opacity-0 group-hover/tab:opacity-60 focus:opacity-100 hover:!opacity-100 hover:bg-white/10" aria-label="Close tab">
+      {/* the close affordance must survive narrow tabs: shrink-0 + title
+          gives way (min-w-0) — middle-click also closes (see the tooltip) */}
+      <button onClick={(e) => { e.stopPropagation(); api.close(); }} className="ml-auto shrink-0 w-5 h-5 grid place-items-center rounded opacity-0 group-hover/tab:opacity-60 focus:opacity-100 hover:!opacity-100 hover:bg-white/10" aria-label="Close tab">
         <Icon name="x" size={10} />
       </button>
     </div>
