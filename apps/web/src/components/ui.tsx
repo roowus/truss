@@ -314,10 +314,12 @@ export function Select({
           ref={listRef}
           role="listbox"
           aria-label={ariaLabel}
-          className="fixed z-[170] max-h-[280px] overflow-auto t-scroll rounded-lg bg-[var(--t-bg2)] border border-[var(--t-line2)] shadow-2xl py-1 t-pop"
+          className="fixed z-[170] max-h-[280px] overflow-auto t-scroll rounded-lg bg-[var(--t-bg2)] border border-[var(--t-line2)] shadow-2xl pb-1 t-pop"
           style={{ top: Math.min(rect.bottom + 5, window.innerHeight - 290), left: rect.left, minWidth: rect.width }}
         >
-          <div className="sticky top-0 z-10 flex items-center gap-2 px-3 h-8 bg-[var(--t-bg2)] border-b border-[var(--t-line)]">
+          {/* flush to the popover's top edge: an opaque cover so scrolled
+              options never peek above it (the old py-1 left a 4px gap) */}
+          <div className="sticky top-0 z-10 flex items-center gap-2 px-3 h-8 bg-[var(--t-bg2)] rounded-t-lg border-b border-[var(--t-line)]">
             <Icon name="search" size={11} className="text-[var(--t-dim)]" />
             <input
               ref={filterRef}
