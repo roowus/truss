@@ -216,9 +216,17 @@ export function Select({
 }) {
   const [open, setOpen] = useState(false);
   const [highlight, setHighlight] = useState(0);
+  const [filter, setFilter] = useState("");
   const btnRef = useRef<HTMLButtonElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  const filterRef = useRef<HTMLInputElement>(null);
   const current = options.find((o) => o.value === value);
+
+  const textOf = (o: SelectOption) =>
+    `${typeof o.label === "string" ? o.label : ""} ${o.hint ?? ""} ${o.value}`.toLowerCase();
+  const visible = filter
+    ? options.filter((o) => filter.toLowerCase().split(/\s+/).every((w) => textOf(o).includes(w)))
+    : options;
 
   useEffect(() => {
     if (!open) return;
@@ -249,18 +257,27 @@ export function Select({
       return;
     }
     if (e.key === "Escape") { e.preventDefault(); setOpen(false); btnRef.current?.focus(); }
-    else if (e.key === "ArrowDown") { e.preventDefault(); setHighlight((h) => Math.min(options.length - 1, h + 1)); }
+    else if (e.key === "ArrowDown") { e.preventDefault(); setHighlight((h) => Math.min(visible.length - 1, h + 1)); }
     else if (e.key === "ArrowUp") { e.preventDefault(); setHighlight((h) => Math.max(0, h - 1)); }
-    else if (e.key === "Enter" || e.key === " ") { e.preventDefault(); const o = options[highlight]; if (o) pick(o.value); }
+    else if (e.key === "Enter") { e.preventDefault(); const o = visible[highlight]; if (o) pick(o.value); }
     else if (e.key.length === 1 && /\S/.test(e.key)) {
-      const q = e.key.toLowerCase();
-      const hit = options.findIndex((o, i) => i > highlight && String(typeof o.label === "string" ? o.label : "").toLowerCase().startsWith(q));
-      if (hit >= 0) setHighlight(hit);
-      else {
-        const wrap = options.findIndex((o) => String(typeof o.label === "string" ? o.label : "").toLowerCase().startsWith(q));
-        if (wrap >= 0) setHighlight(wrap);
-      }
+      /* type to filter — preventDefault keeps the char from also landing
+         in the search input after focus moves (the double-capture bug) */
+      e.preventDefault();
+      setFilter((f) => f + e.key);
+      setHighlight(0);
+      filterRef.current?.focus();
+    } else if (e.key === "Backspace" && filter) {
+      setFilter((f) => f.slice(0, -1));
+      setHighlight(0);
     }
+  };
+
+  const onFilterKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "ArrowDown") { e.preventDefault(); setHighlight((h) => Math.min(visible.length - 1, h + 1)); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); setHighlight((h) => Math.max(0, h - 1)); }
+    else if (e.key === "Enter") { e.preventDefault(); const o = visible[highlight]; if (o) pick(o.value); }
+    else if (e.key === "Escape") { e.preventDefault(); setOpen(false); btnRef.current?.focus(); }
   };
 
   const rect = btnRef.current?.getBoundingClientRect();
@@ -273,7 +290,13 @@ export function Select({
         aria-label={ariaLabel}
         aria-haspopup="listbox"
         aria-expanded={open}
-        onClick={() => { setHighlight(Math.max(0, options.findIndex((o) => o.value === value))); setOpen((v) => !v); }}
+        onClick={() => {
+          if (!open) {
+            setFilter("");
+            setHighlight(Math.max(0, options.findIndex((o) => o.value === value)));
+          }
+          setOpen((v) => !v);
+        }}
         onKeyDown={onKeyDown}
         className={cn(
           "t-input inline-flex items-center justify-between gap-2 text-left select-none cursor-pointer",
@@ -294,7 +317,20 @@ export function Select({
           className="fixed z-[170] max-h-[280px] overflow-auto t-scroll rounded-lg bg-[var(--t-bg2)] border border-[var(--t-line2)] shadow-2xl py-1 t-pop"
           style={{ top: Math.min(rect.bottom + 5, window.innerHeight - 290), left: rect.left, minWidth: rect.width }}
         >
-          {options.map((o, i) => (
+          <div className="sticky top-0 z-10 flex items-center gap-2 px-3 h-8 bg-[var(--t-bg2)] border-b border-[var(--t-line)]">
+            <Icon name="search" size={11} className="text-[var(--t-dim)]" />
+            <input
+              ref={filterRef}
+              value={filter}
+              onChange={(e) => { setFilter(e.target.value); setHighlight(0); }}
+              onKeyDown={onFilterKeyDown}
+              placeholder={`filter ${options.length}…`}
+              aria-label="Filter options"
+              className="flex-1 min-w-0 bg-transparent text-[11.5px] outline-none text-[var(--t-fg)] placeholder:text-[var(--t-dim)]"
+            />
+            {filter && <span className="text-[9.5px] font-mono text-[var(--t-dim)]">{visible.length}</span>}
+          </div>
+          {visible.map((o, i) => (
             <div
               key={o.value}
               role="option"
@@ -313,6 +349,9 @@ export function Select({
               {o.hint && <span className="shrink-0 text-[10px] text-[var(--t-dim)]">{o.hint}</span>}
             </div>
           ))}
+          {visible.length === 0 && (
+            <div className="px-3 py-4 text-center text-[11px] text-[var(--t-dim)]">No matches for “{filter}”.</div>
+          )}
         </div>,
         document.body,
       )}

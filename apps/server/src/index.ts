@@ -29,6 +29,9 @@ import { importDshSessions } from "./import-dsh.js";
 import { registerMcpTruss } from "./mcp-truss.js";
 import { controlService, deleteRoute, listCredentials, upsertRoute } from "./credentials.js";
 import { controlRouter, harnessRouting, routerStatus } from "./router.js";
+import { modelCatalog } from "./modelcat.js";
+import { syncPiModelsJson } from "./pi-config.js";
+import { setClaudeModels } from "./adapters/claude.js";
 import {
   agentBye,
   agentFrame,
@@ -53,6 +56,26 @@ setBroadcaster((frame: EventFrame) => {
 
 /* pi processes from a previous server run are gone — close their sessions. */
 reconcileOnBoot();
+
+/* pi's model picker is a static file read at spawn — sync it from the live
+   key-proxy catalog so the dialog offers everything the credentials cover */
+void syncPiModelsJson()
+  .then((r) => app.log.info(`pi models.json synced: ${r.providers} providers, ${r.models} models`))
+  .catch((err) => app.log.warn(`pi models.json sync failed: ${err}`));
+
+/* claude's anthropic-compatible models = whatever z.ai serves right now */
+void modelCatalog()
+  .then((providers) => {
+    const zai = providers.find((p) => p.id === "zai");
+    if (zai?.models.length) {
+      setClaudeModels(zai.models.map((m) => ({
+        provider: "zai-local",
+        model: m.id,
+        label: `${m.id} (z.ai via key-proxy)`,
+      })));
+    }
+  })
+  .catch(() => undefined);
 
 app.get("/health", async () => ({ ok: true, service: "truss", time: Date.now() }));
 
@@ -277,6 +300,12 @@ registerMcpPerms(app);
 
 /* MCP management server — agents get mcp__truss__* tools */
 registerMcpTruss(app);
+
+/* aggregated model catalog across the enabled key-proxy routes */
+app.get("/api/models/catalog", async (req) => {
+  const { force } = req.query as { force?: string };
+  return { providers: await modelCatalog(force === "1") };
+});
 
 /* ── credentials (dsh-key-proxy route management; keys are write-only) ── */
 app.get("/api/credentials", async () => listCredentials());

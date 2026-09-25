@@ -30,6 +30,12 @@ export const CLAUDE_MODELS = [
   { provider: "zai-local", model: "glm-4.5", label: "GLM 4.5 (z.ai via key-proxy)" },
 ];
 
+/* the picker list follows the live z.ai catalog (anthropic-compatible route) */
+let liveClaudeModels: typeof CLAUDE_MODELS | null = null;
+export function setClaudeModels(models: typeof CLAUDE_MODELS) {
+  if (models.length) liveClaudeModels = models;
+}
+
 interface ClaudeContent {
   type: string;
   text?: string;
@@ -152,7 +158,7 @@ export const claudeAdapter: HarnessAdapter = {
   capabilities: { permissions: true, subagents: true, streaming: true, queueWhileRunning: false },
 
   async listModels() {
-    return CLAUDE_MODELS;
+    return liveClaudeModels ?? CLAUDE_MODELS;
   },
 
   async spawn(opts: SessionOpts): Promise<ClaudeHandle> {

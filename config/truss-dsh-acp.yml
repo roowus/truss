@@ -28,9 +28,84 @@
         baseURL: http://127.0.0.1:45820/inference/v1
         displayName: Fireworks
         models:
-          - id: accounts/fireworks/models/kimi-k3
-            name: Kimi K3
+          - id: accounts/fireworks/models/deepseek-v4-flash-0731
+            name: "Deepseek V4 Flash 0731"
+            input: [text]
+          - id: accounts/fireworks/models/deepseek-v4-flash-vision-exp
+            name: "Deepseek V4 Flash Vision Exp"
+            input: [text]
+          - id: accounts/fireworks/models/deepseek-v4-pro
+            name: "Deepseek V4 Pro"
+            input: [text]
+          - id: accounts/fireworks/models/deepseek-v4-pro-0813
+            name: "Deepseek V4 Pro 0813"
+            input: [text]
+          - id: accounts/fireworks/models/deepseek-v4p1-flash
+            name: "Deepseek V4p1 Flash"
+            input: [text]
+          - id: accounts/fireworks/models/ember-1
+            name: "Ember 1"
+            input: [text]
+          - id: accounts/fireworks/models/glm-5p2
+            name: "Glm 5p2"
             input: [text]
           - id: accounts/fireworks/models/glm-5p3
-            name: GLM 5.3
+            name: "Glm 5p3"
+            input: [text]
+          - id: accounts/fireworks/models/glm-5p3-flash
+            name: "Glm 5p3 Flash"
+            input: [text]
+          - id: accounts/fireworks/models/gpt-oss-120b
+            name: "Gpt Oss 120b"
+            input: [text]
+          - id: accounts/fireworks/models/inkling
+            name: "Inkling"
+            input: [text]
+          - id: accounts/fireworks/models/kimi-k2p6
+            name: "Kimi K2p6"
+            input: [text]
+          - id: accounts/fireworks/models/kimi-k2p7-code
+            name: "Kimi K2p7 Code"
+            input: [text]
+          - id: accounts/fireworks/models/kimi-k3
+            name: "Kimi K3"
+            input: [text]
+          - id: accounts/fireworks/models/minimax-m2p7
+            name: "Minimax M2p7"
+            input: [text]
+          - id: accounts/fireworks/models/minimax-m3
+            name: "Minimax M3"
+            input: [text]
+          - id: accounts/fireworks/models/muse-glimmer-30b
+            name: "Muse Glimmer 30b"
+            input: [text]
+          - id: accounts/fireworks/models/nemotron-3-ultra-nvfp4
+            name: "Nemotron 3 Ultra Nvfp4"
+            input: [text]
+          - id: accounts/fireworks/models/nemotron-lightning-3p5-30b-a3b
+            name: "Nemotron Lightning 3p5 30b A3b"
+            input: [text]
+          - id: accounts/fireworks/models/qwen3-embedding-8b
+            name: "Qwen3 Embedding 8b"
+            input: [text]
+          - id: accounts/fireworks/models/qwen3-reranker-8b
+            name: "Qwen3 Reranker 8b"
+            input: [text]
+          - id: accounts/fireworks/models/qwen3p7-plus
+            name: "Qwen3p7 Plus"
+            input: [text]
+          - id: accounts/fireworks/models/qwen3p8-2p4t-a95b
+            name: "Qwen3p8 2p4t A95b"
+            input: [text]
+          - id: accounts/fireworks/models/qwen3p8-max
+            name: "Qwen3p8 Max"
+            input: [text]
+          - id: accounts/fireworks/routers/glm-5p2-fast
+            name: "Glm 5p2 Fast"
+            input: [text]
+          - id: accounts/fireworks/routers/glm-5p3-fast
+            name: "Glm 5p3 Fast"
+            input: [text]
+          - id: accounts/fireworks/routers/kimi-k3-fast
+            name: "Kimi K3 Fast"
             input: [text]
