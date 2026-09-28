@@ -91,6 +91,33 @@ export function SettingsPanel() {
           )}
         </section>
 
+        <section className="mt-8">
+          <SectionTitle>Feed</SectionTitle>
+          <p className="text-[12px] text-[var(--t-mute)] leading-relaxed mb-1">
+            Which system events post a card to your inbox. Agents can always post explicitly (post_feed) regardless.
+          </p>
+          {([
+            ["permissions", "Decisions", "A session pauses on a permission request"],
+            ["workDone", "Work finished", "A running turn settles (one card per turn)"],
+            ["taskRuns", "Task-board runs", "A Tasks-board run finishes"],
+            ["errors", "Errors", "A harness crashes"],
+            ["context", "Context pressure", "A session crosses 85% of its window"],
+          ] as const).map(([key, label, desc]) => (
+            <Row key={key} label={label} description={desc}>
+              <button
+                role="switch"
+                aria-checked={settings.feedSources[key]}
+                onClick={() => change("feedSources", { ...settings.feedSources, [key]: !settings.feedSources[key] })}
+                className={cn("w-8 h-4.5 rounded-full relative transition-colors h-[18px]", settings.feedSources[key] ? "bg-[var(--t-teal)]/70" : "bg-[var(--t-line2)]")}
+              >
+                <span className={cn("absolute top-0.5 w-3.5 h-3.5 rounded-full bg-white transition-all", settings.feedSources[key] ? "left-4" : "left-0.5")} />
+              </button>
+            </Row>
+          ))}
+        </section>
+
+        <PracticesSection />
+
         <div className="mt-9 pt-4 border-t border-[var(--t-line)] text-[11.5px] text-[var(--t-dim)] leading-relaxed">
           {mode === "demo" ? "Demo mode: preferences persist in this browser." : "Preferences and workspace layouts are saved on this Truss server via /api/layout."} Harness and remote node-agent configuration isn't writable through the current API.
         </div>
@@ -101,6 +128,55 @@ export function SettingsPanel() {
 
 function SectionTitle({ children }: { children: React.ReactNode }) {
   return <h2 className="text-[11px] uppercase tracking-[0.1em] font-medium text-[var(--t-dim)] mb-1">{children}</h2>;
+}
+
+/** TRUSS.md — the global practices file (coding + posting). Folder/project
+    layers are plain TRUSS.md files, editable in the Files panel. */
+function PracticesSection() {
+  const be = useApp((s) => s.backend);
+  const focus = useApp((s) => (s.focused ? s.sessions[s.focused] : undefined));
+  const [text, setText] = useState<string | null>(null);
+  const [dirty, setDirty] = useState(false);
+  const [layers, setLayers] = useState<{ path: string; scope: string }[]>([]);
+  const [status, setStatus] = useState<"" | "saved" | "error">("");
+
+  useEffect(() => {
+    be?.practices().then((r) => setText(r.text)).catch(() => setText(""));
+  }, [be]);
+  useEffect(() => {
+    if (!be || !focus) return;
+    be.composePractices(focus.cwd, focus.project).then((r) => setLayers(r.layers.map((l) => ({ path: l.path, scope: l.scope })))).catch(() => {});
+  }, [be, focus?.id]);
+
+  if (text === null) return null;
+  return (
+    <section className="mt-8">
+      <SectionTitle>Practices — TRUSS.md</SectionTitle>
+      <p className="text-[12px] text-[var(--t-mute)] leading-relaxed mb-2">
+        House rules for every harness Truss hosts — coding practices AND posting practices (when to file todos, post reports, how to prioritize). Layers: <span className="font-mono">~/.truss/TRUSS.md</span> (this file) → <span className="font-mono">~/.truss/projects/&lt;project&gt;.md</span> → any <span className="font-mono">TRUSS.md</span> in the session's folder chain (edit those in a Files tab).
+      </p>
+      <textarea
+        value={text}
+        onChange={(e) => { setText(e.target.value); setDirty(true); setStatus(""); }}
+        spellCheck={false}
+        rows={10}
+        className="t-input w-full resize-y font-mono text-[11.5px] leading-relaxed"
+        aria-label="Global TRUSS.md"
+      />
+      <div className="flex items-center gap-2 mt-2">
+        <Btn size="xs" variant="amber" disabled={!dirty} onClick={() => {
+          void be?.savePractices(text).then(() => { setDirty(false); setStatus("saved"); }).catch(() => setStatus("error"));
+        }}>Save practices</Btn>
+        {status === "saved" && <span className="text-[11px] text-[var(--t-teal)]">Saved — agents see it on their next tool call.</span>}
+        {status === "error" && <span className="text-[11px] text-[var(--t-red)]">Save failed.</span>}
+      </div>
+      {layers.length > 0 && (
+        <p className="mt-2 text-[11px] text-[var(--t-dim)] leading-relaxed">
+          Active layers for <span className="font-mono">{focus?.title}</span>: {layers.map((l) => `${l.scope} ${l.path.replace(/^\/home\/[^/]+/, "~")}`).join(" → ")}
+        </p>
+      )}
+    </section>
+  );
 }
 
 function Row({ label, description, children }: { label: string; description: string; children: React.ReactNode }) {

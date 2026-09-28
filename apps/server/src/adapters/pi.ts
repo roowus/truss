@@ -444,6 +444,8 @@ function handleRecord(h: PiHandle, rec: PiRecord, emit: (ev: ProtoEvent) => void
           tokensIn: u?.input,
           tokensOut: u?.output,
           costUsd: u?.cost?.total,
+          cacheRead: u?.cacheRead,
+          cacheWrite: u?.cacheWrite,
           retryOf,
         });
         h.retryOf.delete(h.currentCallId);

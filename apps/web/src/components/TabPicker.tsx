@@ -8,7 +8,8 @@ import { HarnessMark, Icon } from "./ui";
 
 const ICONS: Record<string, string> = {
   chat: "chat", trajectory: "wave", context: "gauge", team: "tree",
-  skills: "spark", terminal: "term", host: "host", settings: "settings", welcome: "layout",
+  skills: "spark", files: "folder", git: "tree", tasks: "check", todos: "check", feed: "bolt",
+  terminal: "term", host: "host", settings: "settings", welcome: "layout",
 };
 
 interface Props {
@@ -58,7 +59,7 @@ export function TabPicker({ anchor, spaceId, groupId, onClose }: Props) {
   ).slice(0, 10), [spaceId, spaces, sessions, query]);
 
   const run = (fn: () => void) => { onClose(); fn(); };
-  const panel = (kind: "chat" | "trajectory" | "context" | "team" | "skills") =>
+  const panel = (kind: "chat" | "trajectory" | "context" | "team" | "skills" | "files" | "git" | "tasks") =>
     focusId && run(() => openPanel(kind, { sessionId: focusId, spaceId, groupId: targetGroupId, cwd: focus?.cwd }));
 
   return createPortal(
@@ -84,6 +85,12 @@ export function TabPicker({ anchor, spaceId, groupId, onClose }: Props) {
           {(!q || match("settings preferences")) && (
             <Row icon="settings" label="Settings" onClick={() => run(() => openPanel("settings", { spaceId, groupId: targetGroupId }))} />
           )}
+          {(!q || match("todos checklist tasks user")) && (
+            <Row icon="check" label="Todos" onClick={() => run(() => openPanel("todos", { spaceId, groupId: targetGroupId }))} />
+          )}
+          {(!q || match("feed inbox notifications reports")) && (
+            <Row icon="bolt" label="Feed" onClick={() => run(() => openPanel("feed", { spaceId, groupId: targetGroupId }))} />
+          )}
           {(!q || match("cost tokens ledger")) && (
             <Row icon="cost" label="Cost & tokens" onClick={() => run(() => openPanel("cost", { spaceId, groupId: targetGroupId }))} />
           )}
@@ -100,7 +107,7 @@ export function TabPicker({ anchor, spaceId, groupId, onClose }: Props) {
           {focus && (
             <>
               <Section>For {focus.title}</Section>
-              {(["chat", "trajectory", "context", "team", "skills"] as const).filter((kind) => match(kind)).map((kind) => (
+              {(["chat", "trajectory", "context", "team", "files", "git", "skills", "tasks"] as const).filter((kind) => match(kind === "git" ? "git changes branches graph" : kind === "files" ? "files browser workspace" : kind === "tasks" ? "tasks board kanban" : kind)).map((kind) => (
                 <Row key={kind} icon={ICONS[kind]} label={kind[0].toUpperCase() + kind.slice(1)} hint={focus.harness} onClick={() => panel(kind)} />
               ))}
             </>

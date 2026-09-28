@@ -15,6 +15,10 @@ import {
 import { closeTerminal, createTerminal, listTerminals } from "./terminal.js";
 import { listAgents } from "./remote.js";
 import { importDshSessions } from "./import-dsh.js";
+import { createTask, listTasks, runTask, updateTask } from "./tasks.js";
+import { agentUpdateTodo, createTodo, listTodos } from "./todos.js";
+import { listFeed, postFeed } from "./feed.js";
+import { composePractices, POSTING_GUIDE } from "./practices.js";
 
 /**
  * Truss management MCP server (Streamable HTTP, JSON responses).
@@ -216,11 +220,138 @@ const TOOLS = [
     description: "Import persisted DeepSeek Harness sessions (transcripts + resumable refs) into Truss.",
     inputSchema: { type: "object", properties: {} },
   },
+  {
+    name: "list_tasks",
+    description: "List task-board cards (id, title, prompt, cwd, harness, status, linked session).",
+    inputSchema: {
+      type: "object",
+      properties: { status: { type: "string", enum: ["todo", "doing", "done", "archived"], description: "filter by status" } },
+    },
+  },
+  {
+    name: "create_task",
+    description: "File a card on the Truss task board. Pin the harness + working directory; the prompt is what Run sends.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        title: { type: "string" },
+        prompt: { type: "string", description: "the prompt sent to the agent on Run" },
+        cwd: { type: "string", description: "working directory for the run" },
+        harness: { type: "string", description: "pi | dsh | claude-code | hermes" },
+      },
+      required: ["title", "cwd", "harness"],
+    },
+  },
+  {
+    name: "update_task",
+    description: "Patch a task card: title, prompt, or status (todo|doing|done|archived).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        id: { type: "string" },
+        title: { type: "string" },
+        prompt: { type: "string" },
+        status: { type: "string", enum: ["todo", "doing", "done", "archived"] },
+      },
+      required: ["id"],
+    },
+  },
+  {
+    name: "run_task",
+    description: "Run a task card: spawn its session (pinned harness + cwd) and send the prompt. Returns the new session id.",
+    inputSchema: { type: "object", properties: { id: { type: "string" } }, required: ["id"] },
+  },
+  {
+    name: "file_todo",
+    description:
+      "File a task FOR THE USER (they complete it): things to verify, decisions only they can make, chores with deadlines. " +
+      "Owned by your session — you may later update/complete/drop it. Posts a linked card to the user's feed unless postToFeed:false.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        title: { type: "string" },
+        notes: { type: "string", description: "markdown details: what to check, where, why" },
+        priority: { type: "string", enum: ["low", "normal", "high", "urgent"] },
+        deadline: { type: "number", description: "epoch ms, optional" },
+        estimate: { type: "string", description: "your effort guess for the user, e.g. '2m', 'S', 'M'" },
+        labels: { type: "array", items: { type: "string" } },
+        subtasks: { type: "array", items: { type: "object", properties: { id: { type: "string" }, text: { type: "string" }, done: { type: "boolean" } } } },
+        meta: { type: "object", description: "free-form fields you deem useful (the user's TRUSS.md may define conventions)" },
+        postToFeed: { type: "boolean", description: "default true" },
+      },
+      required: ["title"],
+    },
+  },
+  {
+    name: "list_todos",
+    description: "List todos. Defaults to YOUR session's todos; mine:false lists everything.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        mine: { type: "boolean" },
+        status: { type: "string", enum: ["open", "done", "dropped"] },
+      },
+    },
+  },
+  {
+    name: "update_todo",
+    description:
+      "Edit one of YOUR OWN session's todos (title/notes/priority/deadline/labels/subtasks/meta/status). " +
+      "Editing another session's todo asks the user first (per-task approval card) and returns a pending marker.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        id: { type: "string" },
+        title: { type: "string" },
+        notes: { type: "string" },
+        priority: { type: "string", enum: ["low", "normal", "high", "urgent"] },
+        deadline: { type: "number" },
+        estimate: { type: "string" },
+        labels: { type: "array", items: { type: "string" } },
+        subtasks: { type: "array", items: { type: "object" } },
+        meta: { type: "object" },
+        status: { type: "string", enum: ["open", "done", "dropped"] },
+      },
+      required: ["id"],
+    },
+  },
+  {
+    name: "complete_todo",
+    description: "Mark one of YOUR OWN todos done (or status:'dropped' when no longer necessary). Same ownership rules as update_todo.",
+    inputSchema: {
+      type: "object",
+      properties: { id: { type: "string" }, status: { type: "string", enum: ["done", "dropped"] } },
+      required: ["id"],
+    },
+  },
+  {
+    name: "post_feed",
+    description:
+      "Post a card to the user's feed (their inbox). Use type 'report' for finished research/analysis, 'note' for heads-ups. " +
+      "Keep titles one line; put the substance in markdown body. Set sharedWith to expose the card to other session ids.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        type: { type: "string", enum: ["report", "note"] },
+        title: { type: "string" },
+        body: { type: "string" },
+        importance: { type: "string", enum: ["low", "normal", "high", "urgent"] },
+        data: { type: "object" },
+        sharedWith: { type: "array", items: { type: "string" } },
+      },
+      required: ["title"],
+    },
+  },
+  {
+    name: "list_feed",
+    description: "Feed cards shared to YOUR session (the user shared them from their inbox).",
+    inputSchema: { type: "object", properties: {} },
+  },
 ];
 
 /* ── handlers ── */
 
-async function callTool(name: string, a: Record<string, any>): Promise<unknown> {
+async function callTool(name: string, a: Record<string, any>, callerId?: string): Promise<unknown> {
   switch (name) {
     case "list_sessions": {
       let rows = store.listSessions();
@@ -339,6 +470,82 @@ async function callTool(name: string, a: Record<string, any>): Promise<unknown> 
     }
     case "run_import_dsh":
       return importDshSessions();
+    case "list_tasks": {
+      const rows = listTasks();
+      return a.status ? rows.filter((t) => t.status === a.status) : rows;
+    }
+    case "create_task":
+      return createTask({
+        title: String(a.title ?? ""),
+        prompt: String(a.prompt ?? ""),
+        cwd: String(a.cwd ?? ""),
+        harness: String(a.harness ?? ""),
+      });
+    case "update_task":
+      return updateTask(String(a.id), { title: a.title, prompt: a.prompt, status: a.status });
+    case "run_task": {
+      const { session } = await runTask(String(a.id));
+      return { sessionId: session.id, title: session.title, harness: session.harness, cwd: session.cwd };
+    }
+    /* ── todos (user-facing tasks; ownership enforced) ── */
+    case "file_todo": {
+      if (!callerId) throw new Error("unscoped MCP connection — respawn the session");
+      const todo = createTodo({
+        title: String(a.title ?? ""),
+        notes: a.notes ? String(a.notes) : undefined,
+        priority: a.priority,
+        deadline: a.deadline == null ? null : Number(a.deadline),
+        estimate: a.estimate ? String(a.estimate) : null,
+        labels: Array.isArray(a.labels) ? a.labels.map(String) : undefined,
+        subtasks: Array.isArray(a.subtasks) ? a.subtasks : undefined,
+        meta: a.meta && typeof a.meta === "object" ? a.meta : undefined,
+        sessionId: callerId,
+        createdBy: "agent",
+        postToFeed: a.postToFeed !== false,
+      });
+      return todo;
+    }
+    case "list_todos": {
+      let rows = listTodos();
+      if (a.mine !== false && callerId) rows = rows.filter((t) => t.sessionId === callerId);
+      if (a.status) rows = rows.filter((t) => t.status === a.status);
+      return rows;
+    }
+    case "update_todo":
+    case "complete_todo": {
+      if (!callerId) throw new Error("unscoped MCP connection — respawn the session");
+      const patch = name === "complete_todo" ? { status: a.status === "dropped" ? "dropped" : "done" } : {
+        title: a.title, notes: a.notes, priority: a.priority,
+        deadline: a.deadline === undefined ? undefined : a.deadline,
+        estimate: a.estimate, labels: a.labels, subtasks: a.subtasks, meta: a.meta,
+        status: a.status,
+      };
+      const r = agentUpdateTodo(callerId, String(a.id), patch as never);
+      if (!r.ok) {
+        if (r.reason === "not_found") throw new Error(`no such todo: ${a.id}`);
+        if (r.reason === "denied") throw new Error("the user denied this session access to that task");
+        return { pending: "approval requested — the user got a card; retry after they approve" };
+      }
+      return r.todo;
+    }
+    /* ── feed (the user's inbox; agents post reports, read shared posts) ── */
+    case "post_feed": {
+      if (!callerId) throw new Error("unscoped MCP connection — respawn the session");
+      const { item } = postFeed({
+        type: (a.type as never) ?? "report",
+        title: String(a.title ?? ""),
+        body: a.body ? String(a.body) : undefined,
+        sessionId: callerId,
+        importance: a.importance,
+        data: a.data && typeof a.data === "object" ? a.data : undefined,
+        sharedWith: Array.isArray(a.sharedWith) ? a.sharedWith.map(String) : undefined,
+      });
+      return item;
+    }
+    case "list_feed": {
+      if (!callerId) throw new Error("unscoped MCP connection — respawn the session");
+      return listFeed({ sharedWith: callerId });
+    }
     default:
       throw new Error(`unknown tool: ${name}`);
   }
@@ -347,7 +554,8 @@ async function callTool(name: string, a: Record<string, any>): Promise<unknown> 
 /* ── the JSON-RPC route ── */
 
 export function registerMcpTruss(app: FastifyInstance) {
-  app.post("/mcp/truss", async (req, reply) => {
+  const handler = async (req: any, reply: any) => {
+    const callerId = (req.params as { sessionId?: string }).sessionId;
     const rpc = req.body as { id?: string | number; method: string; params?: Record<string, any> };
     reply.header("Content-Type", "application/json");
 
@@ -359,12 +567,22 @@ export function registerMcpTruss(app: FastifyInstance) {
     });
 
     switch (rpc.method) {
-      case "initialize":
+      case "initialize": {
+        /* practices ride as MCP server instructions: the caller's global +
+           project + folder TRUSS.md layers, plus the posting guide */
+        let instructions = POSTING_GUIDE;
+        if (callerId) {
+          const s = store.getSession(callerId);
+          const { composed } = composePractices(s?.cwd, s?.project);
+          if (composed.trim()) instructions = `${composed}\n\n---\n\n${POSTING_GUIDE}`;
+        }
         return respond({
           protocolVersion: PROTOCOL_VERSION,
           capabilities: { tools: {} },
           serverInfo: { name: "truss", version: "0.1.0" },
+          instructions,
         });
+      }
       case "notifications/initialized":
       case "initialized":
         return reply.code(202).send();
@@ -374,7 +592,7 @@ export function registerMcpTruss(app: FastifyInstance) {
         const p = rpc.params as { name?: string; arguments?: Record<string, any> };
         if (!p?.name) return fail(-32602, "tool name required");
         try {
-          const result = await callTool(p.name, p.arguments ?? {});
+          const result = await callTool(p.name, p.arguments ?? {}, callerId);
           return respond({ content: [{ type: "text", text: JSON.stringify(result, null, 2) }] });
         } catch (err) {
           return respond({
@@ -389,7 +607,11 @@ export function registerMcpTruss(app: FastifyInstance) {
         if (rpc.id == null) return reply.code(202).send();
         return fail(-32601, `method not found: ${rpc.method}`);
     }
-  });
+  };
+
+  app.post("/mcp/truss", handler);
+  /* per-session URL: callers are identified so todo ownership holds */
+  app.post("/mcp/truss/:sessionId", handler);
 
   app.get("/mcp/truss", async (_req, reply) =>
     reply.code(405).header("Allow", "POST").send({ error: "listen stream not supported" }),

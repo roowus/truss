@@ -5,7 +5,7 @@
   "identifier": "com.truss.app",
   "build": {
     "frontendDist": "../dist-placeholder",
-    "devUrl": "https://truss.rewis"
+    "devUrl": "http://127.0.0.1:4040"
   },
   "app": {
     "windows": [],

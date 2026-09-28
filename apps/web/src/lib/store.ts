@@ -3,12 +3,14 @@ import type { Backend, ConnStatus } from "./backend";
 import type {
   AgentInfo,
   CreateSessionBody,
+  FeedItem,
   Frame,
   HarnessInfo,
   ModelInfo,
   ProtoEvent,
   SessionMeta,
   TerminalInfo,
+  TodoItem,
 } from "./proto";
 
 export const toMs = (at: string | number | undefined): number => {
@@ -25,7 +27,8 @@ export interface ToolRun { id: string; name: string; args: unknown; callId?: str
 export interface Perm { requestId: string; tool: string; reason: string; options: string[]; choice?: string; at: number }
 export interface Call {
   callId: string; model: string; at: number; index: number; done: boolean;
-  status?: number; latencyMs?: number; tokensIn?: number; tokensOut?: number; costUsd?: number; retryOf?: string;
+  status?: number; latencyMs?: number; tokensIn?: number; tokensOut?: number; costUsd?: number;
+  cacheRead?: number; cacheWrite?: number; retryOf?: string;
   tools: string[];
 }
 export interface Agent { agentId: string; label: string; parent?: string; done: boolean; ok?: boolean; at: number; endedAt?: number }
@@ -71,6 +74,10 @@ export interface AppState {
   views: Record<string, SessionView>;
   stateSince: Record<string, number>;
   terminals: TerminalInfo[];
+  todos: Record<string, TodoItem>;
+  todosLoaded: boolean;
+  feed: Record<string, FeedItem>;
+  feedLoaded: boolean;
   toasts: Toast[];
   focused?: string;
   bootError?: string;
@@ -167,7 +174,7 @@ function reduce(v: SessionView, ev: ProtoEvent, frameTime: number): SessionView 
         ...v,
         calls: {
           ...v.calls,
-          [c.callId]: { ...c, done: true, status: ev.status, latencyMs: ev.latencyMs, tokensIn: ev.tokensIn, tokensOut: ev.tokensOut, costUsd: ev.costUsd, retryOf: ev.retryOf },
+          [c.callId]: { ...c, done: true, status: ev.status, latencyMs: ev.latencyMs, tokensIn: ev.tokensIn, tokensOut: ev.tokensOut, costUsd: ev.costUsd, cacheRead: ev.cacheRead, cacheWrite: ev.cacheWrite, retryOf: ev.retryOf },
         },
       };
     }
@@ -212,6 +219,10 @@ class Store {
     views: {},
     stateSince: {},
     terminals: [],
+    todos: {},
+    todosLoaded: false,
+    feed: {},
+    feedLoaded: false,
     toasts: [],
   };
   private subs = new Set<() => void>();
@@ -257,6 +268,8 @@ class Store {
       this.refreshAgents(),
       this.refreshSessions(),
       this.refreshTerminals(),
+      this.refreshTodos(),
+      this.refreshFeed(),
     ]);
     // Active sessions may have pending permission cards — hydrate them eagerly.
     for (const id of this.state.order) {
@@ -266,9 +279,13 @@ class Store {
   }
 
   private onConn(s: ConnStatus) {
-    const wasDown = this.state.conn.kind === "closed";
-    this.set({ conn: s, everConnected: this.state.everConnected || s.kind === "open" });
-    if (s.kind === "open" && wasDown) {
+    /* "connecting" follows every "closed" in the reconnect cycle, so checking
+       only for "closed" here made the resync dead code. The first-ever
+       connect is excluded via everConnected (the boot fetch already ran). */
+    const wasDown = this.state.conn.kind === "closed" || this.state.conn.kind === "connecting";
+    const wasEverUp = this.state.everConnected;
+    this.set({ conn: s, everConnected: wasEverUp || s.kind === "open" });
+    if (s.kind === "open" && wasDown && wasEverUp) {
       this.toast("ok", "Event bus reconnected", "Resyncing sessions — events missed while offline are being replayed.");
       void this.resync();
     }
@@ -278,6 +295,7 @@ class Store {
     await this.refreshSessions();
     await this.refreshTerminals();
     await this.refreshAgents();
+    await Promise.all([this.refreshTodos(), this.refreshFeed()]);
     for (const id of Object.keys(this.state.views)) {
       if (this.state.sessions[id]) void this.rehydrate(id);
     }
@@ -372,7 +390,32 @@ class Store {
 
   private onFrame(f: Frame) {
     const ev = f.ev;
+    /* global channels: todos + feed upserts (not tied to a session view) */
+    if (ev.type === "todo.upsert") {
+      this.set((s) => ({ todos: { ...s.todos, [ev.todo.id]: ev.todo } }));
+      return;
+    }
+    if (ev.type === "feed.upsert") {
+      const isNew = !this.state.feed[ev.item.id];
+      this.set((s) => ({ feed: { ...s.feed, [ev.item.id]: ev.item } }));
+      if (isNew && ev.item.state === "unread" && ev.item.importance !== "low") {
+        this.toast("info", ev.item.type === "permission" ? "Decision needed" : "Feed", ev.item.title);
+      }
+      return;
+    }
     const id = ev.sessionId;
+    /* deleted on any device → gone here too, instantly (row + cached view) */
+    if (ev.type === "session.deleted") {
+      this.set((s) => {
+        const sessions = { ...s.sessions };
+        const views = { ...s.views };
+        delete sessions[id];
+        delete views[id];
+        delete this.buffers[id];
+        return { sessions, views, order: s.order.filter((x) => x !== id) };
+      });
+      return;
+    }
     if (ev.type === "session.created" && !this.state.sessions[id]) this.refreshSessionsSoon();
 
     /* metadata changes (archive/retitle/regroup) patch the row in place */
@@ -503,6 +546,30 @@ class Store {
       this.toast("error", "Couldn't delete session", e.message);
     }
   }
+  async refreshTodos() {
+    if (!this.be) return;
+    try {
+      const { todos } = await this.be.todos();
+      const map: Record<string, TodoItem> = {};
+      for (const t of todos) map[t.id] = t;
+      this.set({ todos: map, todosLoaded: true });
+    } catch (e: any) {
+      this.toast("error", "Couldn't load todos", e?.message ?? String(e));
+    }
+  }
+
+  async refreshFeed() {
+    if (!this.be) return;
+    try {
+      const { items } = await this.be.feed();
+      const map: Record<string, FeedItem> = {};
+      for (const it of items) map[it.id] = it;
+      this.set({ feed: map, feedLoaded: true });
+    } catch (e: any) {
+      this.toast("error", "Couldn't load the feed", e?.message ?? String(e));
+    }
+  }
+
   async refreshTerminals() {
     try {
       const { terminals } = await this.be.listTerminals();

@@ -18,12 +18,22 @@ export interface HostPreference {
   preferredAdapter: string;
 }
 
+export interface FeedSourceSettings {
+  permissions: boolean;
+  workDone: boolean;
+  taskRuns: boolean;
+  errors: boolean;
+  context: boolean;
+}
+
 export interface UiSettings {
   density: "comfortable" | "compact";
   openMode: "chat" | "daily";
   terminalFontSize: number;
   defaultCwd: string;
   groupMode: "project" | "folder";
+  /** which system events auto-post to the feed (read server-side too) */
+  feedSources: FeedSourceSettings;
 }
 
 interface DesktopState {
@@ -49,6 +59,7 @@ const defaultSettings: UiSettings = {
   terminalFontSize: 13,
   defaultCwd: "",
   groupMode: "project",
+  feedSources: { permissions: true, workDone: true, taskRuns: true, errors: true, context: true },
 };
 
 function freshState(): DesktopState {
@@ -89,6 +100,13 @@ function parseSaved(raw: string): DesktopState {
       terminalFontSize: [11, 12, 13, 14, 16].includes(cfg.terminalFontSize) ? cfg.terminalFontSize : 13,
       defaultCwd: typeof cfg.defaultCwd === "string" ? cfg.defaultCwd : "",
       groupMode: cfg.groupMode === "folder" ? "folder" : "project",
+      feedSources: {
+        permissions: cfg.feedSources?.permissions !== false,
+        workDone: cfg.feedSources?.workDone !== false,
+        taskRuns: cfg.feedSources?.taskRuns !== false,
+        errors: cfg.feedSources?.errors !== false,
+        context: cfg.feedSources?.context !== false,
+      },
     },
     saveStatus: "idle",
   };

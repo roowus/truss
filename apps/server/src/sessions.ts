@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { HarnessId, ProtoEvent } from "@truss/proto";
 import { store } from "./db.js";
+import { composePractices } from "./practices.js";
 import { piAdapter } from "./adapters/pi.js";
 import { dshAdapter } from "./adapters/dsh.js";
 import { claudeAdapter } from "./adapters/claude.js";
@@ -41,6 +42,20 @@ export function setBroadcaster(fn: (f: EventFrame) => void) {
   broadcastFn = fn;
 }
 
+/** broadcast a non-persisted frame (feed/todo upserts live in their own tables) */
+export function broadcastRaw(ev: ProtoEvent) {
+  broadcastFn({ seq: 0, ev });
+}
+
+/* side-channel subscribers (the feed's auto-posters) — see every event after
+   persistence, never block the bus */
+type EventListener = (ev: ProtoEvent) => void;
+const listeners = new Set<EventListener>();
+export function onEvent(fn: EventListener) {
+  listeners.add(fn);
+  return () => listeners.delete(fn);
+}
+
 /** Persist + fan out one event. The single sink every adapter event flows through. */
 function sink(ev: ProtoEvent) {
   let seq = 0;
@@ -53,6 +68,13 @@ function sink(ev: ProtoEvent) {
     store.setSessionState(ev.sessionId, ev.state);
   }
   broadcastFn({ seq, ev });
+  for (const fn of listeners) {
+    try {
+      fn(ev);
+    } catch (err) {
+      console.error("event listener failed", err);
+    }
+  }
 }
 
 /**
@@ -196,8 +218,26 @@ export async function sendPrompt(sessionId: string, text: string) {
     const title = text.replace(/\s+/g, " ").trim().slice(0, 48);
     if (title) store.setSessionTitle(sessionId, title);
   }
-  s!.adapter.send(s!.handle, text);
+  /* practices for harnesses without MCP (pi): TRUSS.md layers + the posting
+     guide ride the first prompt of the session, marked and collapsible */
+  let outbound = text;
+  if (row && !MCP_ATTACHED.has(baseOf(row.harness)) && !firstPromptDone.has(sessionId)) {
+    const { composed } = composePractices(row.cwd, row.project);
+    if (composed.trim()) {
+      outbound = `[truss practices — follow these; they're the user's house rules]\n${composed}\n\n${POSTING_GUIDE_PI}\n[/truss practices]\n\n${text}`;
+    }
+    firstPromptDone.add(sessionId);
+  }
+  s!.adapter.send(s!.handle, outbound);
 }
+
+/* harnesses whose adapters attach the per-session truss MCP server (they get
+   practices via the server's instructions field instead) */
+const MCP_ATTACHED = new Set(["claude-code", "dsh", "hermes"]);
+const firstPromptDone = new Set<string>();
+const baseOf = (harness: string) => harness.split("@")[0];
+const POSTING_GUIDE_PI = `This host has no tool bus, so act on the practices directly and keep the user's task board honest in plain text.`;
+
 
 export function interrupt(sessionId: string) {
   const s = live.get(sessionId);
@@ -244,10 +284,12 @@ export function setProjectArchived(project: string, archived: boolean): number {
 export function deleteSession(sessionId: string) {
   closeSession(sessionId);
   store.deleteSession(sessionId);
-  /* clients drop it from the sidebar — state event with a tombstone */
+  /* every connected client drops it from the sidebar immediately. The event
+     can't be persisted (the FK cascade removes the log with the row), so
+     offline clients catch up via the reconnect resync's session refetch. */
   broadcastFn({
     seq: 0,
-    ev: { type: "session.state", sessionId, state: "closed", detail: "deleted" },
+    ev: { type: "session.deleted", sessionId },
   });
 }
 

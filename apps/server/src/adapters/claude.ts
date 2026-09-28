@@ -68,7 +68,7 @@ interface ClaudeEvent {
   total_cost_usd?: number;
   num_turns?: number;
   duration_ms?: number;
-  usage?: { input_tokens?: number; output_tokens?: number };
+  usage?: { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number };
 }
 
 interface ClaudeHandle extends AdapterHandle {
@@ -167,7 +167,7 @@ export const claudeAdapter: HarnessAdapter = {
       mcpServers: {
         truss_perms: { type: "http", url: `${MCP_BASE}/mcp/perm/${opts.sessionId}` },
         /* agents can run the app itself: rename/archive/spawn/prompt/layout */
-        truss: { type: "http", url: `${MCP_BASE}/mcp/truss` },
+        truss: { type: "http", url: `${MCP_BASE}/mcp/truss/${opts.sessionId}` },
       },
     });
 
@@ -486,6 +486,8 @@ function handleEvent(h: ClaudeHandle, rec: ClaudeEvent, emit: (ev: ProtoEvent) =
           tokensIn: rec.usage?.input_tokens,
           tokensOut: rec.usage?.output_tokens,
           costUsd: rec.total_cost_usd,
+          cacheRead: rec.usage?.cache_read_input_tokens,
+          cacheWrite: rec.usage?.cache_creation_input_tokens,
         });
         h.turnCallId = null;
       }

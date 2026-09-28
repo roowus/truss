@@ -15,15 +15,19 @@ import {
   type AcpUpdate,
 } from "./acp.js";
 
-/** the truss management MCP server, attached to every new session */
-const TRUSS_MCP = [
-  {
-    type: "http",
-    name: "truss",
-    url: (process.env.TRUSS_MCP_BASE ?? "http://127.0.0.1:4040") + "/mcp/truss",
-    headers: [], // required by the ACP schema (hermes validates strictly)
-  },
-];
+/** the truss management MCP server, attached to every new session; the URL
+    carries Truss's own session id so tool calls are attributed (todo
+    ownership, feed authorship) */
+function trussMcp(trussSessionId: string) {
+  return [
+    {
+      type: "http",
+      name: "truss",
+      url: (process.env.TRUSS_MCP_BASE ?? "http://127.0.0.1:4040") + `/mcp/truss/${trussSessionId}`,
+      headers: [], // required by the ACP schema (hermes validates strictly)
+    },
+  ];
+}
 
 /**
  * DeepSeek Harness adapter — ACP (JSON-RPC 2.0, NDJSON over stdio).
@@ -147,7 +151,7 @@ export const dshAdapter: HarnessAdapter = {
         mcpServers: [],
       });
     } else {
-      res = (await client.call("session/new", { cwd: resolveCwd(opts.cwd).cwd, mcpServers: TRUSS_MCP })) as {
+      res = (await client.call("session/new", { cwd: resolveCwd(opts.cwd).cwd, mcpServers: trussMcp(opts.sessionId) })) as {
         sessionId: string;
         configOptions?: AcpConfigOption[];
       };

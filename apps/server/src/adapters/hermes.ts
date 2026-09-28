@@ -15,14 +15,16 @@ import {
 } from "./acp.js";
 
 /** the truss management MCP server, attached to every new session */
-const TRUSS_MCP = [
-  {
-    type: "http",
-    name: "truss",
-    url: (process.env.TRUSS_MCP_BASE ?? "http://127.0.0.1:4040") + "/mcp/truss",
-    headers: [], // required by the ACP schema (hermes validates strictly)
-  },
-];
+function trussMcp(trussSessionId: string) {
+  return [
+    {
+      type: "http",
+      name: "truss",
+      url: (process.env.TRUSS_MCP_BASE ?? "http://127.0.0.1:4040") + `/mcp/truss/${trussSessionId}`,
+      headers: [], // required by the ACP schema (hermes validates strictly)
+    },
+  ];
+}
 
 /**
  * Hermes adapter — ACP via `hermes-acp` stdio server.
@@ -31,7 +33,7 @@ const TRUSS_MCP = [
  * committed message chunks, reports {used,size} usage_update, and its prompt
  * settlement carries real per-turn token usage (mapped onto llm.call.done).
  *
- * Model/provider config lives in ~/.hermes/config.yaml (on rewvis: the
+ * Model/provider config lives in ~/.hermes/config.yaml (the
  * custom:zai route through dsh-key-proxy); the session model can be switched
  * per session with session/set_config_option... hermes uses
  * session/set_model + model state from session/new.
@@ -97,7 +99,7 @@ export const hermesAdapter: HarnessAdapter = {
         mcpServers: [],
       });
     } else {
-      res = (await client.call("session/new", { cwd: resolveCwd(opts.cwd).cwd, mcpServers: TRUSS_MCP })) as {
+      res = (await client.call("session/new", { cwd: resolveCwd(opts.cwd).cwd, mcpServers: trussMcp(opts.sessionId) })) as {
         sessionId: string;
         models?: HermesModelState;
       };

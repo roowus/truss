@@ -108,6 +108,20 @@ const listEventsStmt = db.prepare(`
 `);
 
 export const store = {
+  /* generic helpers for feature tables (tasks, …) that keep their own modules */
+  exec(sql: string) {
+    db.exec(sql);
+  },
+  run(sql: string, ...params: unknown[]) {
+    return db.prepare(sql).run(...(params as never[]));
+  },
+  get<T>(sql: string, ...params: unknown[]): T | undefined {
+    return db.prepare(sql).get(...(params as never[])) as T | undefined;
+  },
+  all<T>(sql: string, ...params: unknown[]): T[] {
+    return db.prepare(sql).all(...(params as never[])) as T[];
+  },
+
   createSession(s: {
     id: string;
     harness: HarnessId;
@@ -223,6 +237,32 @@ export const store = {
   listEvents(sessionId: string): { seq: number; ev: ProtoEvent }[] {
     const rows = listEventsStmt.all(sessionId) as { id: number; payload: string }[];
     return rows.map((r) => ({ seq: r.id, ev: JSON.parse(r.payload) as ProtoEvent }));
+  },
+
+  /** per-day token/cost buckets for the heat grid + trend (local time, last `days`) */
+  costDaily(days = 35): {
+    day: string; // YYYY-MM-DD local
+    calls: number;
+    tokensIn: number;
+    tokensOut: number;
+    costUsd: number | null;
+  }[] {
+    const since = Date.now() - days * 86_400_000;
+    return db
+      .prepare(
+        `
+      SELECT date(e.at / 1000, 'unixepoch', 'localtime') AS day,
+             COUNT(*) AS calls,
+             COALESCE(SUM(json_extract(e.payload, '$.tokensIn')), 0) AS tokensIn,
+             COALESCE(SUM(json_extract(e.payload, '$.tokensOut')), 0) AS tokensOut,
+             SUM(json_extract(e.payload, '$.costUsd')) AS costUsd
+      FROM events e
+      WHERE e.type = 'llm.call.done' AND e.at >= ?
+      GROUP BY day
+      ORDER BY day ASC
+      `,
+      )
+      .all(since) as never;
   },
 
   /** per-session cost rollup from llm.call.done events (null cost = none reported) */

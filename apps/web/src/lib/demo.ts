@@ -51,7 +51,7 @@ const TOOLS: Record<string, { read: string; grep: string; shell: string; write: 
 };
 
 /* ---------------- virtual filesystem shared by tools and shells ---------------- */
-const HOME = "/home/rewis";
+const HOME = "/home/dev";
 const fs = new Map<string, string>();
 const dirs = new Set<string>(["/", "/home", HOME]);
 function mkdirp(p: string) {
@@ -185,7 +185,7 @@ class FakeShell {
   }
   prompt() {
     const short = this.info.cwd.startsWith(HOME) ? "~" + this.info.cwd.slice(HOME.length) : this.info.cwd;
-    this.write(`\x1b[38;5;215mrewis@truss\x1b[0m:\x1b[38;5;116m${short}\x1b[0m$ `);
+    this.write(`\x1b[38;5;215mdev@truss\x1b[0m:\x1b[38;5;116m${short}\x1b[0m$ `);
   }
   input(data: string) {
     if (!this.alive) return;
@@ -252,7 +252,7 @@ class FakeShell {
       case "echo": output = args.join(" ").replace(/^["']|["']$/g, ""); break;
       case "touch": writeFile(resolvePath(cwd, args[0] ?? "untitled"), ""); break;
       case "date": output = new Date().toString(); break;
-      case "whoami": output = "rewis"; break;
+      case "whoami": output = "dev"; break;
       case "uname": output = "Linux truss 6.8.0-truss #1 SMP x86_64 GNU/Linux"; break;
       case "stty": output = `${this.rows} ${this.cols}`; break;
       case "history": output = this.history.map((h, i) => `${String(i + 1).padStart(4)}  ${h}`).join("\n"); break;
@@ -566,7 +566,7 @@ export function createDemoBackend(): Backend {
     },
     async agents() {
       await net();
-      return { agents: [{ hostId: "atlas", hostname: "atlas.rewis", adapters: ["pi"] }] };
+      return { agents: [{ hostId: "atlas", hostname: "atlas", adapters: ["pi"] }] };
     },
     async listSessions() {
       await ready;
@@ -686,6 +686,50 @@ export function createDemoBackend(): Backend {
         base.unshift({ name: "sql-migrate", description: "Write reversible SQL migrations with a dry-run step.", source: `${cwd}/.agents/skills/sql-migrate`, scope: "project" });
       return { skills: base };
     },
+    /* Files panel demo: a tiny static tree, enough to click around */
+    async listFiles(_root, path, q) {
+      await net(60);
+      const all = [
+        { name: "src", path: "src", kind: "dir" as const, size: 0, mtime: Date.now() - 86400_000 },
+        { name: "README.md", path: "README.md", kind: "file" as const, size: 1902, mtime: Date.now() - 3600_000 },
+        { name: "package.json", path: "package.json", kind: "file" as const, size: 640, mtime: Date.now() - 7200_000 },
+        { name: "main.ts", path: "src/main.ts", kind: "file" as const, size: 412, mtime: Date.now() - 1800_000 },
+        { name: "util.ts", path: "src/util.ts", kind: "file" as const, size: 208, mtime: Date.now() - 900_000 },
+      ];
+      if (q) return { entries: all.filter((e) => e.name.toLowerCase().includes(q.toLowerCase())) };
+      const prefix = path && path !== "." ? `${path}/` : "";
+      return { entries: all.filter((e) => e.path.startsWith(prefix) && !e.path.slice(prefix.length).includes("/")) };
+    },
+    async readFile(_root, path) {
+      await net(60);
+      const name = path.split("/").pop() ?? path;
+      return { name, path, size: 64, mtime: Date.now(), kind: "text" as const, text: `// demo preview of ${name}\n// the live server reads the real file.\n` };
+    },
+    writeFile: async (_root, path) => ({ name: path.split("/").pop() ?? path, path, size: 0, mtime: Date.now(), kind: "text" as const, text: "" }),
+    createFile: async (_root, path, kind) => ({ name: path.split("/").pop() ?? path, path, kind, size: 0, mtime: Date.now() }),
+    toggleSkill: async () => ({ ok: true }),
+    createSkill: async () => ({ ok: true }),
+    deleteSkill: async () => ({ ok: true }),
+    gitStatus: async () => ({ isRepo: true, branch: "main", ahead: 1, changes: [{ path: "src/main.ts", x: "M", y: " " }] }),
+    gitBranches: async () => ({ branches: [{ name: "main", current: true, last: "demo commit", at: Date.now() - 3600_000 }] }),
+    gitGraph: async () => ({ graph: "* a1b2c3d (HEAD -> main) demo commit\n* e4f5g6h earlier work\n" }),
+    gitDiff: async (_cwd, path) => ({ diff: `--- a/${path}\n+++ b/${path}\n@@ -1,1 +1,2 @@\n // demo\n+// changed\n` }),
+    gitSwitch: async (_cwd, branch) => ({ branch }),
+    tasks: async () => ({ tasks: [] }),
+    createTask: async (b) => ({ task: { id: "demo-task", status: "todo" as const, createdAt: Date.now(), updatedAt: Date.now(), ...b } }),
+    updateTask: async () => ({ ok: true }),
+    deleteTask: async () => ({ ok: true }),
+    runTask: async () => { throw new Error("Demo mode can't run tasks — start the Truss server."); },
+    todos: async () => ({ todos: [] }),
+    createTodo: async (b: any) => ({ todo: { id: "demo-todo", notes: "", labels: [], subtasks: [], meta: {}, status: "open" as const, priority: "normal" as const, createdBy: "user" as const, sharedEditors: [], deniedEditors: [], createdAt: Date.now(), updatedAt: Date.now(), ...b } as never }),
+    updateTodo: async (_id: string, patch: any) => ({ todo: patch as never }),
+    resolveTodoAccess: async () => ({ todo: {} as never }),
+    feed: async () => ({ items: [] }),
+    setFeedState: async (_id: string, state: string) => ({ item: { state } as never }),
+    shareFeed: async (_id: string) => ({ item: {} as never }),
+    practices: async () => ({ text: "# Truss practices\n", path: "~/.truss/TRUSS.md" }),
+    savePractices: async () => ({ ok: true }),
+    composePractices: async () => ({ layers: [], composed: "" }),
     async getLayout() {
       await net(40);
       return { layout: localStorage.getItem("truss.demo.layout") };
@@ -709,6 +753,7 @@ export function createDemoBackend(): Backend {
     router: async () => ({ service: "demo", active: false, port: 0, models: [], providers: [], harnesses: [] }),
     routerService: async () => ({ ok: true }),
     costs: async () => ({ sessions: [], totals: { calls: 0, tokensIn: 0, tokensOut: 0, costUsd: 0, hasCost: false } }),
+    costsDaily: async () => ({ days: [] }),
     async putLayout(layout) {
       localStorage.setItem("truss.demo.layout", layout);
       return { ok: true };

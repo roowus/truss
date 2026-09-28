@@ -18,6 +18,11 @@ import { ChatPanel } from "@/panels/ChatPanel";
 import { TrajectoryPanel } from "@/panels/TrajectoryPanel";
 import { TerminalPanel } from "@/panels/TerminalPanel";
 import { ContextPanel, CostPanel, CredentialsPanel, RouterPanel, SkillsPanel, TeamPanel, WelcomePanel } from "@/panels/Inspectors";
+import { FilesPanel } from "@/panels/FilesPanel";
+import { GitPanel } from "@/panels/GitPanel";
+import { TasksPanel } from "@/panels/TasksPanel";
+import { TodosPanel } from "@/panels/TodosPanel";
+import { FeedPanel } from "@/panels/FeedPanel";
 import { HostPanel } from "@/panels/HostPanel";
 import { SettingsPanel } from "@/panels/SettingsPanel";
 import { DesktopStrip } from "./DesktopStrip";
@@ -33,6 +38,11 @@ const components = {
   context: ContextPanel,
   team: TeamPanel,
   skills: SkillsPanel,
+  files: FilesPanel,
+  git: GitPanel,
+  tasks: TasksPanel,
+  todos: TodosPanel,
+  feed: FeedPanel,
   welcome: WelcomePanel,
   host: HostPanel,
   settings: SettingsPanel,
@@ -43,7 +53,8 @@ const components = {
 
 const KIND_ICON: Record<string, string> = {
   chat: "chat", trajectory: "wave", terminal: "term", context: "gauge",
-  team: "tree", skills: "spark", welcome: "layout", host: "host", settings: "settings", cost: "cost", credentials: "lock", router: "host",
+  team: "tree", skills: "spark", files: "folder", git: "tree", tasks: "check", todos: "check", feed: "bolt",
+  welcome: "layout", host: "host", settings: "settings", cost: "cost", credentials: "lock", router: "host",
 };
 
 const theme: DockviewTheme = { ...themeDark, name: "truss", className: "dockview-theme-dark", gap: 6, dndTabIndicator: "line" };
@@ -59,9 +70,51 @@ function TrussTab({ api, params }: IDockviewPanelHeaderProps<{ sessionId?: strin
   const meta = useApp((s) => (sid ? s.sessions[sid] : undefined));
   const pending = useApp((s) => (sid ? s.views[sid]?.pending.length ?? 0 : 0));
   const color = meta ? harnessStyle(meta.harness).color : undefined;
+  /* Space-aware close button: inline + always visible when the tab has room;
+     a hover popup only when the strip is overcrowded and has squeezed the tab
+     below its natural width. The probe row below is out-of-flow and never
+     compressed, so it reports the natural content width regardless of the
+     strip's squeeze — no measurement oscillation when the X flips modes. */
+  const rootRef = useRef<HTMLDivElement>(null);
+  const probeRef = useRef<HTMLSpanElement>(null);
+  const [cramped, setCramped] = useState(false);
+  const [ultra, setUltra] = useState(false);
+  useEffect(() => {
+    const tab = rootRef.current?.closest(".dv-tab") as HTMLElement | null;
+    const probe = probeRef.current;
+    if (!tab || !probe) return;
+    /* Strip-level verdict, Chrome-style: overcrowded ⇔ every tab at its
+       natural width (probe, never compressed) PLUS an inline X each would
+       overflow the strip. Mode-independent (computed from probes, not live
+       tabs) so it can't oscillate; uniform across the strip like Chrome.
+       Ultra (<44px ⇔ the hover X would cover most of the click target):
+       only the ACTIVE tab offers it (Chrome's favicon-tab rule; see
+       index.css). Sibling content changes self-heal on resize/mount. */
+    const measure = () => {
+      const strip = tab.closest(".dv-tabs-container");
+      if (!strip) return;
+      let natural = 0;
+      for (const p of strip.querySelectorAll(".truss-tab-probe")) natural += (p as HTMLElement).offsetWidth + 38 /* X + gap + paddings */;
+      const crowded = natural > strip.clientWidth + 2;
+      setCramped(crowded);
+      setUltra(crowded && tab.getBoundingClientRect().width < 44);
+    };
+    measure();
+    const strip = tab.closest(".dv-tabs-container");
+    const ro = new ResizeObserver(measure);
+    if (strip) ro.observe(strip);
+    ro.observe(probe);
+    const mo = new MutationObserver(measure);
+    if (strip) mo.observe(strip, { childList: true });
+    return () => {
+      ro.disconnect();
+      mo.disconnect();
+    };
+  }, [title, pending, meta?.state]);
   return (
     <div
-      className="truss-tab group/tab flex items-center gap-1.5 h-full pl-2.5 pr-1 text-[12px] select-none"
+      ref={rootRef}
+      className="truss-tab group/tab relative flex items-center gap-1.5 h-full pl-2 pr-1 text-[12px] select-none"
       onMouseDown={(e) => {
         if (e.button === 1) { e.preventDefault(); api.close(); }
       }}
@@ -78,15 +131,33 @@ function TrussTab({ api, params }: IDockviewPanelHeaderProps<{ sessionId?: strin
           {pending > 1 && <span>{pending}</span>}
         </span>
       )}
-      {/* the close affordance must survive narrow tabs: shrink-0 + title
-          gives way (min-w-0) — middle-click also closes (see the tooltip) */}
-      <button onClick={(e) => { e.stopPropagation(); api.close(); }} className="ml-auto shrink-0 w-5 h-5 grid place-items-center rounded opacity-0 group-hover/tab:opacity-60 focus:opacity-100 hover:!opacity-100 hover:bg-white/10" aria-label="Close tab">
+      <button
+        onClick={(e) => { e.stopPropagation(); api.close(); }}
+        className={cn(
+          "truss-tab-close w-5 h-5 grid place-items-center rounded hover:!opacity-100 hover:bg-white/10 focus:opacity-100 focus:pointer-events-auto",
+          cramped
+            ? cn("absolute right-0.5 top-1/2 -translate-y-1/2 bg-[var(--t-bg1)] shadow-sm opacity-0 pointer-events-none group-hover/tab:opacity-60 group-hover/tab:pointer-events-auto", ultra && "ultra")
+            : "ml-auto shrink-0 opacity-60",
+        )}
+        aria-label="Close tab"
+      >
         <Icon name="x" size={10} />
       </button>
+      {/* measurement probe: same content, never compressed, invisible */}
+      <span ref={probeRef} aria-hidden className="truss-tab-probe absolute invisible pointer-events-none flex items-center gap-1.5 text-[12px] whitespace-nowrap">
+        <Icon name={KIND_ICON[kind] ?? "layout"} size={12} />
+        <span className="max-w-[200px] whitespace-nowrap">{title}</span>
+        {meta && kind === "chat" && <StateDot state={meta.state} size={6} />}
+        {pending > 0 && (
+          <span className="inline-flex items-center gap-0.5 min-w-4 h-4 px-1 rounded-full text-[9.5px] font-bold">
+            <Icon name="lock" size={9} />
+            {pending > 1 && <span>{pending}</span>}
+          </span>
+        )}
+      </span>
     </div>
   );
 }
-
 function GroupActions({ props, spaceId }: { props: IDockviewHeaderActionsProps; spaceId: string }) {
   const g = props.api;
   const [max, setMax] = useState(() => g.isMaximized());
@@ -170,6 +241,9 @@ const DesktopCanvas = memo(function DesktopCanvas({ id, visible }: { id: string;
         getTabContextMenuItems={contextMenu}
         onReady={(e: DockviewReadyEvent) => { dispose.current = desktops.register(id, e.api); }}
         theme={theme}
+        /* no chevron-arrow overflow dropdown: tabs keep their natural width
+           and the strip scrolls horizontally instead of clipping tabs away */
+        disableTabsOverflowList
       />
     </div>
   );

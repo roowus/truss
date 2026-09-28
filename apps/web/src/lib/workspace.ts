@@ -3,7 +3,7 @@ import { store } from "./store";
 import { desktops } from "./desktops";
 
 /** Bridge between the rest of the app and the Dockview instance (the "dockBus"). */
-export type PanelKind = "chat" | "trajectory" | "terminal" | "context" | "team" | "skills" | "welcome" | "host" | "settings" | "cost" | "credentials" | "router";
+export type PanelKind = "chat" | "trajectory" | "terminal" | "context" | "team" | "skills" | "files" | "git" | "tasks" | "todos" | "feed" | "welcome" | "host" | "settings" | "cost" | "credentials" | "router";
 
 export const getDockApi = (spaceId?: string) => desktops.getApi(spaceId);
 
@@ -14,6 +14,11 @@ const TITLES: Record<PanelKind, string> = {
   context: "Context",
   team: "Team",
   skills: "Skills",
+  files: "Files",
+  git: "Git",
+  tasks: "Tasks",
+  todos: "Todos",
+  feed: "Feed",
   welcome: "Welcome",
   host: "Host",
   settings: "Settings",
@@ -49,7 +54,14 @@ export function openPanel(kind: PanelKind, opts: OpenPanelOptions = {}) {
     store.toast("info", "Workspace is still opening", "Try adding the tab again in a moment.");
     return;
   }
-  const key = kind === "terminal" ? opts.terminalId : kind === "host" ? opts.hostId : kind === "skills" ? opts.sessionId ?? opts.cwd : opts.sessionId;
+  const key =
+    kind === "terminal" ? opts.terminalId
+    : kind === "host" ? opts.hostId
+    : kind === "skills" || kind === "files" || kind === "git" ? opts.sessionId ?? opts.cwd
+    : kind === "tasks" ? (opts.sessionId ?? opts.cwd ?? "global")
+    : kind === "todos" || kind === "feed" ? undefined
+    
+    : opts.sessionId;
   const id = panelId(kind, key);
   const existing = api.getPanel(id);
   if (existing) {
@@ -74,8 +86,8 @@ export function openPanel(kind: PanelKind, opts: OpenPanelOptions = {}) {
   } else if (kind === "terminal") {
     const other = api.panels.find((p) => p.id.startsWith("terminal:"));
     position = other ? { referencePanel: other.id, direction: "within" } : chat ? { referencePanel: chat.id, direction: "below" } : undefined;
-  } else if (kind === "context" || kind === "team" || kind === "skills") {
-    const other = api.panels.find((p) => /^(context|team|skills):/.test(p.id));
+  } else if (kind === "context" || kind === "team" || kind === "skills" || kind === "files" || kind === "git" || kind === "tasks") {
+    const other = api.panels.find((p) => /^(context|team|skills|files|git|tasks):/.test(p.id));
     const traj = opts.sessionId ? api.getPanel(panelId("trajectory", opts.sessionId)) : undefined;
     position = other
       ? { referencePanel: other.id, direction: "within" }

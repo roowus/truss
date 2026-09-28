@@ -52,15 +52,23 @@ function ContextBody({ id, view }: { id: string; view: SessionView }) {
   const h = baseHarness(meta.harness);
   const ctx = view.ctx;
   const totals = useMemo(() => {
-    let tin = 0, tout = 0, cost = 0, hasTok = false, hasCost = false;
+    let tin = 0, tout = 0, cost = 0, hasTok = false, hasCost = false, cacheRead = 0, cacheWrite = 0, hasCache = false;
     for (const cid of view.callOrder) {
       const c = view.calls[cid];
       if (c.tokensIn !== undefined) { hasTok = true; tin += c.tokensIn; }
       if (c.tokensOut !== undefined) { hasTok = true; tout += c.tokensOut; }
       if (c.costUsd !== undefined) { hasCost = true; cost += c.costUsd; }
+      if (c.cacheRead !== undefined || c.cacheWrite !== undefined) { hasCache = true; cacheRead += c.cacheRead ?? 0; cacheWrite += c.cacheWrite ?? 0; }
     }
-    return { tin, tout, cost, hasTok, hasCost };
-  }, [view.calls, view.callOrder]);
+    const userMsgs = Object.values(view.msgs).filter((m) => m.role === "user").length;
+    const toolCalls = Object.keys(view.tools).length;
+    /* cache hit of all input-side tokens (claude reports input excl. cache;
+       pi reports it alongside — the union denominator is the safe read).
+       only shown when the harness reports cache fields at all (hasCache) */
+    const cacheDenom = tin + cacheRead + cacheWrite;
+    const cacheHit = hasCache && cacheDenom > 0 ? Math.min(1, cacheRead / cacheDenom) : undefined;
+    return { tin, tout, cost, hasTok, hasCost, cacheRead, cacheWrite, cacheHit, userMsgs, toolCalls };
+  }, [view.calls, view.callOrder, view.msgs, view.tools]);
 
   if (!ctx) {
     return (
@@ -68,6 +76,7 @@ function ContextBody({ id, view }: { id: string; view: SessionView }) {
         <Empty icon="gauge" title={CTX_REPORTERS.has(h) ? "No usage reported yet" : `${meta.harness} doesn't report context usage`}>
           {CTX_REPORTERS.has(h) ? "Context occupancy appears after the first completed turn." : "Truss won't estimate what the harness doesn't report. Token and cost totals from the trajectory are below."}
         </Empty>
+        <StatsRow {...totals} calls={view.callOrder.length} />
         <Totals {...totals} calls={view.callOrder.length} />
       </div>
     );
@@ -78,6 +87,7 @@ function ContextBody({ id, view }: { id: string; view: SessionView }) {
   const hist = view.ctxHistory;
   return (
     <div className="space-y-5">
+      <StatsRow {...totals} calls={view.callOrder.length} />
       <div className="flex items-center gap-5">
         <svg width="128" height="128" viewBox="0 0 128 128" className="shrink-0">
           <circle cx="64" cy="64" r={R} fill="none" stroke="var(--t-line)" strokeWidth="10" />
@@ -116,6 +126,29 @@ function ContextBody({ id, view }: { id: string; view: SessionView }) {
         )}
       </div>
       <Totals {...totals} calls={view.callOrder.length} />
+    </div>
+  );
+}
+
+/** dsh-context style stat tiles: turns, steps, tool calls, cache hit, cost */
+function StatsRow({ userMsgs, toolCalls, cacheHit, cost, hasCost, calls }: {
+  userMsgs: number; toolCalls: number; cacheHit?: number; cost: number; hasCost: boolean; calls: number;
+}) {
+  const tiles: [string, string][] = [
+    ["turns", String(userMsgs)],
+    ["llm calls", String(calls)],
+    ["tool calls", String(toolCalls)],
+    ["cache hit", cacheHit === undefined ? "—" : `${(cacheHit * 100).toFixed(1)}%`],
+    ["cost", hasCost ? fmtCost(cost) : "—"],
+  ];
+  return (
+    <div className="grid grid-cols-2 sm:grid-cols-3 2xl:grid-cols-5 gap-2">
+      {tiles.map(([k, v]) => (
+        <div key={k} className="rounded-md bg-[var(--t-bg0)] border border-[var(--t-line)] px-3 py-2 min-w-0">
+          <div className="font-mono text-[9.5px] uppercase tracking-wider text-[var(--t-dim)] truncate">{k}</div>
+          <div className="font-mono text-[14px] text-[var(--t-fg)] tabular-nums truncate">{v}</div>
+        </div>
+      ))}
     </div>
   );
 }
@@ -224,6 +257,10 @@ export function SkillsPanel({ params }: IDockviewPanelProps<P>) {
   const [state, setState] = useState<{ loading: boolean; error?: string; skills: SkillInfo[] }>({ loading: true, skills: [] });
   const [q, setQ] = useState("");
   const [n, setN] = useState(0);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [confirmDel, setConfirmDel] = useState<string | null>(null);
+  const [creating, setCreating] = useState(false);
+  const [form, setForm] = useState({ name: "", description: "" });
   useEffect(() => {
     if (!backend) return;
     let off = false;
@@ -234,6 +271,21 @@ export function SkillsPanel({ params }: IDockviewPanelProps<P>) {
     );
     return () => { off = true; };
   }, [cwd, backend, n]);
+
+  const act = async (key: string, fn: () => Promise<unknown>) => {
+    if (!backend) return;
+    setBusy(key);
+    try {
+      await fn();
+      setN((x) => x + 1);
+    } catch (e: any) {
+      setState((s) => ({ ...s, error: e.message ?? String(e) }));
+    } finally {
+      setBusy(null);
+      setConfirmDel(null);
+    }
+  };
+
   const list = state.skills.filter((s) => !q || (s.name + s.description).toLowerCase().includes(q.toLowerCase()));
   const groups = list.reduce<Record<string, SkillInfo[]>>((acc, s) => ((acc[s.scope] ??= []).push(s), acc), {});
   return (
@@ -241,36 +293,77 @@ export function SkillsPanel({ params }: IDockviewPanelProps<P>) {
       <div className="shrink-0 flex items-center gap-2 px-3 h-9 border-b border-[var(--t-line)]">
         <Icon name="spark" size={13} className="text-[var(--t-amber)]" />
         <span className="font-mono text-[11px] text-[var(--t-mute)] truncate" title={cwd}>{shortPath(cwd)}</span>
-        <div className="ml-auto flex items-center gap-1.5 h-6 px-2 rounded bg-[var(--t-bg0)] border border-[var(--t-line)]">
-          <Icon name="search" size={11} className="text-[var(--t-dim)]" />
-          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="filter" className="w-24 bg-transparent text-[11.5px] outline-none text-[var(--t-fg)] placeholder:text-[var(--t-dim)]" />
+        <div className="ml-auto flex items-center gap-1">
+          <div className="flex items-center gap-1.5 h-6 px-2 rounded bg-[var(--t-bg0)] border border-[var(--t-line)]">
+            <Icon name="search" size={11} className="text-[var(--t-dim)]" />
+            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="filter" className="w-24 bg-transparent text-[11.5px] outline-none text-[var(--t-fg)] placeholder:text-[var(--t-dim)]" />
+          </div>
+          <Btn size="xs" variant="outline" icon="plus" title="New project skill (.agents/skills)" onClick={() => setCreating((v) => !v)} />
         </div>
       </div>
+      {creating && (
+        <div className="shrink-0 border-b border-[var(--t-line)] bg-[var(--t-bg2)] px-3 py-2 flex items-center gap-2">
+          <input autoFocus value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="skill name" className="t-input w-36" />
+          <input value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} onKeyDown={(e) => e.key === "Enter" && form.name.trim() && act("new", () => backend!.createSkill(cwd, form.name, form.description)).then(() => { setCreating(false); setForm({ name: "", description: "" }); })} placeholder="description (when-to-use)" className="t-input flex-1" />
+          <Btn size="xs" variant="amber" disabled={busy === "new" || !form.name.trim()} onClick={() => act("new", () => backend!.createSkill(cwd, form.name, form.description)).then(() => { setCreating(false); setForm({ name: "", description: "" }); })}>Create</Btn>
+          <Btn size="xs" variant="ghost" onClick={() => setCreating(false)}>Cancel</Btn>
+        </div>
+      )}
       <div className="flex-1 min-h-0 overflow-auto t-scroll p-3">
         {state.loading ? (
           <div className="h-full grid place-items-center"><Spinner /></div>
-        ) : state.error ? (
+        ) : state.error && state.skills.length === 0 ? (
           <Empty icon="alert" title="Couldn't list skills">
             <span className="font-mono text-[11px] text-[var(--t-red)] break-all">{state.error}</span>
             <div className="mt-3"><Btn variant="outline" icon="retry" onClick={() => setN((x) => x + 1)}>Retry</Btn></div>
           </Empty>
         ) : list.length === 0 ? (
-          <Empty icon="spark" title="No skills visible">No Agent-Skills directories are visible from this working directory.</Empty>
+          <Empty icon="spark" title="No skills visible">No Agent-Skills directories are visible from this working directory. Create one with + above.</Empty>
         ) : (
-          Object.entries(groups).map(([scope, items]) => (
+          <>
+            {state.error && <div className="mb-2 rounded-md border border-[color-mix(in_oklab,var(--t-red)_25%,transparent)] px-2.5 py-1.5 text-[11px] font-mono text-[var(--t-red)]">{state.error}</div>}
+            {Object.entries(groups).map(([scope, items]) => (
             <div key={scope} className="mb-4">
               <div className="font-mono text-[10px] uppercase tracking-wider text-[var(--t-dim)] mb-1.5">{scope} · {items.length}</div>
               <div className="space-y-1.5">
                 {items.map((s) => (
-                  <div key={s.source + s.name} className="rounded-md border border-[var(--t-line)] bg-[var(--t-bg0)]/60 px-3 py-2 hover:border-[var(--t-line2)]">
-                    <div className="font-mono text-[12px] text-[var(--t-amber)]">{s.name}</div>
+                  <div key={s.source + s.name} className={cn("group rounded-md border border-[var(--t-line)] bg-[var(--t-bg0)]/60 px-3 py-2 hover:border-[var(--t-line2)]", s.disabled && "opacity-55")}>
+                    <div className="flex items-center gap-2">
+                      <div className="font-mono text-[12px] text-[var(--t-amber)] truncate">{s.name}</div>
+                      <span className="ml-auto shrink-0 flex items-center gap-1">
+                        <button
+                          role="switch"
+                          aria-checked={!s.disabled}
+                          aria-label={`${s.disabled ? "Enable" : "Disable"} ${s.name} for the model`}
+                          title={s.disabled ? "Disabled — the model can't invoke it. Click to enable." : "Enabled — the model can invoke it. Click to disable."}
+                          disabled={busy === s.source}
+                          onClick={() => act(s.source, () => backend!.toggleSkill(s.source, !s.disabled))}
+                          className={cn("w-7 h-4 rounded-full relative transition-colors", s.disabled ? "bg-[var(--t-line2)]" : "bg-[var(--t-teal)]/70")}
+                        >
+                          <span className={cn("absolute top-0.5 w-3 h-3 rounded-full bg-white transition-all", s.disabled ? "left-0.5" : "left-3.5")} />
+                        </button>
+                        {confirmDel === s.source ? (
+                          <button onClick={() => act(s.source, () => backend!.deleteSkill(s.source))} className="text-[10px] font-mono text-[var(--t-red)] hover:underline shrink-0">trash?</button>
+                        ) : (
+                          <button
+                            onClick={() => setConfirmDel(s.source)}
+                            aria-label={`Move ${s.name} to trash`}
+                            title="Move to .trash (recoverable)"
+                            className="opacity-0 group-hover:opacity-70 hover:!opacity-100 text-[var(--t-mute)] hover:text-[var(--t-red)] p-0.5"
+                          >
+                            <Icon name="trash" size={11} />
+                          </button>
+                        )}
+                      </span>
+                    </div>
                     <div className="text-[12px] text-[var(--t-fg2)] mt-0.5 leading-snug">{s.description}</div>
-                    <div className="font-mono text-[10.5px] text-[var(--t-dim)] mt-1 truncate" title={s.source}>{shortPath(s.source)}</div>
+                    <div className="font-mono text-[10.5px] text-[var(--t-dim)] mt-1 truncate" title={s.source}>{shortPath(s.source)}{s.disabled && <span className="ml-1.5 text-[var(--t-coral)]">· disabled</span>}</div>
                   </div>
                 ))}
               </div>
             </div>
-          ))
+            ))}
+          </>
         )}
       </div>
     </div>
@@ -347,9 +440,18 @@ interface CostData {
   totals: { calls: number; tokensIn: number; tokensOut: number; costUsd: number; hasCost: boolean };
 }
 
+interface DayRow {
+  day: string; // YYYY-MM-DD local
+  calls: number;
+  tokensIn: number;
+  tokensOut: number;
+  costUsd: number | null;
+}
+
 /** Global cost + token ledger across all sessions (server-aggregated). */
 export function CostPanel() {
   const [data, setData] = useState<CostData | null>(null);
+  const [days, setDays] = useState<DayRow[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [at, setAt] = useState<number>(0);
   const now = useNow(30_000);
@@ -357,6 +459,7 @@ export function CostPanel() {
   const load = () => {
     if (!store.be) return;
     store.be.costs().then((d) => { setData(d); setErr(null); setAt(Date.now()); }).catch((e) => setErr(e.message ?? String(e)));
+    store.be.costsDaily().then((d) => setDays(d.days)).catch(() => {});
   };
   useEffect(load, [store.be]);
   /* live-ish: refetch when a llm.call.done lands anywhere */
@@ -392,7 +495,9 @@ export function CostPanel() {
             <div className="text-[16px] font-medium tabular-nums text-[var(--t-fg2)]">{fmtTokens(t.tokensIn)} → {fmtTokens(t.tokensOut)}</div>
             <div className="text-[10.5px] uppercase tracking-wider text-[var(--t-dim)]">tokens in → out</div>
           </div>
+          {days && days.length > 0 && <DayTotals days={days} />}
         </div>
+        {days && days.length > 0 && <HeatGrid days={days} />}
         {!t.hasCost && (
           <div className="mx-4 mb-3 rounded-md border border-[var(--t-line)] bg-[var(--t-bg2)] px-3 py-2 text-[11px] text-[var(--t-mute)]">
             No harness has reported cost yet — pi and claude-code report per-call cost; dsh and hermes report tokens only. Token columns are always real.
@@ -426,6 +531,80 @@ export function CostPanel() {
             <Empty icon="gauge" title="No LLM calls yet">Run a session and the ledger fills in.</Empty>
           )}
         </div>
+      </div>
+    </div>
+  );
+}
+
+/* rolling windows from the daily buckets (today / 7d / 30d) */
+function DayTotals({ days }: { days: DayRow[] }) {
+  const sum = (rows: DayRow[]) => rows.reduce(
+    (a, d) => ({
+      calls: a.calls + d.calls,
+      tokens: a.tokens + d.tokensIn + d.tokensOut,
+      cost: a.cost + (d.costUsd ?? 0),
+      hasCost: a.hasCost || d.costUsd != null,
+    }),
+    { calls: 0, tokens: 0, cost: 0, hasCost: false },
+  );
+  const today = sum(days.slice(-1));
+  const week = sum(days.slice(-7));
+  const month = sum(days.slice(-30));
+  const cells: [string, ReturnType<typeof sum>][] = [["today", today], ["7 days", week], ["30 days", month]];
+  return (
+    <>
+      {cells.map(([label, v]) => (
+        <div key={label}>
+          <div className="text-[16px] font-medium tabular-nums text-[var(--t-fg2)]">
+            {v.hasCost ? fmtCost(v.cost) : fmtTokens(v.tokens)}
+            <span className="ml-1 text-[10px] text-[var(--t-dim)]">{v.calls} calls{v.hasCost ? "" : " · tokens"}</span>
+          </div>
+          <div className="text-[10.5px] uppercase tracking-wider text-[var(--t-dim)]">{label}</div>
+        </div>
+      ))}
+    </>
+  );
+}
+
+/** Codex-style 5-week usage heat grid (intensity = total tokens that day). */
+function HeatGrid({ days }: { days: DayRow[] }) {
+  const byDay = new Map(days.map((d) => [d.day, d]));
+  /* build 35 cells ending today, week-aligned (oldest first, column per week) */
+  const todayD = new Date();
+  const cells: (DayRow | null)[] = [];
+  const start = new Date(todayD);
+  start.setDate(start.getDate() - (34 + todayD.getDay() % 7));
+  for (let i = 0; ; i++) {
+    const d = new Date(start);
+    d.setDate(start.getDate() + i);
+    if (d > todayD) break;
+    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    cells.push(byDay.get(key) ?? { day: key, calls: 0, tokensIn: 0, tokensOut: 0, costUsd: null });
+  }
+  const max = Math.max(1, ...cells.map((c) => (c ? c.tokensIn + c.tokensOut : 0)));
+  const weeks: (DayRow | null)[][] = [];
+  for (let i = 0; i < cells.length; i += 7) weeks.push(cells.slice(i, i + 7));
+  return (
+    <div className="px-4 pb-3">
+      <div className="text-[10.5px] font-medium uppercase tracking-[0.08em] text-[var(--t-dim)] mb-1.5">last 5 weeks</div>
+      <div className="flex gap-[3px]">
+        {weeks.map((w, i) => (
+          <div key={i} className="flex flex-col gap-[3px]">
+            {w.map((d) => {
+              if (!d) return <span key={Math.random()} className="w-3 h-3" />;
+              const tok = d.tokensIn + d.tokensOut;
+              const p = tok === 0 ? 0 : Math.max(0.18, tok / max);
+              return (
+                <span
+                  key={d.day}
+                  title={`${d.day}\n${d.calls} calls · ${fmtTokens(tok)} tokens${d.costUsd != null ? ` · ${fmtCost(d.costUsd)}` : ""}`}
+                  className="w-3 h-3 rounded-[3px] border border-[var(--t-line)]/60"
+                  style={{ background: tok === 0 ? "var(--t-bg0)" : `color-mix(in oklab, var(--t-amber) ${Math.round(p * 100)}%, var(--t-bg0))` }}
+                />
+              );
+            })}
+          </div>
+        ))}
       </div>
     </div>
   );

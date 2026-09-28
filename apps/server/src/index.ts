@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import type { HarnessId } from "@truss/proto";
 import { store } from "./db.js";
 import {
+  broadcastRaw,
   closeSession,
   createSession,
   deleteSession,
@@ -23,7 +24,20 @@ import {
   type EventFrame,
 } from "./sessions.js";
 import { attachTerminal, closeTerminal, createTerminal, listTerminals } from "./terminal.js";
-import { listSkills } from "./skills.js";
+import { createSkill, listSkills, setSkillDisabled, trashSkill } from "./skills.js";
+import {
+  createPath as createWorkspacePath,
+  listDir,
+  readFile as readWorkspaceFile,
+  searchFiles,
+  writeFile as writeWorkspaceFile,
+} from "./files.js";
+import { gitBranches, gitDiff, gitGraph, gitStatus, gitSwitch } from "./git.js";
+import { createTask, deleteTask, listTasks, runTask, updateTask, type TaskStatus } from "./tasks.js";
+import { createTodo, listTodos, resolveTodoAccess, setTodoBroadcaster, userUpdateTodo } from "./todos.js";
+import { listFeed, setFeedBroadcaster, setFeedState, shareFeedItem } from "./feed.js";
+import { startFeedAutopost } from "./feed-autopost.js";
+import { composePractices, getGlobalPractices, saveGlobalPractices } from "./practices.js";
 import { registerMcpPerms } from "./mcp-perms.js";
 import { importDshSessions } from "./import-dsh.js";
 import { registerMcpTruss } from "./mcp-truss.js";
@@ -54,6 +68,11 @@ setBroadcaster((frame: EventFrame) => {
   for (const c of clients) c.send(line);
 });
 
+/* feed/todo mutations ride the same bus as broadcast-only frames */
+setFeedBroadcaster((item) => broadcastRaw({ type: "feed.upsert", sessionId: item.sessionId ?? "", item }));
+setTodoBroadcaster((todo) => broadcastRaw({ type: "todo.upsert", sessionId: todo.sessionId ?? "", todo }));
+startFeedAutopost();
+
 /* pi processes from a previous server run are gone — close their sessions. */
 reconcileOnBoot();
 
@@ -83,6 +102,22 @@ app.get("/events", { websocket: true }, (socket) => {
   clients.add(socket);
   socket.on("close", () => clients.delete(socket));
 });
+
+/* heartbeat: an app-level ping every 15s keeps the tailnet/NAT path warm and
+   lets the client watchdog spot zombie sockets (browser WebSockets never see
+   protocol-level ping/pong, so liveness has to ride the JSON channel).
+   Non-frame shape — clients filter it out of the event stream by `seq`. */
+const heartbeat = setInterval(() => {
+  const line = JSON.stringify({ type: "ping", at: Date.now() });
+  for (const c of clients) {
+    try {
+      c.send(line);
+    } catch {
+      clients.delete(c);
+    }
+  }
+}, 15_000);
+heartbeat.unref();
 
 /* ── node-agent channel (remote hosts dial OUT to here) ── */
 const AGENT_TOKEN = process.env.TRUSS_AGENT_TOKEN ?? "truss-dev";
@@ -289,10 +324,229 @@ app.get("/api/terminal/:id/ws", { websocket: true }, (socket, req) => {
   }
 });
 
-/* pi skills visible to a working directory (global + project) */
+/* agent skills visible to a working directory (user + project dirs) */
 app.get("/api/skills", async (req) => {
   const { cwd } = req.query as { cwd?: string };
   return { skills: listSkills(cwd) };
+});
+app.post("/api/skills/toggle", async (req, reply) => {
+  const { source, disabled } = (req.body ?? {}) as { source?: string; disabled?: boolean };
+  try {
+    if (!source || typeof disabled !== "boolean") throw new Error("missing source/disabled");
+    return { skill: setSkillDisabled(source, disabled) };
+  } catch (e: any) {
+    return reply.code(400).send({ error: e.message ?? String(e) });
+  }
+});
+app.post("/api/skills/create", async (req, reply) => {
+  const { cwd, name, description } = (req.body ?? {}) as { cwd?: string; name?: string; description?: string };
+  try {
+    if (!cwd || !name) throw new Error("missing cwd/name");
+    return { skill: createSkill(cwd, name, description ?? "") };
+  } catch (e: any) {
+    return reply.code(400).send({ error: e.message ?? String(e) });
+  }
+});
+app.post("/api/skills/delete", async (req, reply) => {
+  const { source } = (req.body ?? {}) as { source?: string };
+  try {
+    if (!source) throw new Error("missing source");
+    return trashSkill(source);
+  } catch (e: any) {
+    return reply.code(400).send({ error: e.message ?? String(e) });
+  }
+});
+
+/* ── todos (user-facing tasks filed by agents) + feed (the inbox) ── */
+app.get("/api/todos", async () => ({ todos: listTodos() }));
+app.post("/api/todos", async (req, reply) => {
+  const b = (req.body ?? {}) as any;
+  try {
+    if (!b.title) throw new Error("missing title");
+    return { todo: createTodo({ ...b, createdBy: "user", postToFeed: false }) };
+  } catch (e: any) {
+    return reply.code(400).send({ error: e.message ?? String(e) });
+  }
+});
+app.patch("/api/todos/:id", async (req, reply) => {
+  const { id } = req.params as { id: string };
+  try {
+    return { todo: userUpdateTodo(id, (req.body ?? {}) as any) };
+  } catch (e: any) {
+    return reply.code(400).send({ error: e.message ?? String(e) });
+  }
+});
+app.post("/api/todos/:id/access", async (req, reply) => {
+  const { id } = req.params as { id: string };
+  const { requesterId, approve } = (req.body ?? {}) as { requesterId?: string; approve?: boolean };
+  try {
+    if (!requesterId || typeof approve !== "boolean") throw new Error("missing requesterId/approve");
+    return { todo: resolveTodoAccess(id, requesterId, approve) };
+  } catch (e: any) {
+    return reply.code(400).send({ error: e.message ?? String(e) });
+  }
+});
+
+app.get("/api/feed", async (req) => {
+  const { state } = req.query as { state?: string };
+  return { items: listFeed(state ? { state: state as never } : {}) };
+});
+app.post("/api/feed/:id/state", async (req, reply) => {
+  const { id } = req.params as { id: string };
+  const { state } = (req.body ?? {}) as { state?: string };
+  try {
+    if (!state) throw new Error("missing state");
+    return { item: setFeedState(id, state as never) };
+  } catch (e: any) {
+    return reply.code(400).send({ error: e.message ?? String(e) });
+  }
+});
+app.post("/api/feed/:id/share", async (req, reply) => {
+  const { id } = req.params as { id: string };
+  const { sessionId } = (req.body ?? {}) as { sessionId?: string };
+  try {
+    if (!sessionId) throw new Error("missing sessionId");
+    const item = shareFeedItem(id, sessionId);
+    /* share = both: the post lands in the target session's chat too */
+    const text = `**[shared from your feed]** ${item.title}${item.body ? `\n\n${item.body}` : ""}`;
+    await sendPrompt(sessionId, text);
+    return { item };
+  } catch (e: any) {
+    return reply.code(400).send({ error: e.message ?? String(e) });
+  }
+});
+
+/* ── practices (TRUSS.md) ── */
+app.get("/api/practices", async () => ({ text: getGlobalPractices(), path: "~/.truss/TRUSS.md" }));
+app.put("/api/practices", async (req) => {
+  const { text } = (req.body ?? {}) as { text?: string };
+  saveGlobalPractices(typeof text === "string" ? text : "");
+  return { ok: true };
+});
+app.get("/api/practices/compose", async (req) => {
+  const { cwd, project } = req.query as { cwd?: string; project?: string };
+  return composePractices(cwd, project ?? null);
+});
+
+/* ── task board (kanban; run spawns a real session with the task prompt) ── */
+app.get("/api/tasks", async () => ({ tasks: listTasks() }));
+app.post("/api/tasks", async (req, reply) => {
+  const b = (req.body ?? {}) as { title?: string; prompt?: string; cwd?: string; harness?: string };
+  try {
+    if (!b.title || !b.cwd || !b.harness) throw new Error("missing title/cwd/harness");
+    return { task: createTask({ title: b.title, prompt: b.prompt ?? "", cwd: b.cwd, harness: b.harness }) };
+  } catch (e: any) {
+    return reply.code(400).send({ error: e.message ?? String(e) });
+  }
+});
+app.patch("/api/tasks/:id", async (req, reply) => {
+  const { id } = req.params as { id: string };
+  const b = (req.body ?? {}) as { title?: string; prompt?: string; status?: TaskStatus };
+  try {
+    return { task: updateTask(id, b) };
+  } catch (e: any) {
+    return reply.code(400).send({ error: e.message ?? String(e) });
+  }
+});
+app.delete("/api/tasks/:id", async (req) => {
+  const { id } = req.params as { id: string };
+  deleteTask(id);
+  return { ok: true };
+});
+app.post("/api/tasks/:id/run", async (req, reply) => {
+  const { id } = req.params as { id: string };
+  try {
+    const { session } = await runTask(id);
+    return { session };
+  } catch (e: any) {
+    return reply.code(400).send({ error: e.message ?? String(e) });
+  }
+});
+
+/* ── git panel (status / diff / branches / graph; switch is the only mutation) ── */
+app.get("/api/git/status", async (req, reply) => {
+  const { cwd } = req.query as { cwd?: string };
+  try {
+    if (!cwd) throw new Error("missing cwd");
+    return await gitStatus(cwd);
+  } catch (e: any) {
+    return reply.code(400).send({ error: e.message ?? String(e) });
+  }
+});
+app.get("/api/git/branches", async (req, reply) => {
+  const { cwd } = req.query as { cwd?: string };
+  try {
+    if (!cwd) throw new Error("missing cwd");
+    return await gitBranches(cwd);
+  } catch (e: any) {
+    return reply.code(400).send({ error: e.message ?? String(e) });
+  }
+});
+app.get("/api/git/graph", async (req, reply) => {
+  const { cwd, n } = req.query as { cwd?: string; n?: string };
+  try {
+    if (!cwd) throw new Error("missing cwd");
+    return await gitGraph(cwd, n ? Number(n) : undefined);
+  } catch (e: any) {
+    return reply.code(400).send({ error: e.message ?? String(e) });
+  }
+});
+app.get("/api/git/diff", async (req, reply) => {
+  const { cwd, path, staged } = req.query as { cwd?: string; path?: string; staged?: string };
+  try {
+    if (!cwd || !path) throw new Error("missing cwd/path");
+    return await gitDiff(cwd, path, staged === "1");
+  } catch (e: any) {
+    return reply.code(400).send({ error: e.message ?? String(e) });
+  }
+});
+app.post("/api/git/switch", async (req, reply) => {
+  const { cwd, branch, create } = (req.body ?? {}) as { cwd?: string; branch?: string; create?: boolean };
+  try {
+    if (!cwd || !branch) throw new Error("missing cwd/branch");
+    return await gitSwitch(cwd, branch, !!create);
+  } catch (e: any) {
+    return reply.code(400).send({ error: e.message ?? String(e) });
+  }
+});
+
+/* ── workspace files (Files panel; every op confined to the given root) ── */
+app.get("/api/files", async (req, reply) => {
+  const { root, path, q } = req.query as { root?: string; path?: string; q?: string };
+  try {
+    if (!root) throw new Error("missing root");
+    if (q) return { entries: searchFiles(root, q) };
+    return { entries: listDir(root, path) };
+  } catch (e: any) {
+    return reply.code(400).send({ error: e.message ?? String(e) });
+  }
+});
+app.get("/api/file", async (req, reply) => {
+  const { root, path } = req.query as { root?: string; path?: string };
+  try {
+    if (!root || !path) throw new Error("missing root/path");
+    return readWorkspaceFile(root, path);
+  } catch (e: any) {
+    return reply.code(400).send({ error: e.message ?? String(e) });
+  }
+});
+app.put("/api/file", async (req, reply) => {
+  const { root, path, content } = (req.body ?? {}) as { root?: string; path?: string; content?: string };
+  try {
+    if (!root || !path || typeof content !== "string") throw new Error("missing root/path/content");
+    return writeWorkspaceFile(root, path, content);
+  } catch (e: any) {
+    return reply.code(400).send({ error: e.message ?? String(e) });
+  }
+});
+app.post("/api/files/create", async (req, reply) => {
+  const { root, path, kind } = (req.body ?? {}) as { root?: string; path?: string; kind?: "file" | "dir" };
+  try {
+    if (!root || !path || (kind !== "file" && kind !== "dir")) throw new Error("missing root/path/kind");
+    return createWorkspacePath(root, path, kind);
+  } catch (e: any) {
+    return reply.code(400).send({ error: e.message ?? String(e) });
+  }
 });
 
 /* MCP permission host for claude-code sessions */
@@ -341,6 +595,9 @@ app.post("/api/router/service", async (req) => {
 
 /* import persisted dsh sessions (transcripts + resumable refs) */
 app.post("/api/import/dsh", async () => importDshSessions());
+
+/* per-day token/cost buckets for the Cost panel heat grid (last 35 days) */
+app.get("/api/costs/daily", async () => ({ days: store.costDaily(35) }));
 
 /* cost rollup across every session (not just hydrated ones) */
 app.get("/api/costs", async () => {

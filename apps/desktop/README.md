@@ -1,7 +1,7 @@
 # @truss/desktop — Tauri shell
 
 A thin native shell around the hosted Truss UI. It opens a single window
-pointed at the Truss server (default `https://truss.rewis`) — the server does
+pointed at the Truss server (default `http://127.0.0.1:4040`) — the server does
 everything; the shell is just frame, menu, and keymap.
 
 ## Why a shell at all
@@ -22,13 +22,13 @@ pnpm --filter @truss/desktop tauri build     # produces .app in apps/desktop/src
 Point it at a different server without rebuilding:
 
 ```bash
-TRUSS_URL=https://truss.rewis open -a Truss
+TRUSS_URL=http://127.0.0.1:4040 open -a Truss
 ```
 
 ## Files
 
 - `src-tauri/tauri.conf.json` — app identity, single main window
-- `src-tauri/src/main.rs` — creates the window at `TRUSS_URL` (env) / `https://truss.rewis` (default)
+- `src-tauri/src/main.rs` — creates the window at `TRUSS_URL` (env) / `http://127.0.0.1:4040` (default)
 - `src-tauri/Cargo.toml` — one dependency: `tauri`
 - `package.json` — the `tauri` CLI wrapper
 

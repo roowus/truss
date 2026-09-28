@@ -44,6 +44,69 @@ export interface SessionUpdated {
   archived?: boolean;
 }
 
+/** hard-deleted: the row and its event log are gone. Broadcast-only (the FK
+    cascade removes its events, so it cannot be replayed from the log) —
+    clients that miss it catch up via the reconnect resync's session refetch. */
+export interface SessionDeleted {
+  type: "session.deleted";
+  sessionId: string;
+}
+
+/* ── todos + feed (user-facing work filed by agents; the inbox) ── */
+
+export type TodoPriority = "low" | "normal" | "high" | "urgent";
+export type TodoStatus = "open" | "done" | "dropped";
+export interface TodoSubtask { id: string; text: string; done: boolean }
+export interface TodoItem {
+  id: string;
+  /** owning session; null when created by the user or the session is gone */
+  sessionId?: string;
+  title: string;
+  notes: string;
+  priority: TodoPriority;
+  deadline?: number; // epoch ms
+  estimate?: string; // agent's effort guess ("S"/"M"/"L"/"20m" — free-form)
+  labels: string[];
+  subtasks: TodoSubtask[];
+  meta: Record<string, unknown>; // free-form agent-chosen fields
+  status: TodoStatus;
+  doneAt?: number;
+  createdBy: "user" | "agent";
+  sharedEditors: string[]; // sessionIds approved via todo-access cards
+  deniedEditors: string[]; // sessionIds denied (their edits are refused quietly)
+  createdAt: number;
+  updatedAt: number;
+}
+
+export type FeedType = "todo" | "permission" | "work_done" | "task_run" | "error" | "context" | "report" | "note";
+export type FeedImportance = "low" | "normal" | "high" | "urgent";
+export type FeedState = "unread" | "read" | "saved" | "dismissed" | "done";
+export interface FeedItem {
+  id: string;
+  type: FeedType;
+  sessionId?: string; // source session
+  title: string;
+  body: string; // markdown
+  importance: FeedImportance;
+  data: Record<string, unknown>; // per-type payload (perm requestId/options, todo id, …)
+  state: FeedState;
+  sharedWith: string[]; // sessionIds that may read it via MCP
+  createdAt: number;
+  updatedAt: number;
+}
+
+/* broadcast-only (feed/todos persist in their own tables; replay = REST) */
+export interface TodoUpsert {
+  type: "todo.upsert";
+  sessionId: string; // owner session or "" — carried for the frame shape only
+  todo: TodoItem;
+}
+export interface FeedUpsert {
+  type: "feed.upsert";
+  sessionId: string; // source session or ""
+  item: FeedItem;
+}
+
 /* ── message stream ── */
 export interface MsgStart {
   type: "msg.start";
@@ -127,6 +190,8 @@ export interface LlmCallDone {
   tokensIn?: number;
   tokensOut?: number;
   costUsd?: number;
+  cacheRead?: number;
+  cacheWrite?: number;
   retryOf?: string;
 }
 
@@ -164,6 +229,9 @@ export type ProtoEvent =
   | SessionCreated
   | SessionStateEvent
   | SessionUpdated
+  | SessionDeleted
+  | TodoUpsert
+  | FeedUpsert
   | MsgStart
   | MsgChunk
   | MsgDone
