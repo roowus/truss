@@ -33,7 +33,10 @@ export function AddHostWizard({ onClose }: { onClose: () => void }) {
       if (net.tailscale.dnsName) out.push({ value: `http://${net.tailscale.dnsName}:${net.port}`, label: `${net.tailscale.dnsName} (tailnet name)` });
       if (net.tailscale.ip4) out.push({ value: `http://${net.tailscale.ip4}:${net.port}`, label: `${net.tailscale.ip4} (tailnet ip)` });
     }
-    for (const ip of net.lan) out.push({ value: `http://${ip}:${net.port}`, label: `${ip} (lan/overlay)` });
+    for (const ip of net.lan) {
+      if (ip === net.tailscale.ip4) continue; // already offered as the tailnet address
+      out.push({ value: `http://${ip}:${net.port}`, label: `${ip} (lan/overlay)` });
+    }
     out.push({ value: "custom", label: "custom address…" });
     return out;
   }, [net, method]);
@@ -71,7 +74,7 @@ export function AddHostWizard({ onClose }: { onClose: () => void }) {
     : "";
 
   return (
-    <div className="fixed inset-0 z-[180] grid place-items-center bg-black/50" onPointerDown={(e) => e.target === e.currentTarget && onClose()}>
+    <div className="fixed inset-0 z-[100] grid place-items-center bg-black/50" onPointerDown={(e) => e.target === e.currentTarget && onClose()}>
       <div role="dialog" aria-label="Add a remote host" className="w-[520px] max-w-[calc(100vw-24px)] max-h-[calc(100vh-48px)] overflow-y-auto t-scroll rounded-xl border border-[var(--t-line2)] bg-[var(--t-bg1)] shadow-2xl p-5">
         <div className="flex items-center gap-2.5">
           <div className="w-8 h-8 rounded-lg border border-[var(--t-line2)] grid place-items-center text-[var(--t-sky)]"><Icon name="host" size={16} /></div>
