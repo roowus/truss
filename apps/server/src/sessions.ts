@@ -123,6 +123,7 @@ export async function createSession(input: {
     title,
     cwd: input.cwd,
     model: input.model,
+    provider: input.provider,
     project: input.project,
   });
 
@@ -179,6 +180,7 @@ export async function resumeSession(id: string): Promise<boolean> {
       sessionId: id,
       cwd: row.cwd,
       model: row.model ?? undefined,
+      provider: row.provider ?? undefined,
       resumeRef: row.harness_ref,
     });
     goLive(id, adapter, handle);

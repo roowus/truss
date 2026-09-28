@@ -31,7 +31,7 @@ interface PiRecord {
   success?: boolean;
   error?: string;
   data?: Record<string, unknown>;
-  message?: { role?: string; content?: unknown };
+  message?: { role?: string; content?: unknown; stopReason?: string; errorMessage?: string };
   usage?: PiUsage;
   assistantMessageEvent?: {
     type: string;
@@ -151,8 +151,15 @@ export const piAdapter: HarnessAdapter = {
   },
 
   async spawn(opts: SessionOpts): Promise<PiHandle> {
-    const provider = opts.provider ?? "zai-local";
+    /* model without provider (sessions stored before provider persisted)
+       resolves through the catalog — a bare default would send e.g. a
+       fireworks model id to the zai endpoint: 400 Unknown Model */
+    const catalog = readPiModels();
     const model = opts.model ?? "glm-4.7";
+    const provider =
+      opts.provider ??
+      (opts.model ? catalog.find((m) => m.model === opts.model)?.provider : undefined) ??
+      "zai-local";
     /* sessions persist under the truss data dir so a server restart can resume them */
     const here = dirname(fileURLToPath(import.meta.url));
     const sessionDir = join(process.env.TRUSS_DATA_DIR ?? join(here, "..", "..", "data"), "pi-sessions");
@@ -178,7 +185,7 @@ export const piAdapter: HarnessAdapter = {
       queue: new AsyncQueue<ProtoEvent>(),
       busy: false,
       contextWindow:
-        readPiModels().find((m) => m.provider === provider && m.model === model)?.contextWindow ?? 200_000,
+        catalog.find((m) => m.provider === provider && m.model === model)?.contextWindow ?? 200_000,
       model,
       pending: new Map(),
       idPrefix: `${Date.now().toString(36)}-`,
@@ -381,8 +388,25 @@ function handleRecord(h: PiHandle, rec: PiRecord, emit: (ev: ProtoEvent) => void
     }
 
     case "message_end": {
-      if (rec.message?.role === "assistant" && h.currentMessageId) {
-        emit({ type: "msg.done", sessionId: sid, messageId: h.currentMessageId });
+      /* message_end.message is the authoritative final message (json.md) —
+         provider failures (400 Unknown Model, auth, …) surface ONLY here as
+         stopReason "error" + errorMessage, never as a message_update. Without
+         this the bubble just closes silently and the chat looks dead. */
+      const msg = rec.message;
+      if (msg?.role === "assistant" && h.currentMessageId) {
+        if (msg.stopReason === "error") {
+          const detail = msg.errorMessage ? `: ${msg.errorMessage.slice(0, 240)}` : "";
+          emit({
+            type: "msg.done",
+            sessionId: sid,
+            messageId: h.currentMessageId,
+            stopReason: `error${detail}`,
+          });
+        } else if (msg.stopReason === "aborted") {
+          emit({ type: "msg.done", sessionId: sid, messageId: h.currentMessageId, stopReason: "interrupted" });
+        } else {
+          emit({ type: "msg.done", sessionId: sid, messageId: h.currentMessageId });
+        }
         h.currentMessageId = null;
       }
       return;

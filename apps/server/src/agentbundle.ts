@@ -119,7 +119,7 @@ After=network-online.target
 
 [Service]
 EnvironmentFile=$DEST/agent-${host.id}.env
-ExecStart=$(command -v node) $DEST/node-agent.cjs
+ExecStart=$(command -v node) $DEST/node-agent.mjs
 Restart=on-failure
 RestartSec=5
 

@@ -45,6 +45,11 @@ if (!sessionCols.some((c) => c.name === "harness_ref")) {
 if (!sessionCols.some((c) => c.name === "archived")) {
   db.exec(`ALTER TABLE sessions ADD COLUMN archived INTEGER NOT NULL DEFAULT 0`);
 }
+/* migration: provider pairs with model — resume without it sends e.g. a
+   fireworks model id to the default provider (400 Unknown Model) */
+if (!sessionCols.some((c) => c.name === "provider")) {
+  db.exec(`ALTER TABLE sessions ADD COLUMN provider TEXT`);
+}
 
 /* server-level key-value store (layout persistence, future settings) */
 db.exec(`
@@ -61,6 +66,7 @@ export interface SessionRow {
   title: string;
   cwd: string;
   model: string | null;
+  provider: string | null;
   project: string | null;
   state: SessionState;
   created_at: number;
@@ -70,8 +76,8 @@ export interface SessionRow {
 }
 
 const insertSession = db.prepare(`
-  INSERT INTO sessions (id, harness, title, cwd, model, project, state, created_at, updated_at)
-  VALUES (@id, @harness, @title, @cwd, @model, @project, @state, @created_at, @updated_at)
+  INSERT INTO sessions (id, harness, title, cwd, model, provider, project, state, created_at, updated_at)
+  VALUES (@id, @harness, @title, @cwd, @model, @provider, @project, @state, @created_at, @updated_at)
 `);
 
 const updateSessionState = db.prepare(`
@@ -128,6 +134,7 @@ export const store = {
     title: string;
     cwd: string;
     model?: string;
+    provider?: string;
     project?: string;
   }): SessionRow {
     const now = Date.now();
@@ -137,6 +144,7 @@ export const store = {
       title: s.title,
       cwd: s.cwd,
       model: s.model ?? null,
+      provider: s.provider ?? null,
       project: s.project ?? null,
       state: "spawning",
       created_at: now,
@@ -160,6 +168,7 @@ export const store = {
     title: string;
     cwd: string;
     model?: string;
+    provider?: string;
     project?: string;
     state: SessionState;
     created_at: number;
@@ -171,6 +180,7 @@ export const store = {
       title: s.title,
       cwd: s.cwd,
       model: s.model ?? null,
+      provider: s.provider ?? null,
       project: s.project ?? null,
       state: s.state,
       created_at: s.created_at,
