@@ -38,6 +38,9 @@ import { createTodo, listTodos, resolveTodoAccess, setTodoBroadcaster, userUpdat
 import { listFeed, setFeedBroadcaster, setFeedState, shareFeedItem } from "./feed.js";
 import { startFeedAutopost } from "./feed-autopost.js";
 import { composePractices, getGlobalPractices, saveGlobalPractices } from "./practices.js";
+import { createHost, deleteHost, listHosts, rotateHostToken, setHostRevoked, verifyAgentToken } from "./hosts.js";
+import { netInfo, tailscaleServe } from "./net.js";
+import { agentBundleError, ensureAgentBundle, installScript } from "./agentbundle.js";
 import { registerMcpPerms } from "./mcp-perms.js";
 import { importDshSessions } from "./import-dsh.js";
 import { registerMcpTruss } from "./mcp-truss.js";
@@ -75,6 +78,12 @@ startFeedAutopost();
 
 /* pi processes from a previous server run are gone — close their sessions. */
 reconcileOnBoot();
+
+/* build the downloadable node-agent bundle in the background (the add-host
+   wizard serves it at /agent/install.sh) */
+void ensureAgentBundle()
+  .then(() => app.log.info("node-agent bundle ready"))
+  .catch(() => app.log.warn(`node-agent bundle build failed: ${agentBundleError()}`));
 
 /* pi's model picker is a static file read at spawn — sync it from the live
    key-proxy catalog so the dialog offers everything the credentials cover */
@@ -133,7 +142,9 @@ wireRemoteRegistry({
 
 app.get("/agent/connect", { websocket: true }, (socket, req) => {
   const { host, token } = req.query as { host?: string; token?: string };
-  if (token !== AGENT_TOKEN || !host) {
+  /* per-host tokens (hosts table) first; the shared env token is a dev
+     fallback that auto-registers the host into the same registry */
+  if (!host || !token || !verifyAgentToken(host, token, AGENT_TOKEN)) {
     socket.close(4403, "unauthorized");
     return;
   }
@@ -185,6 +196,73 @@ app.get("/agent/connect", { websocket: true }, (socket, req) => {
 });
 
 app.get("/api/agents", async () => ({ agents: listAgents() }));
+
+/* ── network reachability + the agent installer ── */
+app.get("/api/net", async () => netInfo(PORT));
+app.post("/api/net/tailscale-serve", async (req, reply) => {
+  const { on } = (req.body ?? {}) as { on?: boolean };
+  try {
+    return { tailscale: await tailscaleServe(!!on, PORT) };
+  } catch (e: any) {
+    return reply.code(400).send({ error: e.message ?? String(e) });
+  }
+});
+/* the add-host wizard's one-liner (token arrives as $1, shown once) */
+app.get("/agent/install.sh", async (req, reply) => {
+  const { host, server } = req.query as { host?: string; server?: string };
+  try {
+    if (!host) throw new Error("missing host");
+    const proto = req.headers["x-forwarded-proto"] === "https" ? "https" : "http";
+    const serverUrl = server ?? `${proto}://${req.headers.host ?? `127.0.0.1:${PORT}`}`;
+    await ensureAgentBundle().catch(() => {});
+    const script = installScript(host, serverUrl);
+    return reply.header("Content-Type", "text/x-shellscript; charset=utf-8").send(script);
+  } catch (e: any) {
+    return reply.code(400).type("text/plain").send(`error: ${e.message ?? e}\n`);
+  }
+});
+
+/* ── registered remote hosts (registry + per-host tokens) ── */
+app.get("/api/hosts", async () => {
+  const live = new Set(listAgents().map((a) => a.hostId));
+  return {
+    hosts: listHosts().map((h) => ({
+      ...h,
+      online: live.has(h.id),
+      agent: listAgents().find((a) => a.hostId === h.id),
+    })),
+  };
+});
+app.post("/api/hosts", async (req, reply) => {
+  const { label, note } = (req.body ?? {}) as { label?: string; note?: string };
+  try {
+    if (!label?.trim()) throw new Error("missing label");
+    /* the plaintext token returns exactly once — the wizard embeds it in the
+       setup command; afterwards only its prefix is known */
+    return createHost(label, note ?? "");
+  } catch (e: any) {
+    return reply.code(400).send({ error: e.message ?? String(e) });
+  }
+});
+app.post("/api/hosts/:id/token", async (req, reply) => {
+  const { id } = req.params as { id: string };
+  try {
+    return rotateHostToken(id);
+  } catch (e: any) {
+    return reply.code(400).send({ error: e.message ?? String(e) });
+  }
+});
+app.post("/api/hosts/:id/revoke", async (req) => {
+  const { id } = req.params as { id: string };
+  const { revoked } = (req.body ?? {}) as { revoked?: boolean };
+  setHostRevoked(id, revoked !== false);
+  return { ok: true };
+});
+app.delete("/api/hosts/:id", async (req) => {
+  const { id } = req.params as { id: string };
+  deleteHost(id);
+  return { ok: true };
+});
 
 /* ── REST ── */
 

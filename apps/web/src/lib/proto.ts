@@ -132,6 +132,24 @@ export interface FeedItem {
   updatedAt: number;
 }
 
+/* ── remote hosts (registered registry + live agent join) ── */
+export interface HostInfo {
+  id: string;
+  label: string;
+  tokenPrefix: string;
+  createdAt: number;
+  lastSeen?: number;
+  revoked: boolean;
+  note: string;
+  online: boolean;
+  agent?: AgentInfo;
+}
+export interface NetInfo {
+  port: number;
+  tailscale: { installed: boolean; ip4?: string; dnsName?: string; serveOn?: boolean; serveUrl?: string };
+  lan: string[];
+}
+
 /* ── Git panel ── */
 export interface GitChange {
   path: string;

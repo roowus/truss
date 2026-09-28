@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import type { ProtoEvent, HarnessId, SessionState } from "@truss/proto";
 
 const here = dirname(fileURLToPath(import.meta.url));
-const dataDir = process.env.TRUSS_DATA_DIR ?? join(here, "..", "data");
+export const dataDir = process.env.TRUSS_DATA_DIR ?? join(here, "..", "data");
 mkdirSync(dataDir, { recursive: true });
 
 const db: Database.Database = new Database(join(dataDir, "truss.db"));

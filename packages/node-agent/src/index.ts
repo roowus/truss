@@ -26,11 +26,13 @@ import WebSocket from "ws";
 import type { HarnessAdapter, AdapterHandle, SessionOpts } from "../../../apps/server/src/adapters/types.js";
 import { piAdapter } from "../../../apps/server/src/adapters/pi.js";
 import { claudeAdapter } from "../../../apps/server/src/adapters/claude.js";
+import { dshAdapter } from "../../../apps/server/src/adapters/dsh.js";
+import { hermesAdapter } from "../../../apps/server/src/adapters/hermes.js";
 
-/* adapters that can run on a node host (process-spawning ones; ACP harnesses
-   like dsh/hermes run where their servers live — they COULD run here too, but
-   their identity is host-bound config, so v1 tunnels the portable two) */
-const localAdapters: HarnessAdapter[] = [piAdapter, claudeAdapter];
+/* every adapter Truss ships runs on a node host (all are child processes:
+   pi RPC, claude stream-json, dsh/hermes over ACP). The remote host needs the
+   harness CLIs it hosts (pi/claude/dsh/hermes-acp) on PATH. */
+const localAdapters: HarnessAdapter[] = [piAdapter, claudeAdapter, dshAdapter, hermesAdapter];
 
 function arg(flag: string): string | undefined {
   const i = process.argv.indexOf(flag);
@@ -41,7 +43,15 @@ const SERVER = arg("--server") ?? process.env.TRUSS_SERVER ?? "ws://127.0.0.1:40
 const TOKEN = arg("--token") ?? process.env.TRUSS_AGENT_TOKEN ?? "";
 const HOST_ID =
   arg("--host-id") ??
+  process.env.TRUSS_HOST_ID ??
   createHash("sha1").update(osHostname()).digest("hex").slice(0, 8);
+
+/* the management MCP + permission hosts live on the Truss SERVER — from a
+   remote host, 127.0.0.1 would be the wrong machine. Derive the http(s) base
+   from the ws(s) server URL before any adapter spawn reads it. */
+if (!process.env.TRUSS_MCP_BASE) {
+  process.env.TRUSS_MCP_BASE = SERVER.replace(/^ws/, "http").replace(/\/$/, "");
+}
 
 interface LiveEntry {
   adapter: HarnessAdapter;

@@ -34,6 +34,7 @@ Native (pre-installed plugin) panels: context tracker, subagent/team visualizati
 | M8 | dsh-lab parity: Files/Git/Tasks panels, Skills switches (enable/disable/create/trash), Cost daily windows + heat grid, Context stat tiles + cache-hit (pi/claude); tabs: no dropdown/no scroll, Chrome-style compress-to-fit + in-tab X on hover | ✅ (cron scheduling deferred) |
 | M9 | realtime sync: 15s WS heartbeat + client zombie watchdog (45s) + wake-resync on visibilitychange, `session.deleted` broadcast, fixed dead reconnect-resync (`onConn` never matched "closed", always "connecting") | ✅ |
 | M10 | Todos + Feed + Practices: agent-filed user todos (priority/deadline/labels/subtasks/meta, 4 views), unified actionable inbox (perms/work-done/task-runs/errors/context/reports), per-session MCP identity + todo ownership with approval cards, share-to-agent (chat + agent-visible), TRUSS.md practices (global → project → folder chain) via MCP instructions + pi first-prompt | ✅ |
+| M11 | Remote hosts for real: registered host registry (online/offline, last seen), per-host agent tokens (hashed, shown once, rotate/revoke), add-host wizard (tailscale detect + guidance, direct-IP/NetBird/ZeroTier/WireGuard path, plaintext warning), bundled agent installer (`GET /agent/install.sh`, esbuild ESM at boot, systemd --user unit), agent hosts all four adapters + derives TRUSS_MCP_BASE from the dial-out URL, tailscale serve toggle in Settings | ✅ |
 
 ### M1 notes (landed)
 

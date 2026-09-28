@@ -13,7 +13,7 @@ export function Sidebar({ onNew }: { onNew: () => void }) {
   const loaded = useApp((s) => s.sessionsLoaded);
   const err = useApp((s) => s.sessionsError);
   const terminals = useApp((s) => s.terminals);
-  const agents = useApp((s) => s.agents);
+  const hosts = useApp((s) => s.hosts);
   const agentsError = useApp((s) => s.agentsError);
   const hostPrefs = useDesktops((s) => s.hosts);
   const groupMode = useDesktops((s) => s.settings.groupMode);
@@ -160,22 +160,27 @@ export function Sidebar({ onNew }: { onNew: () => void }) {
           )}
         </Section>
 
-        {(agents.length > 0 || agentsError) && (
-          <Section title="remote hosts">
-            {agents.map((a) => (
-              <button key={a.hostId} onClick={() => openPanel("host", { hostId: a.hostId, title: hostPrefs[a.hostId]?.alias || a.hostname })} className="group w-full flex items-center gap-2 mx-0.5 px-2 h-7 text-[12px] text-[var(--t-mute)] hover:text-[var(--t-fg)] hover:bg-white/[0.03] rounded-md text-left" title={`${a.hostname} · ${a.adapters.join(", ")} · open host details`}>
-                <Icon name="host" size={12} className="text-[var(--t-dim)]" />
-                <span className="flex-1 truncate">{hostPrefs[a.hostId]?.alias || a.hostname}</span>
-                <Icon name="chev" size={10} className="opacity-0 group-hover:opacity-100 text-[var(--t-dim)]" />
-              </button>
-            ))}
-            {agentsError && (
-              <div className="px-2 py-1.5 text-[11px] text-[var(--t-red)]" role="alert">
-                Remote hosts unavailable. <button onClick={() => void store.refreshAgents()} className="underline">Retry</button>
-              </div>
-            )}
-          </Section>
-        )}
+        <Section title="remote hosts" action={<IconBtn icon="plus" label="Add host" className="w-5 h-5" onClick={() => window.dispatchEvent(new Event("truss:add-host"))} />}>
+          {hosts.map((h) => (
+            <button key={h.id} onClick={() => openPanel("host", { hostId: h.id, title: hostPrefs[h.id]?.alias || h.label })} className="group w-full flex items-center gap-2 mx-0.5 px-2 h-7 text-[12px] text-[var(--t-mute)] hover:text-[var(--t-fg)] hover:bg-white/[0.03] rounded-md text-left" title={`${h.label} · ${h.online ? `online · ${h.agent?.adapters.join(", ")}` : "offline"} · open host details`}>
+              <span className={cn("w-1.5 h-1.5 rounded-full shrink-0", h.online ? "bg-[var(--t-teal)]" : "bg-[var(--t-line2)]")} />
+              <Icon name="host" size={12} className={h.online ? "text-[var(--t-sky)]" : "text-[var(--t-dim)]"} />
+              <span className={cn("flex-1 truncate", !h.online && "opacity-50")}>{hostPrefs[h.id]?.alias || h.label}</span>
+              {h.revoked && <span className="text-[8.5px] font-mono uppercase text-[var(--t-red)] shrink-0">revoked</span>}
+              <Icon name="chev" size={10} className="opacity-0 group-hover:opacity-100 text-[var(--t-dim)]" />
+            </button>
+          ))}
+          {hosts.length === 0 && !agentsError && (
+            <button onClick={() => window.dispatchEvent(new Event("truss:add-host"))} className="w-full mx-0.5 px-2 py-2 rounded-md border border-dashed border-[var(--t-line2)] text-[11px] text-[var(--t-dim)] hover:text-[var(--t-mute)] hover:border-[var(--t-mute)] text-left">
+              No hosts yet. Add one — the agent dials out, so no firewall holes.
+            </button>
+          )}
+          {agentsError && (
+            <div className="px-2 py-1.5 text-[11px] text-[var(--t-red)]" role="alert">
+              Remote hosts unavailable. <button onClick={() => void store.refreshHosts()} className="underline">Retry</button>
+            </div>
+          )}
+        </Section>
       </div>
       <button onClick={() => openPanel("settings")} className="shrink-0 flex items-center gap-2 h-9 px-3 border-t border-[var(--t-line)] text-[12px] text-[var(--t-mute)] hover:text-[var(--t-fg)] hover:bg-white/[0.02] text-left" title="Open Settings (Ctrl/Cmd+,)">
         <Icon name="settings" size={13} /> Settings

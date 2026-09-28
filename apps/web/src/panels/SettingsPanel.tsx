@@ -3,6 +3,7 @@ import { desktops, useDesktops, type UiSettings } from "@/lib/desktops";
 import { useApp } from "@/lib/store";
 import { Btn, Icon, Select } from "@/components/ui";
 import { cn } from "@/utils/cn";
+import type { NetInfo } from "@/lib/proto";
 
 export function SettingsPanel() {
   const settings = useDesktops((s) => s.settings);
@@ -116,6 +117,8 @@ export function SettingsPanel() {
           ))}
         </section>
 
+        <NetworkSection />
+
         <PracticesSection />
 
         <div className="mt-9 pt-4 border-t border-[var(--t-line)] text-[11.5px] text-[var(--t-dim)] leading-relaxed">
@@ -128,6 +131,65 @@ export function SettingsPanel() {
 
 function SectionTitle({ children }: { children: React.ReactNode }) {
   return <h2 className="text-[11px] uppercase tracking-[0.1em] font-medium text-[var(--t-dim)] mb-1">{children}</h2>;
+}
+
+/** Network — how other devices and remote hosts reach this server. */
+function NetworkSection() {
+  const be = useApp((s) => s.backend);
+  const [net, setNet] = useState<NetInfo | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const load = () => be?.netInfo().then((n) => { setNet(n); setErr(""); }).catch((e) => setErr(e.message ?? String(e)));
+  useEffect(() => { void load(); }, [be]);
+  if (!net) return null;
+  return (
+    <section className="mt-8">
+      <SectionTitle>Network</SectionTitle>
+      <p className="text-[12px] text-[var(--t-mute)] leading-relaxed mb-2">
+        Addresses other devices (and remote node agents) can reach this server on. Everything on the same private network stays in sync.
+      </p>
+      <div className="rounded-lg border border-[var(--t-line)] overflow-hidden mb-2">
+        {net.tailscale.installed && net.tailscale.ip4 && (
+          <div className="flex items-center gap-2 px-3 py-1.5 border-b border-[var(--t-line)]/50">
+            <span className="w-1.5 h-1.5 rounded-full bg-[var(--t-sky)]" />
+            <span className="font-mono text-[11.5px] text-[var(--t-fg2)]">{net.tailscale.ip4}</span>
+            {net.tailscale.dnsName && <span className="font-mono text-[10.5px] text-[var(--t-dim)] truncate">{net.tailscale.dnsName}</span>}
+            <span className="ml-auto text-[9.5px] font-mono uppercase text-[var(--t-sky)]">tailscale</span>
+          </div>
+        )}
+        {net.lan.filter((ip) => ip !== net.tailscale.ip4).map((ip) => (
+          <div key={ip} className="flex items-center gap-2 px-3 py-1.5 border-b border-[var(--t-line)]/50 last:border-b-0">
+            <span className="w-1.5 h-1.5 rounded-full bg-[var(--t-dim)]" />
+            <span className="font-mono text-[11.5px] text-[var(--t-fg2)]">{ip}:{net.port}</span>
+            <span className="ml-auto text-[9.5px] font-mono uppercase text-[var(--t-dim)]">lan / overlay</span>
+          </div>
+        ))}
+        {!net.tailscale.installed && net.lan.length === 0 && (
+          <div className="px-3 py-2 text-[11.5px] text-[var(--t-dim)]">Only loopback. Install tailscale (or any overlay) to reach this server from other machines.</div>
+        )}
+      </div>
+      {net.tailscale.installed && (
+        <Row label="Tailscale serve" description="Expose Truss on your tailnet with a real https name (tailscale serve). Agents and browsers then reach it at the https name instead of ip:port.">
+          <Btn size="xs" variant={net.tailscale.serveOn ? "outline" : "amber"} disabled={busy} onClick={async () => {
+            setBusy(true);
+            setErr("");
+            try {
+              await be?.tailscaleServe(!net.tailscale.serveOn);
+              await load();
+            } catch (e: any) {
+              setErr(e.message ?? String(e));
+            } finally {
+              setBusy(false);
+            }
+          }}>{net.tailscale.serveOn ? "Turn off" : "Turn on"}</Btn>
+        </Row>
+      )}
+      {net.tailscale.serveOn && net.tailscale.serveUrl && (
+        <p className="text-[11.5px] text-[var(--t-teal)] font-mono -mt-1 mb-2">serving at {net.tailscale.serveUrl}</p>
+      )}
+      {err && <p className="text-[11.5px] text-[var(--t-red)]">{err}</p>}
+    </section>
+  );
 }
 
 /** TRUSS.md — the global practices file (coding + posting). Folder/project

@@ -6,6 +6,7 @@ import type {
   FeedItem,
   Frame,
   HarnessInfo,
+  HostInfo,
   ModelInfo,
   ProtoEvent,
   SessionMeta,
@@ -76,6 +77,8 @@ export interface AppState {
   terminals: TerminalInfo[];
   todos: Record<string, TodoItem>;
   todosLoaded: boolean;
+  hosts: HostInfo[];
+  hostsLoaded: boolean;
   feed: Record<string, FeedItem>;
   feedLoaded: boolean;
   toasts: Toast[];
@@ -221,6 +224,8 @@ class Store {
     terminals: [],
     todos: {},
     todosLoaded: false,
+    hosts: [],
+    hostsLoaded: false,
     feed: {},
     feedLoaded: false,
     toasts: [],
@@ -270,6 +275,7 @@ class Store {
       this.refreshTerminals(),
       this.refreshTodos(),
       this.refreshFeed(),
+      this.refreshHosts(),
     ]);
     // Active sessions may have pending permission cards — hydrate them eagerly.
     for (const id of this.state.order) {
@@ -295,7 +301,7 @@ class Store {
     await this.refreshSessions();
     await this.refreshTerminals();
     await this.refreshAgents();
-    await Promise.all([this.refreshTodos(), this.refreshFeed()]);
+    await Promise.all([this.refreshTodos(), this.refreshFeed(), this.refreshHosts()]);
     for (const id of Object.keys(this.state.views)) {
       if (this.state.sessions[id]) void this.rehydrate(id);
     }
@@ -546,6 +552,16 @@ class Store {
       this.toast("error", "Couldn't delete session", e.message);
     }
   }
+  async refreshHosts() {
+    if (!this.be) return;
+    try {
+      const { hosts } = await this.be.hosts();
+      this.set({ hosts, hostsLoaded: true });
+    } catch (e: any) {
+      this.toast("error", "Couldn't load hosts", e?.message ?? String(e));
+    }
+  }
+
   async refreshTodos() {
     if (!this.be) return;
     try {

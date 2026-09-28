@@ -8,6 +8,8 @@ import type {
   GitBranch,
   GitStatus,
   HarnessesResp,
+  HostInfo,
+  NetInfo,
   SessionMeta,
   SkillInfo,
   TaskInfo,
@@ -74,6 +76,15 @@ export interface Backend {
   gitGraph(cwd: string, n?: number): Promise<{ graph: string }>;
   gitDiff(cwd: string, path: string, staged: boolean): Promise<{ diff: string }>;
   gitSwitch(cwd: string, branch: string, create: boolean): Promise<{ branch: string }>;
+  /** Remote hosts registry */
+  hosts(): Promise<{ hosts: HostInfo[] }>;
+  createHost(label: string, note?: string): Promise<{ host: HostInfo; token: string }>;
+  rotateHostToken(id: string): Promise<{ token: string }>;
+  revokeHost(id: string, revoked: boolean): Promise<unknown>;
+  deleteHost(id: string): Promise<unknown>;
+  /** network reachability (tailscale detect, LAN addrs, serve toggle) */
+  netInfo(): Promise<NetInfo>;
+  tailscaleServe(on: boolean): Promise<{ tailscale: NetInfo["tailscale"] }>;
   /** Tasks panel (kanban) */
   tasks(): Promise<{ tasks: TaskInfo[] }>;
   createTask(body: { title: string; prompt: string; cwd: string; harness: string }): Promise<{ task: TaskInfo }>;
@@ -186,6 +197,13 @@ export function createLiveBackend(): Backend {
     gitGraph: (cwd, n) => req("GET", `/api/git/graph?cwd=${encodeURIComponent(cwd)}${n ? `&n=${n}` : ""}`),
     gitDiff: (cwd, path, staged) => req("GET", `/api/git/diff?cwd=${encodeURIComponent(cwd)}&path=${encodeURIComponent(path)}${staged ? "&staged=1" : ""}`),
     gitSwitch: (cwd, branch, create) => req("POST", "/api/git/switch", { cwd, branch, create }),
+    hosts: () => req("GET", "/api/hosts"),
+    createHost: (label, note) => req("POST", "/api/hosts", { label, note }),
+    rotateHostToken: (id) => req("POST", `/api/hosts/${encodeURIComponent(id)}/token`, {}),
+    revokeHost: (id, revoked) => req("POST", `/api/hosts/${encodeURIComponent(id)}/revoke`, { revoked }),
+    deleteHost: (id) => req("DELETE", `/api/hosts/${encodeURIComponent(id)}`),
+    netInfo: () => req("GET", "/api/net"),
+    tailscaleServe: (on) => req("POST", "/api/net/tailscale-serve", { on }),
     tasks: () => req("GET", "/api/tasks"),
     createTask: (b) => req("POST", "/api/tasks", b),
     updateTask: (id, patch) => req("PATCH", `/api/tasks/${encodeURIComponent(id)}`, patch),

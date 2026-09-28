@@ -6,6 +6,7 @@ import { Sidebar } from "@/components/Sidebar";
 import { Workspace } from "@/components/Workspace";
 import { StatusBar, Toasts, CommandPalette } from "@/components/Chrome";
 import { NewSessionDialog, type NewSessionPreset } from "@/components/NewSessionDialog";
+import { AddHostWizard } from "./components/AddHostWizard";
 import { openPanel } from "@/lib/workspace";
 import { TrussLogo, Spinner } from "@/components/ui";
 import { cn } from "@/utils/cn";
@@ -56,6 +57,7 @@ function Shell() {
   const [dialog, setDialog] = useState(false);
   const [newPreset, setNewPreset] = useState<NewSessionPreset | null>(null);
   const [palette, setPalette] = useState(false);
+  const [addHost, setAddHost] = useState(false);
   const [sidebar, setSidebar] = useState(() => window.innerWidth >= 900);
   const density = useDesktops((s) => s.settings.density);
   const sidebarWidth = density === "compact" ? 246 : 276;
@@ -90,10 +92,13 @@ function Shell() {
         setSidebar((s) => !s);
       }
     };
+    const onAddHost = () => setAddHost(true);
     window.addEventListener("truss:new", onNewEv);
+    window.addEventListener("truss:add-host", onAddHost);
     window.addEventListener("keydown", key);
     return () => {
       window.removeEventListener("truss:new", onNewEv);
+      window.removeEventListener("truss:add-host", onAddHost);
       window.removeEventListener("keydown", key);
     };
   }, [openNew]);
@@ -122,6 +127,7 @@ function Shell() {
       <Toasts />
       {dialog && <NewSessionDialog preset={newPreset ?? undefined} onClose={() => { setDialog(false); setNewPreset(null); }} />}
       {palette && <CommandPalette onClose={() => setPalette(false)} onNew={() => openNew()} />}
+      {addHost && <AddHostWizard onClose={() => setAddHost(false)} />}
     </div>
   );
 }

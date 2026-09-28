@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import type { IDockviewPanelProps } from "dockview-react";
-import { store, useApp } from "@/lib/store";
+import { store, useApp, useNow } from "@/lib/store";
 import { desktops, useDesktops, type HostPreference } from "@/lib/desktops";
-import { harnessStyle, hostOf, shortPath } from "@/lib/format";
+import { ago, harnessStyle, hostOf, shortPath } from "@/lib/format";
 import { openPanel, renameHostPanels } from "@/lib/workspace";
 import { Btn, HarnessMark, Icon, Select, StateDot } from "@/components/ui";
 import { cn } from "@/utils/cn";
@@ -11,7 +11,8 @@ const blank: HostPreference = { alias: "", defaultCwd: "", defaultProject: "", p
 
 export function HostPanel({ params }: IDockviewPanelProps<{ hostId: string }>) {
   const hostId = params.hostId;
-  const host = useApp((s) => s.agents.find((a) => a.hostId === hostId));
+  const host = useApp((s) => s.hosts.find((h) => h.id === hostId));
+  const agent = host?.agent;
   const error = useApp((s) => s.agentsError);
   const harnesses = useApp((s) => s.harnesses);
   const models = useApp((s) => s.models);
@@ -23,15 +24,20 @@ export function HostPanel({ params }: IDockviewPanelProps<{ hostId: string }>) {
   const [refreshing, setRefreshing] = useState(false);
   const [message, setMessage] = useState("");
   const [submitted, setSubmitted] = useState(false);
+  const [newToken, setNewToken] = useState<string | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const now = useNow(30_000);
   const [expandedAdapter, setExpandedAdapter] = useState<string | null>(null);
 
   useEffect(() => setForm({ ...blank, ...saved }), [saved]);
   const remoteHarnesses = useMemo(() => harnesses.filter((h) => {
     const suffix = hostOf(h.id);
-    return suffix === hostId || suffix === host?.hostname || suffix === host?.hostname.split(".")[0];
-  }), [harnesses, hostId, host?.hostname]);
+    if (!suffix) return false; // local harness (no @host) is never "on this host"
+    const hn = agent?.hostname;
+    return suffix === hostId || (hn !== undefined && (suffix === hn || suffix === hn.split(".")[0]));
+  }), [harnesses, hostId, agent?.hostname]);
   const remoteSessions = order.map((id) => sessions[id]).filter((s) => s && (remoteHarnesses.some((h) => h.id === s.harness) || hostOf(s.harness) === hostId));
-  const name = saved?.alias?.trim() || host?.hostname || hostId;
+  const name = saved?.alias?.trim() || agent?.hostname || host?.label || hostId;
 
   const edit = (patch: Partial<HostPreference>) => {
     setForm((current) => ({ ...current, ...patch }));
@@ -51,7 +57,7 @@ export function HostPanel({ params }: IDockviewPanelProps<{ hostId: string }>) {
       return;
     }
     desktops.updateHost(hostId, next);
-    renameHostPanels(hostId, next.alias || host?.hostname || hostId);
+    renameHostPanels(hostId, next.alias || agent?.hostname || host?.label || hostId);
     setSubmitted(true);
     setMessage("");
   };
@@ -73,11 +79,14 @@ export function HostPanel({ params }: IDockviewPanelProps<{ hostId: string }>) {
           </div>
           <div className="min-w-0 flex-1">
             <h1 className="text-[18px] text-[var(--t-fg)] font-semibold leading-tight truncate">{name}</h1>
-            <div className="mt-0.5 text-[12px] text-[var(--t-dim)] truncate">{host?.hostname || hostId} · remote host</div>
+            <div className="mt-0.5 text-[12px] text-[var(--t-dim)] truncate flex items-center gap-1.5">
+              <span className={cn("inline-block w-1.5 h-1.5 rounded-full", host?.online ? "bg-[var(--t-teal)]" : "bg-[var(--t-line2)]")} />
+              {agent?.hostname || host?.label || hostId} · {host?.online ? "online" : host?.lastSeen ? `last seen ${ago(host.lastSeen, now)}` : "never connected"}
+            </div>
           </div>
           <Btn variant="ghost" icon="retry" disabled={refreshing} onClick={async () => {
             setRefreshing(true);
-            await Promise.all([store.refreshAgents(), store.refreshHarnesses()]);
+            await Promise.all([store.refreshHosts(), store.refreshAgents(), store.refreshHarnesses()]);
             setRefreshing(false);
           }} title="Refresh from /api/agents and /api/harnesses">{refreshing ? "Refreshing" : "Refresh"}</Btn>
         </div>
@@ -87,7 +96,13 @@ export function HostPanel({ params }: IDockviewPanelProps<{ hostId: string }>) {
             <Icon name="alert" size={13} className="mt-0.5" /> /api/agents: {error}
           </div>
         )}
-        {!host && !error && <div className="mt-5 text-[12px] text-[var(--t-amber)]">This host is not currently listed by /api/agents. Its UI preferences remain saved.</div>}
+        {host && !host.online && !error && (
+          <div className="mt-5 rounded-lg border border-[var(--t-line2)] bg-[var(--t-bg0)] px-3 py-2.5 text-[12px] text-[var(--t-mute)] leading-relaxed">
+            Offline. On the host: <span className="font-mono text-[var(--t-fg2)]">set -a; . ~/.truss/agent-{hostId}.env; set +a; node ~/.truss/node-agent.mjs</span>
+            {host.revoked && <span className="text-[var(--t-red)]"> — its token is revoked; rotate it below to allow reconnection.</span>}
+          </div>
+        )}
+        {!host && !error && <div className="mt-5 text-[12px] text-[var(--t-amber)]">This host is not registered. Add it from the sidebar's remote hosts section.</div>}
 
         <div className="mt-7 flex items-center gap-3">
           <Btn variant="amber" size="md" icon="plus" onClick={newSession} disabled={remoteHarnesses.length === 0}>New session on {name}</Btn>
@@ -96,7 +111,7 @@ export function HostPanel({ params }: IDockviewPanelProps<{ hostId: string }>) {
 
         <section className="mt-9">
           <SectionTitle>Connected adapters</SectionTitle>
-          {host?.adapters?.length ? host.adapters.map((adapter) => {
+          {agent?.adapters?.length ? agent.adapters.map((adapter) => {
             const h = remoteHarnesses.find((x) => x.id.split("@")[0] === adapter);
             const count = h ? models.filter((m) => m.harness === h.id).length : 0;
             const meta = harnessStyle(adapter);
@@ -138,13 +153,42 @@ export function HostPanel({ params }: IDockviewPanelProps<{ hostId: string }>) {
         </section>
 
         <section className="mt-9">
+          <SectionTitle>Connection & token</SectionTitle>
+          <p className="text-[12px] text-[var(--t-mute)] leading-relaxed mb-3">
+            The agent authenticates with this host's own token (stored as a hash; the plaintext was shown once at setup). Revoke kills the channel for this host only; rotate mints a fresh one (update the env file on the host after rotating).
+          </p>
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="font-mono text-[11px] text-[var(--t-dim)]">token {host?.tokenPrefix ?? "…"}</span>
+            <span className={cn("text-[10px] font-mono px-1.5 rounded", host?.revoked ? "bg-[var(--t-red)]/12 text-[var(--t-red)]" : "bg-[var(--t-teal)]/12 text-[var(--t-teal)]")}>{host?.revoked ? "revoked" : "active"}</span>
+            <span className="ml-auto" />
+            <Btn size="xs" variant="outline" icon="retry" onClick={async () => {
+              const r = await store.be?.rotateHostToken(hostId);
+              if (r) setNewToken(r.token);
+            }}>Rotate</Btn>
+            <Btn size="xs" variant={host?.revoked ? "outline" : "ghost"} onClick={() => void store.be?.revokeHost(hostId, !host?.revoked).then(() => store.refreshHosts())}>{host?.revoked ? "Enable" : "Revoke"}</Btn>
+            <Btn size="xs" variant="ghost" icon="trash" className="text-[var(--t-red)]" onClick={async () => {
+              if (!confirmDelete) { setConfirmDelete(true); return; }
+              await store.be?.deleteHost(hostId);
+              await store.refreshHosts();
+            }}>{confirmDelete ? "Confirm delete" : "Delete host"}</Btn>
+          </div>
+          {newToken && (
+            <div className="mt-2 rounded-lg border border-[var(--t-amber)]/40 bg-[var(--t-amber)]/5 p-3">
+              <div className="text-[11px] text-[var(--t-amber)] mb-1">New token — shown once. Put it in the host's env file (~/.truss/agent-{hostId}.env):</div>
+              <div className="font-mono text-[11px] text-[var(--t-fg)] break-all select-all">{newToken}</div>
+              <Btn size="xs" variant="ghost" className="mt-2" onClick={() => setNewToken(null)}>I've saved it</Btn>
+            </div>
+          )}
+        </section>
+
+        <section className="mt-9">
           <SectionTitle>Truss defaults for this host</SectionTitle>
           <p className="text-[12px] text-[var(--t-mute)] leading-relaxed mb-4">
             These change how this host appears in Truss and prefill new sessions. They do not change the node-agent's server configuration.
           </p>
           <div className="grid sm:grid-cols-2 gap-x-4 gap-y-4">
             <Field label="Display name">
-              <input className="t-input" value={form.alias} onChange={(e) => edit({ alias: e.target.value })} placeholder={host?.hostname || hostId} maxLength={40} />
+              <input className="t-input" value={form.alias} onChange={(e) => edit({ alias: e.target.value })} placeholder={agent?.hostname || host?.label || hostId} maxLength={40} />
             </Field>
             <Field label="Preferred adapter">
               <Select
