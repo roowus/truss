@@ -25,6 +25,8 @@ const agents = new Map<string, AgentInfo>();
 const eventQueues = new Map<string, AsyncQueue<ProtoEvent>>();
 /** reqId → spawn ack resolver */
 const pendingSpawns = new Map<string, (ok: boolean, error?: string) => void>();
+/** reqId → metrics resolver (Monitor tab polls through the tunnel) */
+const pendingMetrics = new Map<string, (m: unknown) => void>();
 let reqCounter = 0;
 
 type RegisterFn = (id: HarnessId, adapter: HarnessAdapter) => void;
@@ -211,9 +213,32 @@ export function agentFrame(hostId: string, msg: Record<string, unknown>) {
       eventQueues.get(sessionId)?.push(ev);
       return;
     }
+    case "metrics": {
+      const { reqId, m } = msg as { reqId: string; m: unknown };
+      const pending = pendingMetrics.get(reqId);
+      if (pending) {
+        pendingMetrics.delete(reqId);
+        pending(m);
+      }
+      return;
+    }
     default:
       return;
   }
+}
+
+/** ask a connected agent for its host vitals (Monitor tab) */
+export function requestMetrics(hostId: string, timeoutMs = 3500): Promise<unknown> {
+  const agent = agents.get(hostId);
+  if (!agent) return Promise.reject(new Error(`node-agent ${hostId} not connected`));
+  const reqId = `m-${++reqCounter}`;
+  agent.socket.send(JSON.stringify({ type: "metrics_req", reqId }));
+  return new Promise((res, rej) => {
+    pendingMetrics.set(reqId, res);
+    setTimeout(() => {
+      if (pendingMetrics.delete(reqId)) rej(new Error("metrics timeout"));
+    }, timeoutMs);
+  });
 }
 
 export function listAgents() {

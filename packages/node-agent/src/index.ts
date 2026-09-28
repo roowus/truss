@@ -28,6 +28,7 @@ import { piAdapter } from "../../../apps/server/src/adapters/pi.js";
 import { claudeAdapter } from "../../../apps/server/src/adapters/claude.js";
 import { dshAdapter } from "../../../apps/server/src/adapters/dsh.js";
 import { hermesAdapter } from "../../../apps/server/src/adapters/hermes.js";
+import { collectMetrics } from "@truss/proto";
 
 /* every adapter Truss ships runs on a node host (all are child processes:
    pi RPC, claude stream-json, dsh/hermes over ACP). The remote host needs the
@@ -114,6 +115,16 @@ function connect() {
           sendFrame({ type: "spawned", reqId, ok: true });
         } catch (err) {
           sendFrame({ type: "spawned", reqId, ok: false, error: String(err) });
+        }
+        return;
+      }
+      case "metrics_req": {
+        const { reqId } = msg as { reqId: string };
+        try {
+          const m = await collectMetrics();
+          sendFrame({ type: "metrics", reqId, m });
+        } catch (err) {
+          sendFrame({ type: "metrics", reqId, m: { error: String(err) } });
         }
         return;
       }

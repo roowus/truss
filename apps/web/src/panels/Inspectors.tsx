@@ -171,7 +171,7 @@ function Totals({ tin, tout, cost, hasTok, hasCost, calls }: { tin: number; tout
   );
 }
 
-function Spark({ points, color }: { points: number[]; color: string }) {
+export function Spark({ points, color }: { points: number[]; color: string }) {
   const W = 280, H = 48;
   const d = points.map((p, i) => `${i === 0 ? "M" : "L"}${(i / (points.length - 1)) * W},${H - p * H}`).join(" ");
   return (

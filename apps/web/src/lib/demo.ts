@@ -720,6 +720,36 @@ export function createDemoBackend(): Backend {
     rotateHostToken: async () => ({ token: "truss_agent_demo_rotated" }),
     revokeHost: async () => ({ ok: true }),
     deleteHost: async () => ({ ok: true }),
+    metrics: async () => {
+      const t = Date.now();
+      const mk = (host: string, cpuBase: number): never => {
+        const cores = 4;
+        const perCore = Array.from({ length: cores }, () => Math.round((cpuBase + Math.random() * 18) * 10) / 10);
+        const total = 16e9, used = 6.4e9 + Math.random() * 3e8;
+        const history = Array.from({ length: 120 }, (_, i) => ({ t: t - (120 - i) * 5000, cpu: cpuBase + Math.sin(i / 9) * 14 + Math.random() * 6, mem: 38 + Math.cos(i / 14) * 5, rx: 200e3 + Math.random() * 900e3, tx: 120e3 + Math.random() * 700e3 }));
+        return {
+          hostname: host,
+          metrics: {
+            at: t,
+            host: { hostname: host, os: "Ubuntu 24.04 LTS", kernel: "6.17.0", arch: "aarch64", cpuModel: "ARM Neoverse-N1", cores },
+            uptimeSec: 367000,
+            cpu: { usage: perCore.reduce((a, b) => a + b, 0) / cores, perCore, load: [0.4, 0.35, 0.2], procs: 194, threads: 465, running: 1, blocked: 0 },
+            pressure: { cpu: 0.9, io: 0, mem: 0 },
+            mem: { total, used, available: total - used, cached: 4.2e9, swapTotal: 4e9, swapUsed: 0 },
+            disks: [{ device: "/dev/sda1", mount: "/", fs: "ext4", total: 200e9, used: 42e9, pct: 21 }],
+            net: [{ iface: "enp0s6", rxBps: 320e3, txBps: 210e3 }],
+            temps: [{ label: "cpu", c: 47.5 }],
+            procs: [
+              { pid: 1051, cmd: "node", cpu: 8.4, rssMb: 721, state: "S" },
+              { pid: 402, cmd: "postgres", cpu: 2.1, rssMb: 318, state: "S" },
+              { pid: 88, cmd: "systemd", cpu: 0.1, rssMb: 44, state: "S" },
+            ],
+          },
+          history,
+        } as never;
+      };
+      return { local: mk("devbox", 9), agents: { atlas: mk("atlas", 34) } };
+    },
     netInfo: async () => ({ port: 4040, tailscale: { installed: true, ip4: "100.64.0.1", dnsName: "devbox.example.ts.net", serveOn: false }, lan: ["192.168.1.20"] }),
     tailscaleServe: async () => ({ tailscale: { installed: true, ip4: "100.64.0.1", dnsName: "devbox.example.ts.net", serveOn: true, serveUrl: "https://devbox.example.ts.net" } }),
     tasks: async () => ({ tasks: [] }),

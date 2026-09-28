@@ -8,7 +8,7 @@ import { HarnessMark, Icon } from "./ui";
 
 const ICONS: Record<string, string> = {
   chat: "chat", trajectory: "wave", context: "gauge", team: "tree",
-  skills: "spark", files: "folder", git: "tree", tasks: "check", todos: "check", feed: "bolt",
+  skills: "spark", files: "folder", git: "tree", tasks: "check", todos: "check", feed: "bolt", monitor: "gauge",
   terminal: "term", host: "host", settings: "settings", welcome: "layout",
 };
 
@@ -90,6 +90,9 @@ export function TabPicker({ anchor, spaceId, groupId, onClose }: Props) {
           )}
           {(!q || match("feed inbox notifications reports")) && (
             <Row icon="bolt" label="Feed" onClick={() => run(() => openPanel("feed", { spaceId, groupId: targetGroupId }))} />
+          )}
+          {(!q || match("monitor vitals cpu memory devices")) && (
+            <Row icon="gauge" label="Monitor" onClick={() => run(() => openPanel("monitor", { spaceId, groupId: targetGroupId }))} />
           )}
           {(!q || match("cost tokens ledger")) && (
             <Row icon="cost" label="Cost & tokens" onClick={() => run(() => openPanel("cost", { spaceId, groupId: targetGroupId }))} />

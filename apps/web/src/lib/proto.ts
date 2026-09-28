@@ -132,6 +132,23 @@ export interface FeedItem {
   updatedAt: number;
 }
 
+/* ── Monitor (host vitals; shape mirrors packages/proto/src/metrics.ts) ── */
+export interface HostMetrics {
+  at: number;
+  host: { hostname: string; os: string; kernel: string; arch: string; cpuModel: string; cores: number };
+  uptimeSec: number;
+  cpu: { usage: number; perCore: number[]; load: [number, number, number]; procs: number; threads: number; running: number; blocked: number };
+  pressure: { cpu: number; io: number; mem: number };
+  mem: { total: number; used: number; available: number; cached: number; swapTotal: number; swapUsed: number };
+  disks: { device: string; mount: string; fs: string; total: number; used: number; pct: number }[];
+  net: { iface: string; rxBps: number; txBps: number }[];
+  temps: { label: string; c: number }[];
+  procs: { pid: number; cmd: string; cpu: number; rssMb: number; state: string }[];
+}
+export interface HistPoint { t: number; cpu: number; mem: number; rx: number; tx: number }
+export interface MonitorEntry { hostname: string; metrics: HostMetrics; history: HistPoint[] }
+export interface MonitorData { local: MonitorEntry; agents: Record<string, MonitorEntry | null> }
+
 /* ── remote hosts (registered registry + live agent join) ── */
 export interface HostInfo {
   id: string;

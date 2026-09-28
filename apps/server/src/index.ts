@@ -54,8 +54,10 @@ import {
   agentFrame,
   agentHello,
   listAgents,
+  requestMetrics,
   wireRemoteRegistry,
 } from "./remote.js";
+import { collectMetrics } from "@truss/proto";
 import { registerAdapter, unregisterAdapter } from "./sessions.js";
 
 const PORT = Number(process.env.TRUSS_PORT ?? 4040);
@@ -220,6 +222,46 @@ app.get("/agent/install.sh", async (req, reply) => {
   } catch (e: any) {
     return reply.code(400).type("text/plain").send(`error: ${e.message ?? e}\n`);
   }
+});
+
+/* ── monitor: this host + every connected agent, with rolling history ── */
+interface HistPoint { t: number; cpu: number; mem: number; rx: number; tx: number }
+const metricsHistory = new Map<string, HistPoint[]>();
+function pushHistory(key: string, m: any) {
+  const ring = metricsHistory.get(key) ?? [];
+  const last = ring[ring.length - 1];
+  if (last && m.at - last.t < 2000) return; /* don't double-sample on fast polls */
+  ring.push({
+    t: m.at,
+    cpu: m.cpu?.usage ?? 0,
+    mem: m.mem?.total ? (m.mem.used / m.mem.total) * 100 : 0,
+    rx: (m.net ?? []).reduce((a: number, n: any) => a + (n.rxBps || 0), 0),
+    tx: (m.net ?? []).reduce((a: number, n: any) => a + (n.txBps || 0), 0),
+  });
+  if (ring.length > 240) ring.shift();
+  metricsHistory.set(key, ring);
+}
+
+app.get("/api/metrics", async () => {
+  const local = await collectMetrics();
+  pushHistory("local", local);
+  const agentsOut: Record<string, unknown> = {};
+  await Promise.all(
+    listAgents().map(async (a) => {
+      try {
+        const m = (await requestMetrics(a.hostId)) as any;
+        if (m && !m.error) {
+          pushHistory(a.hostId, m);
+          agentsOut[a.hostId] = { hostname: a.hostname, metrics: m, history: metricsHistory.get(a.hostId) ?? [] };
+          return;
+        }
+        agentsOut[a.hostId] = null;
+      } catch {
+        agentsOut[a.hostId] = null;
+      }
+    }),
+  );
+  return { local: { metrics: local, history: metricsHistory.get("local") ?? [] }, agents: agentsOut };
 });
 
 /* ── registered remote hosts (registry + per-host tokens) ── */

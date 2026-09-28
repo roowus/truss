@@ -247,3 +247,7 @@ export type ProtoEvent =
   | CtxUsage;
 
 export type ProtoEventType = ProtoEvent["type"];
+
+/* host vitals collector (Monitor tab; shared by server + node-agent) */
+export { collectMetrics } from "./metrics.js";
+export type { HostMetrics } from "./metrics.js";

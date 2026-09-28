@@ -9,6 +9,7 @@ import type {
   GitStatus,
   HarnessesResp,
   HostInfo,
+  MonitorData,
   NetInfo,
   SessionMeta,
   SkillInfo,
@@ -82,6 +83,8 @@ export interface Backend {
   rotateHostToken(id: string): Promise<{ token: string }>;
   revokeHost(id: string, revoked: boolean): Promise<unknown>;
   deleteHost(id: string): Promise<unknown>;
+  /** Monitor: local + remote host vitals */
+  metrics(): Promise<MonitorData>;
   /** network reachability (tailscale detect, LAN addrs, serve toggle) */
   netInfo(): Promise<NetInfo>;
   tailscaleServe(on: boolean): Promise<{ tailscale: NetInfo["tailscale"] }>;
@@ -202,6 +205,7 @@ export function createLiveBackend(): Backend {
     rotateHostToken: (id) => req("POST", `/api/hosts/${encodeURIComponent(id)}/token`, {}),
     revokeHost: (id, revoked) => req("POST", `/api/hosts/${encodeURIComponent(id)}/revoke`, { revoked }),
     deleteHost: (id) => req("DELETE", `/api/hosts/${encodeURIComponent(id)}`),
+    metrics: () => req("GET", "/api/metrics"),
     netInfo: () => req("GET", "/api/net"),
     tailscaleServe: (on) => req("POST", "/api/net/tailscale-serve", { on }),
     tasks: () => req("GET", "/api/tasks"),

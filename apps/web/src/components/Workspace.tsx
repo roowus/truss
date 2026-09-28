@@ -23,6 +23,7 @@ import { GitPanel } from "@/panels/GitPanel";
 import { TasksPanel } from "@/panels/TasksPanel";
 import { TodosPanel } from "@/panels/TodosPanel";
 import { FeedPanel } from "@/panels/FeedPanel";
+import { MonitorPanel } from "@/panels/MonitorPanel";
 import { HostPanel } from "@/panels/HostPanel";
 import { SettingsPanel } from "@/panels/SettingsPanel";
 import { DesktopStrip } from "./DesktopStrip";
@@ -43,6 +44,7 @@ const components = {
   tasks: TasksPanel,
   todos: TodosPanel,
   feed: FeedPanel,
+  monitor: MonitorPanel,
   welcome: WelcomePanel,
   host: HostPanel,
   settings: SettingsPanel,
@@ -53,7 +55,7 @@ const components = {
 
 const KIND_ICON: Record<string, string> = {
   chat: "chat", trajectory: "wave", terminal: "term", context: "gauge",
-  team: "tree", skills: "spark", files: "folder", git: "tree", tasks: "check", todos: "check", feed: "bolt",
+  team: "tree", skills: "spark", files: "folder", git: "tree", tasks: "check", todos: "check", feed: "bolt", monitor: "gauge",
   welcome: "layout", host: "host", settings: "settings", cost: "cost", credentials: "lock", router: "host",
 };
 
