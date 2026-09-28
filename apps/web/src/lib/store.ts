@@ -53,7 +53,7 @@ export interface SessionView {
   stateDetail?: string;
 }
 
-const emptyView = (): SessionView => ({
+export const emptyView = (): SessionView => ({
   lastSeq: 0, hydration: "loading", items: [], msgs: {}, tools: {}, perms: {}, pending: [],
   calls: {}, callOrder: [], agents: {}, agentOrder: [], ctxHistory: [],
 });
@@ -87,7 +87,7 @@ export interface AppState {
 }
 
 /* ---------------- reducer (pure-ish, copy-on-write) ---------------- */
-function reduce(v: SessionView, ev: ProtoEvent, frameTime: number): SessionView {
+export function reduce(v: SessionView, ev: ProtoEvent, frameTime: number): SessionView {
   switch (ev.type) {
     case "msg.start": {
       if (v.msgs[ev.messageId]) return v;

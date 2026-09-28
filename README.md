@@ -85,6 +85,16 @@ Truss is a **single-user, fully trusted** local app. The server has **no auth at
 - [docs/ui-handoff-v2.md](./docs/ui-handoff-v2.md) is the UI redesign brief
 - [PLAN.md](./PLAN.md) is the milestone log
 
+## Hacking
+
+```bash
+pnpm -r run lint   # typecheck everything
+pnpm -r run build  # build web + server
+pnpm test          # unit + adapter + store tests (node:test, no network)
+```
+
+Every change ships with tests in the same commit. See [TRUSS.md](./TRUSS.md) for the house rules. CI runs lint, build, and the test suite on every push and PR.
+
 ## License
 
 [MIT](./LICENSE) © 2026 roowus

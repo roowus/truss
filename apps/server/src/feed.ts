@@ -80,7 +80,9 @@ export function listFeed(opts: { state?: FeedState; sharedWith?: string; limit?:
     /* agent view: only cards shared to this session (json_each over the array) */
     return store
       .all<FeedRow>(
-        `SELECT * FROM feed_items, json_each(feed_items.shared_with) je
+        /* feed_items.* — plain SELECT * would let json_each's own id/type
+           columns clobber the card's (agents got id=1, type="text") */
+        `SELECT feed_items.* FROM feed_items, json_each(feed_items.shared_with) je
          WHERE je.value = ? AND state != 'dismissed' ORDER BY created_at DESC LIMIT ?`,
         opts.sharedWith, limit,
       )

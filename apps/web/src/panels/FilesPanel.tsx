@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { IDockviewPanelProps } from "dockview-react";
 import { store, useApp } from "@/lib/store";
-import { shortPath } from "@/lib/format";
+import { fmtSize, shortPath } from "@/lib/format";
 import { Btn, Empty, Icon, Spinner } from "@/components/ui";
 import { Markdown } from "./Markdown";
 import type { FileEntry, FileRead } from "@/lib/proto";
@@ -324,11 +324,4 @@ function Row({
   );
 }
 
-export function fmtSize(n: number): string {
-  const r = Math.round(n);
-  if (r < 1024) return `${r} B`;
-  if (r < 1024 ** 2) return `${(n / 1024).toFixed(n < 10 * 1024 ? 1 : 0)} KB`;
-  if (n < 1024 ** 3) return `${(n / 1024 ** 2).toFixed(1)} MB`;
-  if (n < 1024 ** 4) return `${(n / 1024 ** 3).toFixed(1)} GB`;
-  return `${(n / 1024 ** 4).toFixed(1)} TB`;
-}
+

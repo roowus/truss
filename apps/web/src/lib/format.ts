@@ -37,6 +37,14 @@ export function ago(t: number, now = Date.now()) {
   if (s < 86400) return `${Math.floor(s / 3600)}h`;
   return `${Math.floor(s / 86400)}d`;
 }
+export function fmtSize(n: number): string {
+  const r = Math.round(n);
+  if (r < 1024) return `${r} B`;
+  if (r < 1024 ** 2) return `${(n / 1024).toFixed(n < 10 * 1024 ? 1 : 0)} KB`;
+  if (n < 1024 ** 3) return `${(n / 1024 ** 2).toFixed(1)} MB`;
+  if (n < 1024 ** 4) return `${(n / 1024 ** 3).toFixed(1)} GB`;
+  return `${(n / 1024 ** 4).toFixed(1)} TB`;
+}
 export const shortPath = (p: string) => p.replace(/^\/home\/[^/]+/, "~").replace(/^\/Users\/[^/]+/, "~");
 
 export function argSummary(args: unknown): string {

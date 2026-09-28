@@ -75,6 +75,10 @@ interface PiHandle extends AdapterHandle {
   currentMessageId: string | null;
   currentCallId: string | null;
   currentCallStartedAt: number;
+  /** trajectory row status for the open call — message_end flips it on
+      provider errors (500) and aborts (499) so failed turns stop looking
+      successful in the trajectory */
+  currentCallStatus: number;
   latestUsage: PiUsage | null;
   toolStartedAt: Map<string, number>;
   /** retryCallId → failedCallId linkage for trajectory retry rows */
@@ -194,6 +198,7 @@ export const piAdapter: HarnessAdapter = {
       currentMessageId: null,
       currentCallId: null,
       currentCallStartedAt: 0,
+      currentCallStatus: 200,
       latestUsage: null,
       toolStartedAt: new Map(),
       retryOf: new Map(),
@@ -254,9 +259,16 @@ export const piAdapter: HarnessAdapter = {
 
     /* learn pi's own session id for restart-resume (get_state is the rpc handshake for it) */
     const stateReqId = `truss-state-${Date.now()}`;
+    let stateTimer: ReturnType<typeof setTimeout>;
     const stateRec = new Promise<PiRecord | null>((res) => {
-      h.pending.set(stateReqId, res);
-      setTimeout(() => res(null), 8000);
+      h.pending.set(stateReqId, (rec) => {
+        clearTimeout(stateTimer); // answered — don't hold the loop open for 8s
+        res(rec);
+      });
+      stateTimer = setTimeout(() => {
+        h.pending.delete(stateReqId);
+        res(null);
+      }, 8000);
     });
     proc.stdin!.write(JSON.stringify({ id: stateReqId, type: "get_state" }) + "\n");
     void stateRec
@@ -338,6 +350,7 @@ function handleRecord(h: PiHandle, rec: PiRecord, emit: (ev: ProtoEvent) => void
       const callId = `call-${h.idPrefix}${++h.turnCounter}`;
       h.currentCallId = callId;
       h.currentCallStartedAt = Date.now();
+      h.currentCallStatus = 200;
       h.latestUsage = null;
       emit({ type: "llm.call.start", sessionId: sid, callId, model: h.model, at: Date.now() });
       return;
@@ -396,6 +409,7 @@ function handleRecord(h: PiHandle, rec: PiRecord, emit: (ev: ProtoEvent) => void
       if (msg?.role === "assistant" && h.currentMessageId) {
         if (msg.stopReason === "error") {
           const detail = msg.errorMessage ? `: ${msg.errorMessage.slice(0, 240)}` : "";
+          h.currentCallStatus = 500;
           emit({
             type: "msg.done",
             sessionId: sid,
@@ -403,6 +417,7 @@ function handleRecord(h: PiHandle, rec: PiRecord, emit: (ev: ProtoEvent) => void
             stopReason: `error${detail}`,
           });
         } else if (msg.stopReason === "aborted") {
+          h.currentCallStatus = 499;
           emit({ type: "msg.done", sessionId: sid, messageId: h.currentMessageId, stopReason: "interrupted" });
         } else {
           emit({ type: "msg.done", sessionId: sid, messageId: h.currentMessageId });
@@ -463,7 +478,7 @@ function handleRecord(h: PiHandle, rec: PiRecord, emit: (ev: ProtoEvent) => void
           type: "llm.call.done",
           sessionId: sid,
           callId: h.currentCallId,
-          status: 200,
+          status: h.currentCallStatus,
           latencyMs: Date.now() - h.currentCallStartedAt,
           tokensIn: u?.input,
           tokensOut: u?.output,

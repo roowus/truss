@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, resolve, sep } from "node:path";
 
 /**
@@ -31,17 +31,30 @@ function extOf(name: string): string {
   return i > 0 ? name.slice(i + 1).toLowerCase() : "";
 }
 
-/** Resolve rel inside root; refuse escapes (incl. symlink-free lexical tricks). */
+/** Resolve rel inside root; refuse escapes, lexical (../..) AND symlink
+   (a link inside the root pointing outside resolves outside — check the
+   realpath of the deepest existing ancestor so dangling targets for
+   writeFile still work). */
 function confine(root: string, rel: string | undefined): string {
   if (!root) throw new Error("missing workspace root");
-  const base = resolve(root);
+  const base = realpathSync(root);
   const p = resolve(base, rel ?? ".");
   if (p !== base && !p.startsWith(base + sep)) throw new Error("path escapes the workspace root");
+  let deepest = p;
+  while (!existsSync(deepest)) {
+    const parent = dirname(deepest);
+    if (parent === deepest) break;
+    deepest = parent;
+  }
+  const real = realpathSync(deepest);
+  if (real !== base && !real.startsWith(base + sep)) {
+    throw new Error("path escapes the workspace root (symlink)");
+  }
   return p;
 }
 
 function relOf(root: string, abs: string): string {
-  const base = resolve(root);
+  const base = realpathSync(root);
   return abs === base ? "." : abs.slice(base.length + 1);
 }
 

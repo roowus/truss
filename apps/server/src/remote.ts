@@ -23,8 +23,10 @@ interface RemoteHandle extends AdapterHandle {
 const agents = new Map<string, AgentInfo>();
 /** sessionId → queue of proto events arriving over the tunnel */
 const eventQueues = new Map<string, AsyncQueue<ProtoEvent>>();
-/** reqId → spawn ack resolver */
-const pendingSpawns = new Map<string, (ok: boolean, error?: string) => void>();
+/** sessionId → hostId owning the queue, so an agent drop only kills ITS sessions */
+const queueHost = new Map<string, string>();
+/** reqId → spawn ack resolver (+ timeout so an answered ack frees the timer) */
+const pendingSpawns = new Map<string, { res: (ok: boolean, error?: string) => void; timer: ReturnType<typeof setTimeout> }>();
 /** reqId → metrics resolver (Monitor tab polls through the tunnel) */
 const pendingMetrics = new Map<string, (m: unknown) => void>();
 let reqCounter = 0;
@@ -94,12 +96,20 @@ class RemoteAdapter implements HarnessAdapter {
     const reqId = `spawn-${++reqCounter}`;
     const queue = new AsyncQueue<ProtoEvent>();
     eventQueues.set(opts.sessionId, queue);
+    queueHost.set(opts.sessionId, this.hostId);
 
     const ack = new Promise<void>((res, rej) => {
-      pendingSpawns.set(reqId, (ok, error) => (ok ? res() : rej(new Error(error))));
-      setTimeout(() => {
+      const timer = setTimeout(() => {
         if (pendingSpawns.delete(reqId)) rej(new Error("spawn ack timeout"));
       }, 30000);
+      pendingSpawns.set(reqId, {
+        timer,
+        res: (ok, error) => {
+          clearTimeout(timer); // answered — don't hold the loop open for 30s
+          if (ok) res();
+          else rej(new Error(error));
+        },
+      });
     });
 
     agent.socket.send(
@@ -138,6 +148,7 @@ class RemoteAdapter implements HarnessAdapter {
     if (!q) {
       q = new AsyncQueue<ProtoEvent>();
       eventQueues.set(handle.sessionId, q);
+      queueHost.set(handle.sessionId, this.hostId);
     }
     return q;
   }
@@ -150,6 +161,7 @@ class RemoteAdapter implements HarnessAdapter {
     if (q) {
       q.close();
       eventQueues.delete(handle.sessionId);
+      queueHost.delete(handle.sessionId);
     }
   }
 }
@@ -178,8 +190,10 @@ export function agentBye(hostId: string) {
   for (const a of agent.adapters) {
     unregisterFn?.(`${a.id}@${hostId}` as HarnessId);
   }
-  /* sessions hosted there are dead — close their event streams */
+  /* sessions hosted there are dead — close THEIR event streams, nobody
+     else's (a drop used to nuke every queue, including other hosts') */
   for (const [sessionId, q] of eventQueues) {
+    if (queueHost.get(sessionId) !== hostId) continue;
     q.push({
       type: "session.state",
       sessionId,
@@ -188,6 +202,7 @@ export function agentBye(hostId: string) {
     });
     q.close();
     eventQueues.delete(sessionId);
+    queueHost.delete(sessionId);
     stateSink?.(sessionId, `node-agent ${hostId} disconnected`);
   }
   console.log(`[remote] agent ${hostId} gone`);
@@ -204,7 +219,7 @@ export function agentFrame(hostId: string, msg: Record<string, unknown>) {
       const pending = pendingSpawns.get(reqId);
       if (pending) {
         pendingSpawns.delete(reqId);
-        pending(ok, error);
+        pending.res(ok, error);
       }
       return;
     }
@@ -234,10 +249,13 @@ export function requestMetrics(hostId: string, timeoutMs = 3500): Promise<unknow
   const reqId = `m-${++reqCounter}`;
   agent.socket.send(JSON.stringify({ type: "metrics_req", reqId }));
   return new Promise((res, rej) => {
-    pendingMetrics.set(reqId, res);
-    setTimeout(() => {
+    const timer = setTimeout(() => {
       if (pendingMetrics.delete(reqId)) rej(new Error("metrics timeout"));
     }, timeoutMs);
+    pendingMetrics.set(reqId, (m) => {
+      clearTimeout(timer);
+      res(m);
+    });
   });
 }
 

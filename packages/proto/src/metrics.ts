@@ -43,7 +43,10 @@ function cpuTimes(): { perCore: number[][]; total: number[] } {
   return { perCore, total };
 }
 
-const busyOf = (t: number[]) => t.reduce((a, v, i) => a + (i >= 3 && i <= 4 ? 0 : v), 0) + (t[7] ?? 0) + (t[8] ?? 0); // idle+iowait excluded; steal counts
+/* busy = everything except idle(3) and iowait(4). steal(7) and guest(8) are
+   already in the sum — guest is folded into user/nice by the kernel — so
+   adding them again would double-count and could push usage past 100% */
+const busyOf = (t: number[]) => t.reduce((a, v, i) => a + (i >= 3 && i <= 4 ? 0 : v), 0);
 const allOf = (t: number[]) => t.reduce((a, v) => a + v, 0);
 
 function meminfo(): Record<string, number> {

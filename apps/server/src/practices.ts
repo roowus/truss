@@ -60,7 +60,10 @@ export function composePractices(cwd?: string, project?: string | null): { layer
     if (p) layers.push({ path: pf, scope: "project", text: p });
   }
   if (cwd) {
-    /* walk $HOME → cwd collecting TRUSS.md (never above $HOME) */
+    /* walk $HOME → cwd collecting TRUSS.md (never above $HOME). The $HOME
+       root itself is deliberately skipped: home-wide rules belong in the
+       global layer (~/.truss/TRUSS.md), not a loose file in your home dir */
+
     const home = homedir();
     const abs = resolve(cwd);
     if (abs === home || abs.startsWith(home + sep)) {

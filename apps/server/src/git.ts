@@ -44,7 +44,22 @@ export async function gitStatus(cwd: string): Promise<GitStatus> {
   }
   const lines = out.split("\n");
   const head = lines[0] ?? "";
-  const m = head.match(/^## ([^.\s]+)(?:\.\.\.\S+)?(?: \[ahead (\d+)(?:, behind (\d+))?\])?(?: \[behind (\d+)\])?/);
+  /* porcelain head forms: "## main...o/m [ahead 1]" / "## No commits yet on
+     main" / "## HEAD (no branch)" — one regex used to read "No" and "HEAD"
+     as branch names */
+  let branch: string | undefined;
+  let ahead: number | undefined;
+  let behind: number | undefined;
+  if (head.startsWith("## No commits yet on ")) {
+    branch = head.slice("## No commits yet on ".length).trim() || undefined;
+  } else if (/^## HEAD\b/.test(head)) {
+    branch = undefined; // detached
+  } else {
+    const m = head.match(/^## ([^.\s]+)(?:\.\.\.\S+)?(?: \[ahead (\d+)(?:, behind (\d+))?\])?(?: \[behind (\d+)\])?/);
+    branch = m?.[1];
+    ahead = m?.[2] ? Number(m[2]) : undefined;
+    behind = m?.[3] ? Number(m[3]) : m?.[4] ? Number(m[4]) : undefined;
+  }
   const changes: GitChange[] = [];
   for (const ln of lines.slice(1)) {
     if (!ln.trim()) continue;
@@ -59,13 +74,7 @@ export async function gitStatus(cwd: string): Promise<GitStatus> {
     }
     changes.push({ path, orig, x, y });
   }
-  return {
-    isRepo: true,
-    branch: m?.[1] === "HEAD (no branch)" ? undefined : m?.[1],
-    ahead: m?.[2] ? Number(m[2]) : undefined,
-    behind: m?.[3] ? Number(m[3]) : m?.[4] ? Number(m[4]) : undefined,
-    changes,
-  };
+  return { isRepo: true, branch, ahead, behind, changes };
 }
 
 export interface GitBranch {

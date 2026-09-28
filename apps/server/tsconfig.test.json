@@ -1,0 +1,11 @@
+{
+  /* typecheck-only config that also covers test/ (the build tsconfig keeps
+     rootDir src so dist output stays clean) */
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "declaration": false,
+    "types": ["node"]
+  },
+  "include": ["src", "test"]
+}

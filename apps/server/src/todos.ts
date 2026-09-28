@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { store } from "./db.js";
-import { postFeed, setFeedState } from "./feed.js";
+import { postFeed, settleFeedWhere } from "./feed.js";
 import type { TodoItem, TodoPriority, TodoStatus, TodoSubtask } from "@truss/proto";
 
 /**
@@ -139,11 +139,11 @@ function applyPatch(id: string, p: TodoPatch): TodoItem {
 }
 
 function settleTodoCard(t: TodoItem, _status: TodoStatus) {
-  const rows = store.all<{ id: string }>(
-    `SELECT id FROM feed_items WHERE type = 'todo' AND json_extract(data, '$.todoId') = ? AND state IN ('unread','read')`,
-    t.id,
-  );
-  for (const r of rows) setFeedState(r.id, "done");
+  /* the todo's auto-posted card is dedupe-keyed todo:<id>; going through
+     feed.ts (not a direct query) also guarantees the feed table exists —
+     a postToFeed:false todo settled before ANY card ever posted used to die
+     with "no such table: feed_items" */
+  settleFeedWhere(`todo:${t.id}`, "done");
 }
 
 export function createTodo(input: {
@@ -220,8 +220,12 @@ export function agentUpdateTodo(callerSession: string, id: string, p: TodoPatch)
 export function resolveTodoAccess(todoId: string, requesterId: string, approve: boolean): TodoItem {
   const t = getTodo(todoId);
   if (!t) throw new Error(`no such todo: ${todoId}`);
+  /* approve lifts any earlier denial too — otherwise a denied session could
+     never be let in later (the guard checks denied first, deny was sticky) */
   const shared = approve ? [...new Set([...t.sharedEditors, requesterId])] : t.sharedEditors;
-  const denied = approve ? t.deniedEditors : [...new Set([...t.deniedEditors, requesterId])];
+  const denied = approve
+    ? t.deniedEditors.filter((d) => d !== requesterId)
+    : [...new Set([...t.deniedEditors, requesterId])];
   store.run(`UPDATE todos SET shared_editors = ?, denied_editors = ?, updated_at = ? WHERE id = ?`,
     JSON.stringify(shared), JSON.stringify(denied), Date.now(), todoId);
   const next = getTodo(todoId)!;

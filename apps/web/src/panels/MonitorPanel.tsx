@@ -4,7 +4,7 @@ import { useApp, useNow } from "@/lib/store";
 import { ago } from "@/lib/format";
 import { Btn, Empty, Icon, Spinner } from "@/components/ui";
 import { Spark } from "./Inspectors";
-import { fmtSize } from "./FilesPanel";
+import { fmtSize } from "@/lib/format";
 import type { HostMetrics, MonitorData } from "@/lib/proto";
 import { cn } from "@/utils/cn";
 

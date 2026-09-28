@@ -2,12 +2,13 @@
   "name": "truss",
   "private": true,
   "version": "0.1.0",
-  "description": "The head for your harnesses — a universal plugin-based frontend for AI agentic-loop harnesses.",
+  "description": "The head for your harnesses \u2014 a universal plugin-based frontend for AI agentic-loop harnesses.",
   "packageManager": "pnpm@10.26.2",
   "scripts": {
     "dev": "pnpm -r --parallel run dev",
     "build": "pnpm -r run build",
-    "lint": "pnpm -r run lint"
+    "lint": "pnpm -r run lint",
+    "test": "pnpm -r --if-present run test"
   },
   "devDependencies": {
     "typescript": "^5.6.3"

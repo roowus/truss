@@ -85,12 +85,13 @@ export function setHostRevoked(id: string, revoked: boolean) {
   store.run(`UPDATE hosts SET revoked = ? WHERE id = ?`, revoked ? 1 : 0, id);
 }
 
-/** rotate: new plaintext once, old token dies */
+/** rotate: new plaintext once, old token dies. Revocation is separate — a
+   revoked host that rotates should stay revoked until explicitly restored. */
 export function rotateHostToken(id: string): { token: string } {
   table();
   if (!getHost(id)) throw new Error(`no such host: ${id}`);
   const token = `truss_agent_${randomBytes(24).toString("hex")}`;
-  store.run(`UPDATE hosts SET token_hash = ?, token_prefix = ?, revoked = 0 WHERE id = ?`, hashToken(token), `…${token.slice(-6)}`, id);
+  store.run(`UPDATE hosts SET token_hash = ?, token_prefix = ? WHERE id = ?`, hashToken(token), `…${token.slice(-6)}`, id);
   return { token };
 }
 
@@ -103,14 +104,22 @@ export function touchHost(id: string) {
 export function verifyAgentToken(hostId: string, token: string, envToken: string): boolean {
   table();
   const r = store.get<HostRow>(`SELECT * FROM hosts WHERE id = ?`, hostId);
-  if (r && !r.revoked && hashToken(token) === r.token_hash) {
+  /* a revoked host stays dead no matter which token it presents */
+  if (r?.revoked) return false;
+  if (r && hashToken(token) === r.token_hash) {
     touchHost(hostId);
     return true;
   }
-  /* legacy shared token: allowed, and auto-registers the host so it shows up
-     in the registry (labeled from its id; user can rename) */
+  /* legacy shared token: allowed, and auto-registers the host UNDER ITS OWN
+     ID (createHost would mint a random one, orphaning last_seen and adding a
+     duplicate row on every reconnect) */
   if (envToken && token === envToken) {
-    if (!r) createHost(hostId, "auto-registered via shared token");
+    if (!r) {
+      store.run(
+        `INSERT INTO hosts (id, label, token_hash, token_prefix, created_at, note) VALUES (?, ?, ?, ?, ?, ?)`,
+        hostId, hostId, hashToken(token), `…${token.slice(-6)}`, Date.now(), "auto-registered via shared token",
+      );
+    }
     touchHost(hostId);
     return true;
   }
