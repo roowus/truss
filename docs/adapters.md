@@ -24,7 +24,7 @@ Each adapter spawns/drives one harness in its structured machine mode and normal
 
 ## 4. DeepSeek Harness (remote)
 
-- **Drive**: DSH lives on rewvis (agent.rewis), not local. Bridge over SSH/HTTP: run `dsh` CLI / Python SDK on the host, or ship a small dsh plugin exposing ACP.
+- **Drive**: DSH can live on another host. Bridge over SSH/HTTP: run `dsh` CLI / Python SDK on the host, or ship a small dsh plugin exposing ACP.
 - **Refs**: `github.com/deepseek-ai/deepseek-harness`.
 
 ## Adapter interface (all)
@@ -42,7 +42,7 @@ interface HarnessAdapter {
 
 A harness with no structured mode gets a **PTY fallback adapter** later — the interface already abstracts it.
 
-## As built (rewvis, 2026-09-23)
+## As built (2026-09-23)
 
 All four harnesses are connected and verified live through the Truss server:
 

@@ -7,7 +7,7 @@ apps/web        React 19 + Vite + Tailwind 4 + Dockview + xterm.js
 apps/server     Fastify (Node 22) — REST + WS event bus, session store, plugin loader
 packages/proto  internal event schema (ACP-aligned + per-LLM-call step events)
 packages/adapters  claude-code | hermes | pi | dsh
-packages/node-agent  daemon for remote hosts (Fedora, rewvis)
+packages/node-agent  daemon for remote hosts
 ```
 
 ## Data flow

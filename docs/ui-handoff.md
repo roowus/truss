@@ -17,7 +17,7 @@ The interesting UI problem: the user runs *several harnesses at once* and watche
 
 ## 2. Live deployment & dev loop
 
-- Prod: `https://truss.rewis` — Caddy → systemd `truss.service` → Fastify `127.0.0.1:4040`, which serves the built web app (`apps/web/dist`) + REST + both WS channels. Deploy: `pnpm -C apps/web build && sudo systemctl restart truss`.
+- Prod example: a reverse proxy (Caddy/nginx) → systemd service → Fastify `127.0.0.1:4040`, which serves the built web app (`apps/web/dist`) + REST + both WS channels. Deploy: `pnpm -C apps/web build && <restart the service>`.
 - Dev: `pnpm dev` → Vite `:4041` proxying `/api`, `/events`, `/api/terminal/*` to Fastify `:4040` (tsx watch). Stop the systemd service first, or set `TRUSS_PORT`.
 - The frontend stack today is React 19 + Vite + Tailwind 4 + Dockview + xterm.js. **Dockview and xterm.js carry real weight** (window management, terminal emulation); you may replace anything else, and you may replace those too if you have something better — but read §6 first.
 
