@@ -87,9 +87,14 @@ function TrussTab({ api, params }: IDockviewPanelHeaderProps<{ sessionId?: strin
        natural width (probe, never compressed) PLUS an inline X each would
        overflow the strip. Mode-independent (computed from probes, not live
        tabs) so it can't oscillate; uniform across the strip like Chrome.
-       Ultra (<44px ⇔ the hover X would cover most of the click target):
-       only the ACTIVE tab offers it (Chrome's favicon-tab rule; see
-       index.css). Sibling content changes self-heal on resize/mount. */
+       The strip is re-resolved on every measure and the observers re-attach
+       when the tab is dragged/transferred to another strip — otherwise the
+       verdict goes stale (the "works for some tabs" bug).
+       Ultra (<64px) ⇒ the hover X pops over the ICON (Chrome's favicon
+       swap), leaving the rest of the tab a safe click-to-activate target. */
+    let ro: ResizeObserver | null = null;
+    let mo: MutationObserver | null = null;
+    let observed: Element | null = null;
     const measure = () => {
       const strip = tab.closest(".dv-tabs-container");
       if (!strip) return;
@@ -97,18 +102,30 @@ function TrussTab({ api, params }: IDockviewPanelHeaderProps<{ sessionId?: strin
       for (const p of strip.querySelectorAll(".truss-tab-probe")) natural += (p as HTMLElement).offsetWidth + 38 /* X + gap + paddings */;
       const crowded = natural > strip.clientWidth + 2;
       setCramped(crowded);
-      setUltra(crowded && tab.getBoundingClientRect().width < 44);
+      setUltra(crowded && tab.getBoundingClientRect().width < 64);
     };
-    measure();
-    const strip = tab.closest(".dv-tabs-container");
-    const ro = new ResizeObserver(measure);
-    if (strip) ro.observe(strip);
-    ro.observe(probe);
-    const mo = new MutationObserver(measure);
-    if (strip) mo.observe(strip, { childList: true });
+    const attach = () => {
+      const strip = tab.closest(".dv-tabs-container");
+      if (strip === observed) return;
+      ro?.disconnect();
+      mo?.disconnect();
+      observed = strip;
+      if (strip) {
+        ro = new ResizeObserver(measure);
+        ro.observe(strip);
+        ro.observe(probe);
+        mo = new MutationObserver(() => {
+          if (tab.closest(".dv-tabs-container") !== observed) attach();
+          measure();
+        });
+        mo.observe(strip, { childList: true });
+      }
+      measure();
+    };
+    attach();
     return () => {
-      ro.disconnect();
-      mo.disconnect();
+      ro?.disconnect();
+      mo?.disconnect();
     };
   }, [title, pending, meta?.state]);
   return (
@@ -136,7 +153,11 @@ function TrussTab({ api, params }: IDockviewPanelHeaderProps<{ sessionId?: strin
         className={cn(
           "truss-tab-close w-5 h-5 grid place-items-center rounded hover:!opacity-100 hover:bg-white/10 focus:opacity-100 focus:pointer-events-auto",
           cramped
-            ? cn("absolute right-0.5 top-1/2 -translate-y-1/2 bg-[var(--t-bg1)] shadow-sm opacity-0 pointer-events-none group-hover/tab:opacity-60 group-hover/tab:pointer-events-auto", ultra && "ultra")
+            ? ultra
+              ? /* sliver tab: cover the ICON, not the title — the rest of the
+                   tab stays a safe click-to-activate target (Chrome favicon swap) */
+                "absolute left-0.5 top-1/2 -translate-y-1/2 bg-[var(--t-bg1)] shadow-sm opacity-0 pointer-events-none group-hover/tab:opacity-60 group-hover/tab:pointer-events-auto"
+              : "absolute right-0.5 top-1/2 -translate-y-1/2 bg-[var(--t-bg1)] shadow-sm opacity-0 pointer-events-none group-hover/tab:opacity-60 group-hover/tab:pointer-events-auto"
             : "ml-auto shrink-0 opacity-60",
         )}
         aria-label="Close tab"

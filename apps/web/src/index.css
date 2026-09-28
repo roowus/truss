@@ -98,10 +98,6 @@ body {
 .truss-dock .dv-tabs-container { overflow: hidden; }
 .truss-dock .dv-scrollable > .dv-scrollbar-horizontal { display: none; }
 .truss-dock .dv-tab { flex-shrink: 1; min-width: 0; overflow: hidden; }
-/* ultra-narrow tabs: the hover X would cover the whole click target, so
-   only the ACTIVE tab offers it (Chrome's favicon-tab rule) — an inactive
-   ultra tab stays a safe click-to-activate target */
-.truss-dock .dv-tab:not(.dv-active-tab) .truss-tab-close.ultra { opacity: 0 !important; pointer-events: none !important; }
 .truss-dock .dv-watermark { background: var(--t-bg1); }
 
 /* ---------------- utilities ---------------- */
