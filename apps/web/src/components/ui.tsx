@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState, type ReactNode, type ButtonHTMLAttributes } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode, type ButtonHTMLAttributes } from "react";
 import { createPortal } from "react-dom";
 import { cn } from "@/utils/cn";
 import { harnessStyle, hostOf } from "@/lib/format";
+import { clampPopoverPos } from "@/lib/popover";
 import { HarnessLogo } from "./harnessLogos";
 import type { SessionState } from "@/lib/proto";
 
@@ -280,6 +281,17 @@ export function Select({
     else if (e.key === "Escape") { e.preventDefault(); setOpen(false); btnRef.current?.focus(); }
   };
 
+  /* measure the actual popover and clamp it inside the viewport — a
+     left-anchored dropdown near the right edge used to run off-screen */
+  const [popPos, setPopPos] = useState<{ top: number; left: number } | null>(null);
+  useLayoutEffect(() => {
+    if (!open) return;
+    const b = btnRef.current?.getBoundingClientRect();
+    const pop = listRef.current;
+    if (!b || !pop) return;
+    setPopPos(clampPopoverPos(b, pop.offsetWidth, pop.offsetHeight, window.innerWidth, window.innerHeight));
+  }, [open, filter, options.length]);
+
   const rect = btnRef.current?.getBoundingClientRect();
   return (
     <>
@@ -315,7 +327,11 @@ export function Select({
           role="listbox"
           aria-label={ariaLabel}
           className="fixed z-[170] max-h-[280px] overflow-auto t-scroll rounded-lg bg-[var(--t-bg2)] border border-[var(--t-line2)] shadow-2xl pb-1 t-pop"
-          style={{ top: Math.min(rect.bottom + 5, window.innerHeight - 290), left: rect.left, minWidth: rect.width }}
+          style={
+            popPos
+              ? { top: popPos.top, left: popPos.left, minWidth: rect.width, maxWidth: Math.min(440, window.innerWidth - 16) }
+              : { top: -9999, left: -9999, minWidth: rect.width } /* off-screen until measured — no flash of a clipped popover */
+          }
         >
           {/* flush to the popover's top edge: an opaque cover so scrolled
               options never peek above it (the old py-1 left a 4px gap) */}
