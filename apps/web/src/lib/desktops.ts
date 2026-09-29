@@ -1,5 +1,6 @@
 import { useCallback, useRef, useSyncExternalStore } from "react";
 import type { DockviewApi, IDockviewPanel, SerializedDockview } from "dockview-react";
+import { normalizeLayoutSizes } from "./layoutSanitize";
 import type { Backend } from "./backend";
 import { store } from "./store";
 
@@ -175,7 +176,10 @@ class DesktopManager {
       const space = this.state.spaces.find((s) => s.id === id);
       if (space?.layout) {
         try {
-          api.fromJSON(space.layout);
+          /* clamp phantom-thin groups back to usable sizes first — a squeezed
+             layout restores forever otherwise (the 2px group whose header
+             painted its tabs over the neighbor) */
+          api.fromJSON(normalizeLayoutSizes(space.layout));
         } catch (e: any) {
           const msg = `Workspace "${space.name}" could not restore its tabs: ${e?.message ?? e}`;
           this.set({ loadError: msg });

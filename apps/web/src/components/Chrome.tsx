@@ -106,7 +106,7 @@ export function Toasts() {
   return (
     <div className="fixed right-3 bottom-9 z-[200] flex flex-col gap-2 w-[340px] max-w-[calc(100vw-24px)] pointer-events-none" aria-live="polite">
       {toasts.map((t) => (
-        <div key={t.id} role={t.kind === "error" ? "alert" : "status"} className="pointer-events-auto rounded-lg bg-[var(--t-bg2)] border border-[var(--t-line2)] shadow-2xl px-3 py-2.5 flex gap-2.5 t-pop" style={{ borderLeft: `3px solid ${t.kind === "error" ? "var(--t-red)" : t.kind === "ok" ? "var(--t-teal)" : "var(--t-sky)"}` }}>
+        <div key={t.id} role={t.kind === "error" ? "alert" : "status"} className="pointer-events-auto rounded-lg bg-[var(--t-bg2)] border border-[var(--t-line2)] shadow-2xl px-3 py-2.5 flex gap-2.5 t-pop">
           <Icon name={t.kind === "error" ? "alert" : t.kind === "ok" ? "check" : "bolt"} size={14} className={cn("mt-0.5", t.kind === "error" ? "text-[var(--t-red)]" : t.kind === "ok" ? "text-[var(--t-teal)]" : "text-[var(--t-sky)]")} />
           <div className="flex-1 min-w-0">
             <div className="text-[12.5px] text-[var(--t-fg)] font-medium">{t.title}</div>

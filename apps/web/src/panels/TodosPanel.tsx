@@ -333,8 +333,9 @@ function CalendarView({ items, now, patch }: ViewProps) {
                       "w-full text-left truncate rounded px-1 py-0.5 text-[10px] leading-tight",
                       t.status !== "open" ? "line-through text-[var(--t-dim)]" : past ? "bg-[var(--t-red)]/15 text-[var(--t-red)]" : "bg-[var(--t-bg2)] text-[var(--t-fg2)] hover:bg-[var(--t-bg0)]",
                     )}
-                    style={{ borderLeft: `2px solid ${PRI_STYLE[t.priority].color}` }}
                   >
+                    {/* priority reads in-box (a dot), not as a side stripe */}
+                    <span className="inline-block w-1 h-1 rounded-full mr-1 align-middle" style={{ background: PRI_STYLE[t.priority].color }} />
                     {t.title}
                   </button>
                 ))}
