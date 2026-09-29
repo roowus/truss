@@ -11,6 +11,7 @@ import type {
   HostInfo,
   MonitorData,
   NetInfo,
+  TailscalePeer,
   SessionMeta,
   SkillInfo,
   TaskInfo,
@@ -89,6 +90,7 @@ export interface Backend {
   metrics(): Promise<MonitorData>;
   /** network reachability (tailscale detect, LAN addrs, serve toggle) */
   netInfo(): Promise<NetInfo>;
+  tailscalePeers(): Promise<{ self?: TailscalePeer; peers: TailscalePeer[] }>;
   tailscaleServe(on: boolean): Promise<{ tailscale: NetInfo["tailscale"] }>;
   /** Tasks panel (kanban) */
   tasks(): Promise<{ tasks: TaskInfo[] }>;
@@ -211,6 +213,7 @@ export function createLiveBackend(): Backend {
     deleteHost: (id) => req("DELETE", `/api/hosts/${encodeURIComponent(id)}`),
     metrics: () => req("GET", "/api/metrics"),
     netInfo: () => req("GET", "/api/net"),
+    tailscalePeers: () => req("GET", "/api/net/tailscale/peers"),
     tailscaleServe: (on) => req("POST", "/api/net/tailscale-serve", { on }),
     tasks: () => req("GET", "/api/tasks"),
     createTask: (b) => req("POST", "/api/tasks", b),

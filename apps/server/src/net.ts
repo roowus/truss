@@ -29,6 +29,62 @@ export interface NetInfo {
   lan: string[]; // private IPv4s of this host
 }
 
+/* ── tailnet device list (add-host wizard's device picker) ── */
+
+export interface TailscalePeer {
+  hostName: string;
+  dnsName: string; // magic-dns name, trailing dot stripped
+  ip4?: string;
+  os?: string; // linux / macOS / windows / android / ios…
+  online: boolean;
+  lastSeen?: string; // ISO
+  exitNode: boolean; // currently routing traffic
+  exitNodeOption: boolean; // offers itself as one
+  tagged: boolean; // tagged devices have no user owner
+}
+
+/** pure: tailscale status --json → clean peer rows (exported for tests) */
+export function parseTailscaleStatus(j: unknown): { self?: TailscalePeer; peers: TailscalePeer[] } {
+  if (!j || typeof j !== "object") return { peers: [] };
+  const root = j as Record<string, unknown>;
+  const one = (n: unknown): TailscalePeer | undefined => {
+    if (!n || typeof n !== "object") return undefined;
+    const p = n as Record<string, unknown>;
+    const ips = Array.isArray(p.TailscaleIPs) ? (p.TailscaleIPs as unknown[]).filter((x): x is string => typeof x === "string") : [];
+    const hostName = typeof p.HostName === "string" ? p.HostName : "";
+    const dnsName = typeof p.DNSName === "string" ? p.DNSName.replace(/\.$/, "") : "";
+    if (!hostName && !dnsName) return undefined;
+    return {
+      hostName,
+      dnsName,
+      ip4: ips.find((x) => /^\d+\.\d+\.\d+\.\d+$/.test(x)),
+      os: typeof p.OS === "string" ? p.OS : undefined,
+      online: p.Online === true,
+      lastSeen: typeof p.LastSeen === "string" ? p.LastSeen : undefined,
+      exitNode: p.ExitNode === true,
+      exitNodeOption: p.ExitNodeOption === true,
+      tagged: Array.isArray(p.Tags) && p.Tags.length > 0,
+    };
+  };
+  const self = one(root.Self);
+  const peersRaw = root.Peer && typeof root.Peer === "object" ? Object.values(root.Peer as Record<string, unknown>) : [];
+  const peers = peersRaw
+    .map(one)
+    .filter((p): p is TailscalePeer => !!p)
+    .sort((a, b) => Number(b.online) - Number(a.online) || a.hostName.localeCompare(b.hostName));
+  return { self, peers };
+}
+
+/** devices on the tailnet; empty when tailscale is absent or the query fails */
+export async function tailscalePeers(): Promise<{ self?: TailscalePeer; peers: TailscalePeer[] }> {
+  try {
+    const st = await sh("tailscale", ["status", "--json"]);
+    return parseTailscaleStatus(JSON.parse(st));
+  } catch {
+    return { peers: [] };
+  }
+}
+
 export async function netInfo(port: number): Promise<NetInfo> {
   const out: NetInfo = { port, tailscale: { installed: false }, lan: [] };
   for (const [name, addrs] of Object.entries(networkInterfaces())) {

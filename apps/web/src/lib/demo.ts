@@ -752,6 +752,14 @@ export function createDemoBackend(): Backend {
       return { local: mk("devbox", 9), agents: { atlas: mk("atlas", 34) } };
     },
     netInfo: async () => ({ port: 4040, tailscale: { installed: true, ip4: "100.64.0.1", dnsName: "devbox.example.ts.net", serveOn: false }, lan: ["192.168.1.20"] }),
+    tailscalePeers: async () => ({
+      self: { hostName: "devbox", dnsName: "devbox.example.ts.net", ip4: "100.64.0.1", os: "linux", online: true, exitNode: false, exitNodeOption: false, tagged: false },
+      peers: [
+        { hostName: "atlas", dnsName: "atlas.example.ts.net", ip4: "100.64.0.2", os: "linux", online: true, lastSeen: new Date().toISOString(), exitNode: false, exitNodeOption: true, tagged: false },
+        { hostName: "macbook-pro", dnsName: "macbook-pro.example.ts.net", ip4: "100.64.0.3", os: "macOS", online: true, lastSeen: new Date().toISOString(), exitNode: false, exitNodeOption: false, tagged: false },
+        { hostName: "pixel", dnsName: "pixel.example.ts.net", ip4: "100.64.0.4", os: "android", online: false, lastSeen: new Date(Date.now() - 86400e3 * 12).toISOString(), exitNode: false, exitNodeOption: false, tagged: false },
+      ],
+    }),
     tailscaleServe: async () => ({ tailscale: { installed: true, ip4: "100.64.0.1", dnsName: "devbox.example.ts.net", serveOn: true, serveUrl: "https://devbox.example.ts.net" } }),
     tasks: async () => ({ tasks: [] }),
     createTask: async (b) => ({ task: { id: "demo-task", status: "todo" as const, createdAt: Date.now(), updatedAt: Date.now(), ...b } }),

@@ -59,3 +59,134 @@ test("tailscaleServe rejects cleanly when tailscale is unavailable (never flips 
     cleanup();
   }
 });
+
+/* parseTailscaleStatus is pure — the wizard's device picker lives or dies by
+   it, so feed it a canned `tailscale status --json` and check every field */
+
+const STATUS_FIXTURE = {
+  MagicDNSSuffix: "tail208cbf.ts.net",
+  Self: {
+    HostName: "rewvis",
+    DNSName: "rewvis.tail208cbf.ts.net.",
+    TailscaleIPs: ["100.107.125.118", "fd7a:115c:a1e0::1"],
+    OS: "linux",
+    Online: true,
+    LastSeen: "2026-09-28T22:00:00Z",
+  },
+  Peer: {
+    "node-key-1": {
+      HostName: "Rewis's MacBook Pro",
+      DNSName: "rewiss-macbook-pro.tail208cbf.ts.net.",
+      TailscaleIPs: ["100.78.180.43", "fd7a:115c:a1e0::d228:b42c"],
+      OS: "macOS",
+      Online: true,
+      LastSeen: "2026-09-28T22:50:00.1Z",
+      ExitNode: false,
+      ExitNodeOption: false,
+    },
+    "node-key-2": {
+      HostName: "Pixel 4 XL",
+      DNSName: "pixel-4-xl.tail208cbf.ts.net.",
+      TailscaleIPs: ["100.121.74.109"],
+      OS: "android",
+      Online: false,
+      LastSeen: "2026-09-08T07:13:53.1Z",
+      ExitNode: false,
+      ExitNodeOption: false,
+    },
+    "node-key-3": {
+      HostName: "exit-rig",
+      DNSName: "exit-rig.tail208cbf.ts.net.",
+      TailscaleIPs: ["100.100.100.100", "fd7a::1"],
+      OS: "linux",
+      Online: true,
+      LastSeen: "2026-09-28T23:00:00Z",
+      ExitNode: true,
+      ExitNodeOption: true,
+      Tags: ["tag:server"],
+    },
+  },
+};
+
+test("parseTailscaleStatus: self + peers with clean fields", async () => {
+  const { cleanup } = await freshServer("net-parse");
+  try {
+    const net = await import("../src/net.js");
+    const { self, peers } = net.parseTailscaleStatus(STATUS_FIXTURE);
+
+    assert.equal(self?.hostName, "rewvis");
+    assert.equal(self?.dnsName, "rewvis.tail208cbf.ts.net", "trailing dot stripped");
+    assert.equal(self?.ip4, "100.107.125.118", "ipv4 picked out of the ip list");
+    assert.equal(self?.online, true);
+
+    assert.equal(peers.length, 3);
+    const mac = peers.find((p) => p.os === "macOS")!;
+    assert.equal(mac.hostName, "Rewis's MacBook Pro");
+    assert.equal(mac.ip4, "100.78.180.43");
+    assert.equal(mac.exitNode, false);
+    assert.equal(mac.tagged, false);
+
+    const rig = peers.find((p) => p.hostName === "exit-rig")!;
+    assert.equal(rig.exitNode, true);
+    assert.equal(rig.exitNodeOption, true);
+    assert.equal(rig.tagged, true, "tagged devices flagged (no user owner)");
+
+    const pixel = peers.find((p) => p.hostName === "Pixel 4 XL")!;
+    assert.equal(pixel.online, false);
+    assert.equal(pixel.lastSeen, "2026-09-08T07:13:53.1Z");
+  } finally {
+    cleanup();
+  }
+});
+
+test("parseTailscaleStatus: online peers sort first, then alphabetical", async () => {
+  const { cleanup } = await freshServer("net-sort");
+  try {
+    const net = await import("../src/net.js");
+    const { peers } = net.parseTailscaleStatus(STATUS_FIXTURE);
+    const onlineIdx = peers.map((p) => p.online);
+    // online entries come before offline ones
+    assert.deepEqual(onlineIdx, [...onlineIdx].sort((a, b) => Number(b) - Number(a)));
+    const names = peers.map((p) => p.hostName);
+    assert.deepEqual(names.slice(0, 2), ["exit-rig", "Rewis's MacBook Pro"].sort((a, b) => a.localeCompare(b)), "alphabetical within online");
+    assert.equal(names[2], "Pixel 4 XL", "offline last");
+  } finally {
+    cleanup();
+  }
+});
+
+test("parseTailscaleStatus: garbage in, empty out (never throws)", async () => {
+  const { cleanup } = await freshServer("net-garbage");
+  try {
+    const net = await import("../src/net.js");
+    for (const junk of [undefined, null, "nope", {}] as const) {
+      const r = net.parseTailscaleStatus(junk);
+      assert.equal(r.self, undefined);
+      assert.deepEqual(r.peers, []);
+    }
+    // peer with neither name nor dns is dropped; partial peers keep shape
+    const r = net.parseTailscaleStatus({ Peer: { a: { Online: true }, b: { HostName: "half" } } });
+    assert.equal(r.peers.length, 1);
+    assert.equal(r.peers[0].hostName, "half");
+    assert.equal(r.peers[0].ip4, undefined);
+    assert.equal(r.peers[0].online, false, "missing Online means offline, not truthy garbage");
+  } finally {
+    cleanup();
+  }
+});
+
+test("tailscalePeers never rejects (empty list when the CLI is missing or errors)", async () => {
+  const { cleanup } = await freshServer("net-peers");
+  try {
+    const net = await import("../src/net.js");
+    const r = await net.tailscalePeers(); // read-only probe, safe for real
+    assert.ok(Array.isArray(r.peers));
+    for (const p of r.peers) {
+      assert.equal(typeof p.hostName, "string");
+      assert.equal(typeof p.online, "boolean");
+      if (p.ip4) assert.match(p.ip4, /^\d+\.\d+\.\d+\.\d+$/);
+    }
+  } finally {
+    cleanup();
+  }
+});

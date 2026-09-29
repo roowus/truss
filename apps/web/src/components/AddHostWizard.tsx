@@ -1,5 +1,7 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { store, useApp } from "@/lib/store";
+import { ago } from "@/lib/format";
+import type { TailscalePeer } from "@/lib/proto";
 import { Btn, Icon, Select, Spinner } from "./ui";
 import { cn } from "@/utils/cn";
 
@@ -15,6 +17,9 @@ export function AddHostWizard({ onClose }: { onClose: () => void }) {
   const [label, setLabel] = useState("");
   const [method, setMethod] = useState<"tailscale" | "direct">("tailscale");
   const [net, setNet] = useState<{ port: number; tailscale: { installed: boolean; ip4?: string; dnsName?: string; serveOn?: boolean; serveUrl?: string }; lan: string[] } | null>(null);
+  const [peers, setPeers] = useState<{ self?: TailscalePeer; peers: TailscalePeer[] } | null>(null);
+  const [pickedPeer, setPickedPeer] = useState<string | null>(null); // dnsName
+  const labelTouched = useRef(false);
   const [customAddr, setCustomAddr] = useState("");
   const [err, setErr] = useState<string | null>(null);
   const [created, setCreated] = useState<{ id: string; token: string } | null>(null);
@@ -22,7 +27,15 @@ export function AddHostWizard({ onClose }: { onClose: () => void }) {
 
   useEffect(() => {
     be?.netInfo().then(setNet).catch(() => setNet(null));
+    be?.tailscalePeers().then(setPeers).catch(() => setPeers(null));
   }, [be]);
+
+  /* picking a tailnet device names the host (until the user edits the name
+     by hand — after that, clicks stop clobbering it) */
+  const pickPeer = (p: TailscalePeer) => {
+    setPickedPeer(p.dnsName);
+    if (!labelTouched.current) setLabel(p.hostName);
+  };
 
   /* address the remote will use to reach this server */
   const addresses = useMemo(() => {
@@ -99,7 +112,7 @@ export function AddHostWizard({ onClose }: { onClose: () => void }) {
           <div className="mt-4 space-y-3">
             <div>
               <label className="block text-[11.5px] text-[var(--t-mute)] mb-1">Name</label>
-              <input autoFocus value={label} onChange={(e) => setLabel(e.target.value)} onKeyDown={(e) => e.key === "Enter" && void create()} placeholder="fedora box, mac mini, gpu rig…" className="t-input w-full" />
+              <input autoFocus value={label} onChange={(e) => { labelTouched.current = true; setLabel(e.target.value); }} onKeyDown={(e) => e.key === "Enter" && void create()} placeholder="fedora box, mac mini, gpu rig…" className="t-input w-full" />
             </div>
             <div>
               <label className="block text-[11.5px] text-[var(--t-mute)] mb-1">How does the remote reach this server?</label>
@@ -116,6 +129,54 @@ export function AddHostWizard({ onClose }: { onClose: () => void }) {
                 </button>
               </div>
             </div>
+            {method === "tailscale" && net?.tailscale.installed && peers && (
+              <div>
+                <label className="block text-[11.5px] text-[var(--t-mute)] mb-1">Which tailnet device?</label>
+                <div className="rounded-lg border border-[var(--t-line)] divide-y divide-[var(--t-line)]/60 max-h-44 overflow-y-auto t-scroll">
+                  {/* this server itself, for orientation — not selectable */}
+                  {peers.self && (
+                    <div className="flex items-center gap-2.5 px-2.5 py-1.5 opacity-55" title="this machine is the Truss server">
+                      <span className="w-1.5 h-1.5 rounded-full bg-[var(--t-teal)] shrink-0" />
+                      <span className="min-w-0 truncate text-[12px] text-[var(--t-fg2)]">{peers.self.hostName}</span>
+                      <span className="text-[10px] font-mono text-[var(--t-dim)] shrink-0">{peers.self.ip4}</span>
+                      <span className="ml-auto text-[9.5px] font-mono uppercase tracking-wider text-[var(--t-dim)] shrink-0">this server</span>
+                    </div>
+                  )}
+                  {peers.peers.map((p) => {
+                    const already = hosts.some((h) => h.label.trim().toLowerCase() === p.hostName.trim().toLowerCase());
+                    const sel = pickedPeer === p.dnsName;
+                    return (
+                      <button
+                        key={p.dnsName}
+                        type="button"
+                        disabled={!p.online}
+                        onClick={() => pickPeer(p)}
+                        title={`${p.dnsName}${p.online ? "" : ` — offline${p.lastSeen ? `, last seen ${ago(Date.parse(p.lastSeen))} ago` : ""}`}${already ? " · already on your hosts list" : ""}`}
+                        className={cn(
+                          "w-full flex items-center gap-2.5 px-2.5 py-1.5 text-left transition-colors",
+                          p.online ? "hover:bg-white/[0.04] cursor-pointer" : "opacity-45 cursor-not-allowed",
+                          sel && "bg-[var(--t-amber)]/8",
+                        )}
+                      >
+                        <span className={cn("w-1.5 h-1.5 rounded-full shrink-0", p.online ? "bg-[var(--t-teal)]" : "bg-[var(--t-line2)]")} />
+                        <span className="min-w-0 truncate text-[12px] text-[var(--t-fg)]">{p.hostName}</span>
+                        {sel && <Icon name="check" size={11} className="text-[var(--t-amber)] shrink-0" />}
+                        <span className="text-[10px] font-mono text-[var(--t-dim)] shrink-0 hidden sm:inline">{p.ip4}</span>
+                        <span className="ml-auto flex items-center gap-1.5 shrink-0">
+                          {p.exitNodeOption && <span className="text-[9px] font-mono uppercase tracking-wider text-[var(--t-sky)]">exit node</span>}
+                          {already && <span className="text-[9px] font-mono uppercase tracking-wider text-[var(--t-teal)]">added</span>}
+                          {p.os && <span className="text-[10px] font-mono text-[var(--t-dim)]">{p.os}</span>}
+                          {!p.online && p.lastSeen && <span className="text-[10px] font-mono text-[var(--t-dim)]">{ago(Date.parse(p.lastSeen))}</span>}
+                        </span>
+                      </button>
+                    );
+                  })}
+                  {peers.peers.length === 0 && (
+                    <div className="px-2.5 py-2 text-[11px] text-[var(--t-dim)]">No other devices on the tailnet yet — add one with <span className="font-mono text-[var(--t-mute)]">sudo tailscale up</span> on the remote.</div>
+                  )}
+                </div>
+              </div>
+            )}
             <div className="flex items-center gap-2">
               <Select width="100%" className="flex-1" ariaLabel="Server address" value={addr} onChange={setAddr} options={addresses.map((a) => ({ value: a.value, label: a.label }))} />
             </div>

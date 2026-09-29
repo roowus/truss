@@ -40,7 +40,7 @@ import { listFeed, setFeedBroadcaster, setFeedState, shareFeedItem } from "./fee
 import { startFeedAutopost } from "./feed-autopost.js";
 import { composePractices, getGlobalPractices, saveGlobalPractices } from "./practices.js";
 import { createHost, deleteHost, listHosts, rotateHostToken, setHostRevoked, verifyAgentToken } from "./hosts.js";
-import { netInfo, tailscaleServe } from "./net.js";
+import { netInfo, tailscalePeers, tailscaleServe } from "./net.js";
 import { agentBundleError, ensureAgentBundle, installScript } from "./agentbundle.js";
 import { registerMcpPerms } from "./mcp-perms.js";
 import { importDshSessions } from "./import-dsh.js";
@@ -202,6 +202,7 @@ app.get("/api/agents", async () => ({ agents: listAgents() }));
 
 /* ── network reachability + the agent installer ── */
 app.get("/api/net", async () => netInfo(PORT));
+app.get("/api/net/tailscale/peers", async () => tailscalePeers());
 app.post("/api/net/tailscale-serve", async (req, reply) => {
   const { on } = (req.body ?? {}) as { on?: boolean };
   try {

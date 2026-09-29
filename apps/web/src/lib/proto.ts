@@ -162,6 +162,18 @@ export interface HostInfo {
   online: boolean;
   agent?: AgentInfo;
 }
+export interface TailscalePeer {
+  hostName: string;
+  dnsName: string;
+  ip4?: string;
+  os?: string;
+  online: boolean;
+  lastSeen?: string;
+  exitNode: boolean;
+  exitNodeOption: boolean;
+  tagged: boolean;
+}
+
 export interface NetInfo {
   port: number;
   tailscale: { installed: boolean; ip4?: string; dnsName?: string; serveOn?: boolean; serveUrl?: string };
