@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { store, useApp } from "@/lib/store";
 import { ago } from "@/lib/format";
+import { peerAlreadyAdded } from "@/lib/device";
 import type { TailscalePeer } from "@/lib/proto";
 import { Btn, Icon, Select, Spinner } from "./ui";
 import { cn } from "@/utils/cn";
@@ -143,7 +144,7 @@ export function AddHostWizard({ onClose }: { onClose: () => void }) {
                     </div>
                   )}
                   {peers.peers.map((p) => {
-                    const already = hosts.some((h) => h.label.trim().toLowerCase() === p.hostName.trim().toLowerCase());
+                    const already = peerAlreadyAdded(hosts, p.hostName);
                     const sel = pickedPeer === p.dnsName;
                     return (
                       <button

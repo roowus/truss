@@ -1,7 +1,9 @@
 import { memo, useEffect, useLayoutEffect, useRef, useState, useMemo, type ReactNode } from "react";
 import type { IDockviewPanelProps } from "dockview-react";
 import { store, useApp, useNow, capsOf, type Msg, type ToolRun, type Perm, type SessionView } from "@/lib/store";
-import { argSummary, fmtMs, harnessStyle, shortPath, baseHarness, hostOf } from "@/lib/format";
+import { argSummary, fmtMs, harnessStyle, shortPath, baseHarness } from "@/lib/format";
+import { deviceLabel } from "@/lib/device";
+import { buildModelOptions, modelValue, splitModelValue } from "@/lib/models";
 import { openPanel, openAgentShell, renameSessionPanels } from "@/lib/workspace";
 import { Btn, Empty, HarnessMark, Icon, IconBtn, Select, Spinner, StateDot, STATE_META } from "@/components/ui";
 import { Markdown } from "./Markdown";
@@ -71,25 +73,15 @@ function ChatHeader({ id }: { id: string }) {
 
   /* which device this session runs on: bare harness id = this server,
      harness@hostId = that remote host (labeled from the registry) */
-  const hostId = hostOf(meta.harness);
-  const device = hostId ? (hosts.find((h) => h.id === hostId)?.label ?? hostId) : "this server";
+  const hostId = meta.harness.includes("@") ? meta.harness.split("@")[1] : undefined;
+  const device = deviceLabel(meta.harness, hosts);
 
   /* model picker: the catalog lists base harnesses; remote sessions share
      the base harness's catalog */
-  const harnessModels = models.filter((m) => m.harness === baseHarness(meta.harness));
-  const currentValue = meta.provider && meta.model ? `${meta.provider}/${meta.model}` : meta.model ?? "";
-  const modelOptions = harnessModels.map((m) => ({
-    value: `${m.provider}/${m.model}`,
-    label: m.label,
-    hint: `${m.provider}/${m.model}`,
-  }));
-  if (currentValue && !modelOptions.some((o) => o.value === currentValue)) {
-    modelOptions.unshift({ value: currentValue, label: meta.model ?? currentValue, hint: "current" });
-  }
+  const currentValue = modelValue(meta.provider, meta.model);
+  const modelOptions = buildModelOptions(models, meta.harness, meta.model, meta.provider);
   const onModelPick = (v: string) => {
-    const i = v.indexOf("/");
-    const provider = i === -1 ? undefined : v.slice(0, i);
-    const model = i === -1 ? v : v.slice(i + 1);
+    const { provider, model } = splitModelValue(v);
     if (v && v !== currentValue) void store.switchModel(id, model, provider).catch(() => {});
   };
 
