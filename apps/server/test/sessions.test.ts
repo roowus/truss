@@ -149,27 +149,9 @@ test("sendPrompt: local echo persists, auto-titles, resumes dead sessions", asyn
   }
 });
 
-test("sendPrompt: practices ride the FIRST prompt only (non-MCP harness)", async () => {
-  const { cleanup } = await freshServer("sess-practices");
-  const sessions = await import("../src/sessions.js");
-  const rec: FakeRec = { spawnOpts: [], sent: [], disposed: 0 };
-  sessions.registerAdapter("fake" as never, fakeAdapter("fake", rec));
-  const dir = mkdtempSync(join(tmpdir(), "truss-prac-"));
-  writeFileSync(join(dir, "TRUSS.md"), "# house rules\nalways test");
-  try {
-    const s = await sessions.createSession({ harness: "fake" as never, cwd: dir });
-    await sessions.sendPrompt(s.id, "one");
-    await sessions.sendPrompt(s.id, "two");
-    assert.equal(rec.sent.length, 2);
-    assert.ok(rec.sent[0].includes("[truss practices"), "first prompt carries the block");
-    assert.ok(rec.sent[0].includes("house rules"), "folder TRUSS.md is in it");
-    assert.ok(rec.sent[0].endsWith("one"), "user text rides along");
-    assert.equal(rec.sent[1], "two", "second prompt is bare");
-  } finally {
-    sessions.unregisterAdapter("fake" as never);
-    cleanup();
-  }
-});
+/* the practices-injection coverage lives in send-practices.test.ts — it
+   needs HOME faked before practices.ts loads (module pins it at import),
+   which is only safe in a dedicated test process */
 
 test("sendPrompt: MCP-attached harnesses never get the practices block", async () => {
   const { cleanup } = await freshServer("sess-mcp");
