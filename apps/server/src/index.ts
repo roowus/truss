@@ -62,7 +62,7 @@ import { collectMetrics } from "@truss/proto";
 import { registerAdapter, unregisterAdapter } from "./sessions.js";
 
 const PORT = Number(process.env.TRUSS_PORT ?? 4040);
-const app = Fastify({ logger: true });
+const app = Fastify({ logger: process.env.TRUSS_TEST ? false : true });
 
 await app.register(websocket);
 
@@ -772,6 +772,9 @@ if (existsSync(join(webDist, "index.html"))) {
   });
   app.log.info(`serving web app from ${webDist}`);
 }
+
+/* exported for in-process integration tests (test/server-harness.ts) */
+export { app };
 
 app
   .listen({ port: PORT, host: process.env.TRUSS_HOST ?? "0.0.0.0" })

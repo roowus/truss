@@ -51,6 +51,11 @@ function table() {
   }
 }
 
+/** cross-module readers (feed autoposter) must guarantee the table exists */
+export function ensureTasksTable() {
+  table();
+}
+
 /** API shape: camelCase (web TaskInfo) */
 function camel(t: TaskRow) {
   return {

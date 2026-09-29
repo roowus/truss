@@ -1,6 +1,7 @@
 import { store } from "./db.js";
 import { onEvent } from "./sessions.js";
 import { feedSources, postFeed, settleFeedWhere } from "./feed.js";
+import { ensureTasksTable } from "./tasks.js";
 import type { ProtoEvent } from "@truss/proto";
 
 /**
@@ -70,7 +71,9 @@ export function startFeedAutopost() {
           });
         }
         if (src.taskRuns) {
-          /* task-board runs that just settled */
+          /* task-board runs that just settled — ensureTasksTable first: on a
+             fresh db nobody may have created the table yet ("no such table") */
+          ensureTasksTable();
           const tasks = store.all<{ id: string; title: string }>(
             `SELECT id, title FROM tasks WHERE session_id = ? AND status = 'doing'`,
             sid,
