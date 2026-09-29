@@ -60,6 +60,9 @@ export interface HarnessAdapter {
   spawn(opts: SessionOpts): Promise<AdapterHandle>;
   send(handle: AdapterHandle, text: string): void;
   interrupt(handle: AdapterHandle): void;
+  /** live model switch (pi: set_model). Adapters without it get the
+     dispose+respawn treatment from sessions.switchModel instead. */
+  setModel?(handle: AdapterHandle, provider: string | undefined, model: string): Promise<void>;
   /** answer a permission request (adapters with capabilities.permissions) */
   resolve?(handle: AdapterHandle, requestId: string, choice: string): void;
   events(handle: AdapterHandle): AsyncIterable<ProtoEvent>;

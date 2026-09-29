@@ -9,7 +9,11 @@ import type { ProtoEvent } from "../src/lib/proto";
 // It must be installed BEFORE the module is imported — hence a dynamic import
 // (static imports are hoisted and would evaluate store.ts before the shim).
 (globalThis as any).window ??= {};
-const { reduce, emptyView, toMs } = await import("../src/lib/store");
+/* session.updated goes through Store.onFrame (not the pure reduce), which
+   schedules notifications via requestAnimationFrame — shim it for those two
+   Store-level tests; everything else still uses the pure reduce path */
+(globalThis as any).requestAnimationFrame ??= (cb: (t: number) => void) => setTimeout(() => cb(Date.now()), 0);
+const { reduce, emptyView, toMs, store } = await import("../src/lib/store");
 
 const T0 = 1_000; // arbitrary frameTime base
 
@@ -220,4 +224,23 @@ test("items order: msgs, tools and perms appear in arrival order", () => {
     { kind: "msg", id: "m2" },
     { kind: "msg", id: "m3" },
   ]);
+});
+
+test("session.updated patches model/provider in place (model switch reflects immediately)", async () => {
+  store.set((s) => ({
+    sessions: {
+      ...s.sessions,
+      "ms-1": {
+        id: "ms-1", harness: "pi", title: "t", cwd: "/tmp", model: "m1", provider: "p1",
+        state: "idle", created_at: 0, updated_at: 0, live: true,
+      } as never,
+    },
+  }));
+  (store as unknown as { onFrame: (f: { seq: number; ev: unknown }) => void }).onFrame({ seq: 10, ev: { type: "session.updated", sessionId: "ms-1", model: "m2", provider: "p2" } as never });
+  assert.equal(store.state.sessions["ms-1"].model, "m2");
+  assert.equal(store.state.sessions["ms-1"].provider, "p2");
+  (store as unknown as { onFrame: (f: { seq: number; ev: unknown }) => void }).onFrame({ seq: 11, ev: { type: "session.updated", sessionId: "ms-1", title: "renamed" } as never });
+  assert.equal(store.state.sessions["ms-1"].title, "renamed");
+  assert.equal(store.state.sessions["ms-1"].model, "m2", "unrelated updates keep the model");
+  delete store.state.sessions["ms-1"];
 });

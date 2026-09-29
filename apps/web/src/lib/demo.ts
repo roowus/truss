@@ -717,6 +717,7 @@ export function createDemoBackend(): Backend {
     gitSwitch: async (_cwd, branch) => ({ branch }),
     hosts: async () => ({ hosts: [{ id: "atlas", label: "atlas", tokenPrefix: "…demo01", createdAt: Date.now() - 86400_000 * 9, lastSeen: Date.now() - 3600_000, revoked: false, note: "the other box", online: true, agent: { hostId: "atlas", hostname: "atlas", adapters: ["pi"] } }] }),
     createHost: async (label: string) => ({ host: { id: "new-host", label, tokenPrefix: "…demo02", createdAt: Date.now(), revoked: false, note: "", online: false } as never, token: "truss_agent_demo" }),
+    setSessionModel: async () => ({ mode: "stored" as const }),
     rotateHostToken: async () => ({ token: "truss_agent_demo_rotated" }),
     revokeHost: async () => ({ ok: true }),
     deleteHost: async () => ({ ok: true }),

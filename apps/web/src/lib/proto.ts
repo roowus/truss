@@ -39,6 +39,7 @@ export interface SessionMeta {
   title: string;
   cwd: string;
   model?: string;
+  provider?: string;
   project?: string;
   state: SessionState;
   archived?: number;
@@ -209,7 +210,7 @@ type At = string | number;
 export type ProtoEvent =
   | (Base & { type: "session.created"; harness: HarnessId; title: string; cwd: string; model?: string; project?: string; at: At })
   | (Base & { type: "session.state"; state: SessionState; detail?: string })
-  | (Base & { type: "session.updated"; title?: string; project?: string | null; archived?: boolean })
+  | (Base & { type: "session.updated"; title?: string; project?: string | null; archived?: boolean; model?: string | null; provider?: string | null })
   | (Base & { type: "session.deleted" })
   | (Base & { type: "todo.upsert"; todo: TodoItem })
   | (Base & { type: "feed.upsert"; item: FeedItem })

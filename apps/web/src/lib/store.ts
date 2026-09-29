@@ -436,6 +436,8 @@ class Store {
               ...(ev.title !== undefined ? { title: ev.title } : {}),
               ...(ev.project !== undefined ? { project: ev.project ?? undefined } : {}),
               ...(ev.archived !== undefined ? { archived: ev.archived ? 1 : 0 } : {}),
+              ...(ev.model !== undefined ? { model: ev.model ?? undefined } : {}),
+              ...(ev.provider !== undefined ? { provider: ev.provider ?? undefined } : {}),
             },
           },
         }));
@@ -497,6 +499,21 @@ class Store {
       await this.be.interrupt(id);
     } catch (e: any) {
       this.toast("error", "Interrupt failed", e.message);
+    }
+  }
+  async switchModel(id: string, model: string, provider?: string) {
+    try {
+      const { mode } = await this.be.setSessionModel(id, model, provider);
+      if (mode !== "live") {
+        this.toast(
+          "info",
+          mode === "restart" ? "Model switched" : "Model saved",
+          mode === "restart" ? "harness restarted, history kept" : "applies when the session resumes",
+        );
+      }
+    } catch (e: any) {
+      this.toast("error", "Couldn't switch model", e.message);
+      throw e;
     }
   }
   async answer(id: string, requestId: string, choice: string) {

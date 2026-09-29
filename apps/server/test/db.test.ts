@@ -121,3 +121,17 @@ test("migrations: reopening the same dir is idempotent", async () => {
   assert.equal(again.store.getSession("s8")?.provider, "p");
   cleanup();
 });
+
+test("sessions: setSessionModel moves model+provider as a pair (and clears)", async () => {
+  const { db, cleanup } = await freshServer("db-model");
+  db.store.createSession({ id: "s9", harness: "pi", title: "t", cwd: "/tmp", model: "m1", provider: "p1" });
+  db.store.setSessionModel("s9", "m2", "p2");
+  let got = db.store.getSession("s9");
+  assert.equal(got?.model, "m2");
+  assert.equal(got?.provider, "p2");
+  db.store.setSessionModel("s9", "m3", null);
+  got = db.store.getSession("s9");
+  assert.equal(got?.model, "m3");
+  assert.equal(got?.provider, null, "provider cleared, never stale");
+  cleanup();
+});

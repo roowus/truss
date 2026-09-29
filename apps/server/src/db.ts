@@ -88,6 +88,10 @@ const updateSessionTitle = db.prepare(`
   UPDATE sessions SET title = @title, updated_at = @at WHERE id = @id
 `);
 
+const updateSessionModel = db.prepare(`
+  UPDATE sessions SET model = @model, provider = @provider, updated_at = @at WHERE id = @id
+`);
+
 const updateHarnessRef = db.prepare(`
   UPDATE sessions SET harness_ref = @ref, updated_at = @at WHERE id = @id
 `);
@@ -159,6 +163,12 @@ export const store = {
 
   setSessionTitle(id: string, title: string) {
     updateSessionTitle.run({ id, title, at: Date.now() });
+  },
+
+  /** model + provider move together — storing one without the other is how
+     resumed sessions ended up sending fireworks ids to the zai endpoint */
+  setSessionModel(id: string, model: string | null, provider: string | null) {
+    updateSessionModel.run({ id, model, provider, at: Date.now() });
   },
 
   /** import path: full control of timestamps (the log's own clock) */

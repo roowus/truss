@@ -20,6 +20,7 @@ import {
   reconcileOnBoot,
   resolvePermission,
   sendPrompt,
+  switchModel,
   setBroadcaster,
   type EventFrame,
 } from "./sessions.js";
@@ -362,6 +363,17 @@ app.post("/api/sessions/:id/prompt", async (req, reply) => {
     return { ok: true };
   } catch (err) {
     return reply.code(409).send({ error: String(err) });
+  }
+});
+
+app.post("/api/sessions/:id/model", async (req, reply) => {
+  const { id } = req.params as { id: string };
+  const { model, provider } = (req.body ?? {}) as { model?: string; provider?: string };
+  if (!model?.trim()) return reply.code(400).send({ error: "model is required" });
+  try {
+    return await switchModel(id, model.trim(), provider);
+  } catch (err) {
+    return reply.code(409).send({ error: String(err instanceof Error ? err.message : err) });
   }
 });
 

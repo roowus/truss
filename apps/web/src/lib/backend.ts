@@ -51,6 +51,8 @@ export interface Backend {
   listSessions(): Promise<{ sessions: SessionMeta[] }>;
   createSession(body: CreateSessionBody): Promise<{ session: SessionMeta }>;
   getSession(id: string): Promise<{ session: SessionMeta }>;
+  /** switch a session's model: live where the harness supports it, else restart-with-history or stored for next resume */
+  setSessionModel(id: string, model: string, provider?: string): Promise<{ mode: "live" | "restart" | "stored" }>;
   getEvents(id: string): Promise<{ events: Frame[] }>;
   prompt(id: string, text: string): Promise<{ ok: boolean }>;
   interrupt(id: string): Promise<{ ok: boolean }>;
@@ -166,6 +168,8 @@ export function createLiveBackend(): Backend {
     listSessions: () => req("GET", "/api/sessions"),
     createSession: (b) => req("POST", "/api/sessions", b),
     getSession: (id) => req("GET", `/api/sessions/${encodeURIComponent(id)}`),
+    setSessionModel: (id, model, provider) =>
+      req("POST", `/api/sessions/${encodeURIComponent(id)}/model`, { model, provider }),
     getEvents: (id) => req("GET", `/api/sessions/${encodeURIComponent(id)}/events`),
     prompt: (id, text) => req("POST", `/api/sessions/${encodeURIComponent(id)}/prompt`, { text }),
     interrupt: (id) => req("POST", `/api/sessions/${encodeURIComponent(id)}/interrupt`, {}),

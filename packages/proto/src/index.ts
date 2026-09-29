@@ -35,13 +35,15 @@ export interface SessionStateEvent {
   state: SessionState;
   detail?: string;
 }
-/** metadata changed (archive, retitle, regroup) without a lifecycle change */
+/** metadata changed (archive, retitle, regroup, model switch) without a lifecycle change */
 export interface SessionUpdated {
   type: "session.updated";
   sessionId: string;
   title?: string;
   project?: string | null;
   archived?: boolean;
+  model?: string | null;
+  provider?: string | null;
 }
 
 /** hard-deleted: the row and its event log are gone. Broadcast-only (the FK

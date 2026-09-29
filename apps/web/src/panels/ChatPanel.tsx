@@ -1,9 +1,9 @@
 import { memo, useEffect, useLayoutEffect, useRef, useState, useMemo, type ReactNode } from "react";
 import type { IDockviewPanelProps } from "dockview-react";
 import { store, useApp, useNow, capsOf, type Msg, type ToolRun, type Perm, type SessionView } from "@/lib/store";
-import { argSummary, fmtMs, harnessStyle, shortPath, baseHarness } from "@/lib/format";
+import { argSummary, fmtMs, harnessStyle, shortPath, baseHarness, hostOf } from "@/lib/format";
 import { openPanel, openAgentShell, renameSessionPanels } from "@/lib/workspace";
-import { Btn, Empty, HarnessMark, Icon, IconBtn, Spinner, StateDot, STATE_META } from "@/components/ui";
+import { Btn, Empty, HarnessMark, Icon, IconBtn, Select, Spinner, StateDot, STATE_META } from "@/components/ui";
 import { Markdown } from "./Markdown";
 import { cn } from "@/utils/cn";
 
@@ -59,6 +59,8 @@ function ChatHeader({ id }: { id: string }) {
   const detail = useApp((s) => s.views[id]?.stateDetail);
   const since = useApp((s) => s.stateSince[id]);
   const caps = useApp((s) => capsOf(s, meta.harness));
+  const hosts = useApp((s) => s.hosts);
+  const models = useApp((s) => s.models);
   const busy = meta.state === "running";
   const now = useNow(1000, busy || meta.state === "spawning");
   const abnormal = meta.state === "spawning" || meta.state === "error" || meta.state === "closed";
@@ -66,16 +68,57 @@ function ChatHeader({ id }: { id: string }) {
   const tooltip = [meta.harness, meta.model, shortPath(meta.cwd), meta.project && `project: ${meta.project}`, detail]
     .filter(Boolean)
     .join("\n");
+
+  /* which device this session runs on: bare harness id = this server,
+     harness@hostId = that remote host (labeled from the registry) */
+  const hostId = hostOf(meta.harness);
+  const device = hostId ? (hosts.find((h) => h.id === hostId)?.label ?? hostId) : "this server";
+
+  /* model picker: the catalog lists base harnesses; remote sessions share
+     the base harness's catalog */
+  const harnessModels = models.filter((m) => m.harness === baseHarness(meta.harness));
+  const currentValue = meta.provider && meta.model ? `${meta.provider}/${meta.model}` : meta.model ?? "";
+  const modelOptions = harnessModels.map((m) => ({
+    value: `${m.provider}/${m.model}`,
+    label: m.label,
+    hint: `${m.provider}/${m.model}`,
+  }));
+  if (currentValue && !modelOptions.some((o) => o.value === currentValue)) {
+    modelOptions.unshift({ value: currentValue, label: meta.model ?? currentValue, hint: "current" });
+  }
+  const onModelPick = (v: string) => {
+    const i = v.indexOf("/");
+    const provider = i === -1 ? undefined : v.slice(0, i);
+    const model = i === -1 ? v : v.slice(i + 1);
+    if (v && v !== currentValue) void store.switchModel(id, model, provider).catch(() => {});
+  };
+
   return (
     <div className="relative shrink-0 flex items-center gap-2 px-3 h-10 border-b border-[var(--t-line)]">
       <HarnessMark harness={meta.harness} size={18} />
       <span className="min-w-0 truncate text-[13px] font-medium text-[var(--t-fg)]" title={tooltip}>{meta.title}</span>
+      <span
+        className="shrink-0 inline-flex items-center gap-1 h-5 px-1.5 rounded border border-[var(--t-line)] text-[10px] font-mono text-[var(--t-mute)]"
+        title={`session runs on ${device}`}
+      >
+        <Icon name="host" size={10} className={hostId ? "text-[var(--t-teal)]" : "text-[var(--t-dim)]"} />
+        {device}
+      </span>
       <span className="flex items-center gap-1.5 shrink-0" title={STATE_META[meta.state]?.hint}>
         <StateDot state={meta.state} size={6} />
         {abnormal && <span className="text-[11px] text-[var(--t-mute)]">{STATE_META[meta.state].label}</span>}
         {(busy || meta.state === "spawning") && since && <span className="text-[11px] text-[var(--t-amber)] tabular-nums">{fmtMs(now - since)}</span>}
       </span>
-      <div className="ml-auto flex items-center gap-0.5">
+      <div className="ml-auto flex items-center gap-1.5">
+        {modelOptions.length > 0 && (
+          <Select
+            value={currentValue}
+            options={modelOptions}
+            onChange={onModelPick}
+            ariaLabel="Switch model"
+            className="!h-6 !px-2 !py-0 !text-[11px] font-mono text-[var(--t-mute)] w-[170px] shrink-0"
+          />
+        )}
         {busy && (
           <Btn variant="danger" size="xs" icon="stop" onClick={() => store.interrupt(id)} title="Interrupt (Esc in composer)">Stop</Btn>
         )}

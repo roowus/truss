@@ -135,6 +135,13 @@ function handle(cmd) {
       followUps.push(String(cmd.message || ""));
       setImmediate(drain);
       break;
+    case "set_model":
+      if (String(cmd.modelId || "").indexOf("NOPE") !== -1) {
+        out({ type: "response", id: id, command: "set_model", success: false, error: "Model not found: " + cmd.provider + "/" + cmd.modelId });
+        break;
+      }
+      out({ type: "response", id: id, command: "set_model", success: true, data: { model: { provider: cmd.provider, id: cmd.modelId } } });
+      break;
     case "clear_queue":
       followUps.length = 0;
       out({ type: "response", id: id, command: "clear_queue", success: true, data: { steering: [], followUp: [] } });
@@ -514,4 +521,45 @@ test.after(() => {
   if (OLD_DATA === undefined) delete process.env.TRUSS_DATA_DIR;
   else process.env.TRUSS_DATA_DIR = OLD_DATA;
   rmSync(ROOT, { recursive: true, force: true });
+});
+
+test("setModel: live switch sends set_model, later turns use the new model, unknown model rejects", { timeout: 15000 }, async () => {
+  await withFakePi("setmodel", async (fake) => {
+    const handle = await piAdapter.spawn({ sessionId: "t-setmodel", cwd: tmpdir(), provider: "truss-fw", model: "m" });
+    const { events, finished } = collect(handle);
+    try {
+      /* baseline turn on the original model (nb: spawn emits idle first —
+         wait for the RUN to cycle, not just any idle) */
+      piAdapter.send(handle, "first");
+      await waitFor(
+        () => events.some((e) => e.type === "llm.call.done") && statesOf(events).at(-1) === "idle",
+        "first run settled",
+      );
+      const firstCall = events.find((e) => e.type === "llm.call.start") as { model?: string };
+      assert.equal(firstCall.model, "m");
+
+      /* live switch — no respawn, no new session */
+      await piAdapter.setModel!(handle, "truss-fw", "m2");
+      const sent = readLog(fake.logPath).map((r) => r.cmd).filter(Boolean) as { type?: string; provider?: string; modelId?: string }[];
+      const sm = sent.find((c) => c.type === "set_model");
+      assert.ok(sm, "set_model reached the harness");
+      assert.equal(sm!.provider, "truss-fw");
+      assert.equal(sm!.modelId, "m2");
+
+      /* next turn is labeled with the new model in the trajectory */
+      piAdapter.send(handle, "second");
+      await waitFor(() => events.filter((e) => e.type === "llm.call.start").length === 2, "second turn started");
+      const starts = events.filter((e) => e.type === "llm.call.start") as { model?: string }[];
+      assert.equal(starts[1].model, "m2");
+      await waitFor(
+        () => events.filter((e) => e.type === "llm.call.done").length === 2 && statesOf(events).at(-1) === "idle",
+        "second run settled",
+      );
+
+      /* failure path: pi says Model not found -> the adapter throws */
+      await assert.rejects(() => piAdapter.setModel!(handle, "truss-fw", "NOPE-x"), /Model not found/);
+    } finally {
+      await shutdown(handle, finished);
+    }
+  });
 });

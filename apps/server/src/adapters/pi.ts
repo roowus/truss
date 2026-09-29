@@ -298,6 +298,29 @@ export const piAdapter: HarnessAdapter = {
     h.proc.stdin!.write(JSON.stringify({ type: "abort" }) + "\n");
   },
 
+  /* live model switch over RPC (rpc-commands.md#set_model) — no restart,
+     no history loss; applies from the next turn (pi queues it mid-run) */
+  async setModel(handle: AdapterHandle, provider: string | undefined, model: string) {
+    const h = handle as PiHandle;
+    const reqId = `truss-setmodel-${Date.now()}`;
+    let timer: ReturnType<typeof setTimeout>;
+    const resp = new Promise<PiRecord>((res, rej) => {
+      h.pending.set(reqId, (rec) => {
+        clearTimeout(timer);
+        res(rec);
+      });
+      timer = setTimeout(() => {
+        if (h.pending.delete(reqId)) rej(new Error("set_model timed out"));
+      }, 8000);
+    });
+    h.proc.stdin!.write(JSON.stringify({ id: reqId, type: "set_model", provider, modelId: model }) + "\n");
+    const rec = await resp;
+    if (rec.success === false) throw new Error(rec.error ?? "set_model failed");
+    h.model = model;
+    h.contextWindow =
+      readPiModels().find((m) => m.provider === provider && m.model === model)?.contextWindow ?? h.contextWindow;
+  },
+
   events(handle: AdapterHandle) {
     return (handle as PiHandle).queue;
   },

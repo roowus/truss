@@ -247,6 +247,68 @@ export function interrupt(sessionId: string) {
   s.adapter.interrupt(s.handle);
 }
 
+/**
+ * Switch a session's model (and provider — they move as a pair).
+ *  - "live":    the adapter switched in place (pi set_model), no restart
+ *  - "restart": harness process respawned on its own persisted session —
+ *               history intact (claude/dsh/hermes have no live switch)
+ *  - "stored":  session isn't live; applies the next time it spawns/resumes
+ */
+export async function switchModel(
+  sessionId: string,
+  model: string,
+  provider?: string,
+): Promise<{ mode: "live" | "restart" | "stored" }> {
+  const row = store.getSession(sessionId);
+  if (!row) throw new Error(`no such session: ${sessionId}`);
+  if (!model) throw new Error("model is required");
+  const s = live.get(sessionId);
+
+  let mode: "live" | "restart" | "stored" = "stored";
+  if (s) {
+    if (s.adapter.setModel) {
+      await s.adapter.setModel(s.handle, provider, model);
+      mode = "live";
+    } else {
+      if (row.state === "running") {
+        throw new Error("session is running — interrupt it, then switch (this harness can't swap models mid-turn)");
+      }
+      /* respawn on the harness's own session ref; without one the process
+         hasn't persisted anything yet, so a fresh spawn loses nothing */
+      s.adapter.dispose(s.handle);
+      live.delete(sessionId);
+      const handle = await s.adapter.spawn({
+        sessionId,
+        cwd: row.cwd,
+        model,
+        provider,
+        resumeRef: row.harness_ref ?? undefined,
+      });
+      goLive(sessionId, s.adapter, handle);
+      if (handle.harnessRef && handle.harnessRef !== row.harness_ref) {
+        store.setHarnessRef(sessionId, handle.harnessRef);
+      }
+      mode = "restart";
+    }
+  }
+
+  store.setSessionModel(sessionId, model, provider ?? null);
+  sink({ type: "session.updated", sessionId, model, provider: provider ?? null });
+
+  const label = provider ? `${provider}/${model}` : model;
+  const note =
+    mode === "live"
+      ? `model switched to ${label}`
+      : mode === "restart"
+        ? `model switched to ${label} — harness restarted, history kept`
+        : `model set to ${label} — applies when the session resumes`;
+  const noteId = `m-sys-${Date.now()}`;
+  sink({ type: "msg.start", sessionId, messageId: noteId, role: "system", at: Date.now() });
+  sink({ type: "msg.chunk", sessionId, messageId: noteId, text: note });
+  sink({ type: "msg.done", sessionId, messageId: noteId });
+  return { mode };
+}
+
 export function resolvePermission(sessionId: string, requestId: string, choice: string) {
   const s = live.get(sessionId);
   if (!s?.adapter.resolve) throw new Error(`session ${sessionId} has no permission host`);
