@@ -27,6 +27,7 @@ import { MonitorPanel } from "@/panels/MonitorPanel";
 import { HostPanel } from "@/panels/HostPanel";
 import { SettingsPanel } from "@/panels/SettingsPanel";
 import { DesktopStrip } from "./DesktopStrip";
+import { isOvercrowded, tabCloseBehavior } from "@/lib/tabClose";
 import { TabPicker } from "./TabPicker";
 import { Btn, Icon, StateDot, TrussLogo } from "./ui";
 import { harnessStyle } from "@/lib/format";
@@ -67,6 +68,13 @@ function TrussTab({ api, params }: IDockviewPanelHeaderProps<{ sessionId?: strin
     const d = api.onDidTitleChange((e: { title: string }) => setTitle(e.title));
     return () => d.dispose();
   }, [api]);
+  /* active (focused) tab — ultra-cramped strips only keep the X here */
+  const [active, setActive] = useState(api.isActive);
+  useEffect(() => {
+    setActive(api.isActive);
+    const d = api.onDidActiveChange?.(() => setActive(api.isActive));
+    return () => d?.dispose();
+  }, [api]);
   const kind = api.id.split(":")[0];
   const sid = params?.sessionId;
   const meta = useApp((s) => (sid ? s.sessions[sid] : undefined));
@@ -100,9 +108,8 @@ function TrussTab({ api, params }: IDockviewPanelHeaderProps<{ sessionId?: strin
     const measure = () => {
       const strip = tab.closest(".dv-tabs-container");
       if (!strip) return;
-      let natural = 0;
-      for (const p of strip.querySelectorAll(".truss-tab-probe")) natural += (p as HTMLElement).offsetWidth + 38 /* X + gap + paddings */;
-      const crowded = natural > strip.clientWidth + 2;
+      const probes = [...strip.querySelectorAll(".truss-tab-probe")].map((p) => (p as HTMLElement).offsetWidth);
+      const crowded = isOvercrowded(probes, strip.clientWidth);
       setCramped(crowded);
       setUltra(crowded && tab.getBoundingClientRect().width < 64);
     };
@@ -150,22 +157,34 @@ function TrussTab({ api, params }: IDockviewPanelHeaderProps<{ sessionId?: strin
           {pending > 1 && <span>{pending}</span>}
         </span>
       )}
-      <button
-        onClick={(e) => { e.stopPropagation(); api.close(); }}
-        className={cn(
-          "truss-tab-close w-5 h-5 grid place-items-center rounded hover:!opacity-100 hover:bg-white/10 focus:opacity-100 focus:pointer-events-auto",
-          cramped
-            ? ultra
-              ? /* sliver tab: cover the ICON, not the title — the rest of the
-                   tab stays a safe click-to-activate target (Chrome favicon swap) */
-                "absolute left-0.5 top-1/2 -translate-y-1/2 bg-[var(--t-bg1)] shadow-sm opacity-0 pointer-events-none group-hover/tab:opacity-60 group-hover/tab:pointer-events-auto"
-              : "absolute right-0.5 top-1/2 -translate-y-1/2 bg-[var(--t-bg1)] shadow-sm opacity-0 pointer-events-none group-hover/tab:opacity-60 group-hover/tab:pointer-events-auto"
-            : "ml-auto shrink-0 opacity-60",
-        )}
-        aria-label="Close tab"
-      >
-        <Icon name="x" size={10} />
-      </button>
+      {/* one rule everywhere (lib/tabClose.ts): inline right after the title
+          when roomy; right-edge overlay when squeezed; hover-reveal except
+          the active tab (always visible) — and ultra slivers only ever show
+          the X on the active tab, never on the left over the icon */}
+      {(() => {
+        const { placement, visible } = tabCloseBehavior({ cramped, ultra, active });
+        if (visible === "never") return null;
+        return (
+          <button
+            onClick={(e) => { e.stopPropagation(); api.close(); }}
+            className={cn(
+              "truss-tab-close grid place-items-center rounded hover:!opacity-100 hover:bg-white/10 focus:opacity-100 focus:pointer-events-auto",
+              placement === "overlay-right" && "absolute right-0.5 top-1/2 -translate-y-1/2 w-5 h-5 bg-[var(--t-bg1)] shadow-sm",
+              /* centered and 16px so it fits INSIDE a sliver tab instead of
+                 overhanging into the left neighbor (which ate its clicks) */
+              placement === "overlay-center" && "absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-4 h-4 bg-[var(--t-bg1)] shadow-sm",
+              placement === "inline" && "shrink-0 w-5 h-5 opacity-60",
+              placement !== "inline" &&
+                (visible === "always"
+                  ? "opacity-60"
+                  : "opacity-0 pointer-events-none group-hover/tab:opacity-60 group-hover/tab:pointer-events-auto"),
+            )}
+            aria-label="Close tab"
+          >
+            <Icon name="x" size={10} />
+          </button>
+        );
+      })()}
       {/* measurement probe: same content, never compressed, invisible */}
       <span ref={probeRef} aria-hidden className="truss-tab-probe absolute invisible pointer-events-none flex items-center gap-1.5 text-[12px] whitespace-nowrap">
         <Icon name={KIND_ICON[kind] ?? "layout"} size={12} />
