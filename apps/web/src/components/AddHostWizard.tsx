@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { store, useApp } from "@/lib/store";
 import { ago } from "@/lib/format";
-import { peerAlreadyAdded } from "@/lib/device";
+import { defaultTailscaleReturn, peerAlreadyAdded } from "@/lib/device";
 import type { TailscalePeer } from "@/lib/proto";
 import { Btn, Icon, Select, Spinner } from "./ui";
 import { cn } from "@/utils/cn";
@@ -56,8 +56,14 @@ export function AddHostWizard({ onClose }: { onClose: () => void }) {
   }, [net, method]);
 
   const [addr, setAddr] = useState("");
+  const [addrOverride, setAddrOverride] = useState(false);
   useEffect(() => setAddr(addresses[0]?.value ?? "custom"), [addresses]);
-  const serverAddr = addr === "custom" ? customAddr.trim() : addr;
+  useEffect(() => setAddrOverride(false), [method]); // switching methods resets the override
+  /* tailscale: both ends are on the tailnet by construction, so the return
+     address is this server's own tailnet identity — no second selection.
+     The dropdown only appears as an explicit override (or for Direct). */
+  const impliedReturn = method === "tailscale" ? defaultTailscaleReturn(net) : null;
+  const serverAddr = addrOverride || !impliedReturn ? (addr === "custom" ? customAddr.trim() : addr) : impliedReturn;
 
   const create = async () => {
     if (!label.trim() || !be) return;
@@ -178,11 +184,21 @@ export function AddHostWizard({ onClose }: { onClose: () => void }) {
                 </div>
               </div>
             )}
-            <div className="flex items-center gap-2">
-              <Select width="100%" className="flex-1" ariaLabel="Server address" value={addr} onChange={setAddr} options={addresses.map((a) => ({ value: a.value, label: a.label }))} />
-            </div>
-            {addr === "custom" && (
-              <input value={customAddr} onChange={(e) => setCustomAddr(e.target.value)} placeholder="http://192.168.1.10:4040" className="t-input w-full font-mono text-[11.5px]" />
+            {method === "tailscale" && impliedReturn && !addrOverride ? (
+              <p className="text-[11px] text-[var(--t-dim)] leading-relaxed">
+                It calls home at <span className="font-mono text-[var(--t-fg2)] break-all">{impliedReturn}</span>
+                {net?.tailscale.serveOn ? " (tailscale serve, https)" : ""} — this server's own tailnet address.{" "}
+                <button type="button" onClick={() => setAddrOverride(true)} className="underline decoration-dotted hover:text-[var(--t-fg)]">use a different return address</button>
+              </p>
+            ) : (
+              <>
+                <div className="flex items-center gap-2">
+                  <Select width="100%" className="flex-1" ariaLabel={method === "tailscale" ? "Return address override" : "Server address"} value={addr} onChange={setAddr} options={addresses.map((a) => ({ value: a.value, label: a.label }))} />
+                </div>
+                {addr === "custom" && (
+                  <input value={customAddr} onChange={(e) => setCustomAddr(e.target.value)} placeholder="http://192.168.1.10:4040" className="t-input w-full font-mono text-[11.5px]" />
+                )}
+              </>
             )}
             {method === "tailscale" && net?.tailscale.installed && (
               <p className="text-[10.5px] text-[var(--t-dim)] leading-relaxed">

@@ -22,3 +22,21 @@ export function peerAlreadyAdded(hosts: { label: string }[], hostName: string): 
   const want = hostName.trim().toLowerCase();
   return hosts.some((h) => h.label.trim().toLowerCase() === want);
 }
+
+export interface NetLike {
+  port: number;
+  tailscale: { installed: boolean; ip4?: string; dnsName?: string; serveOn?: boolean; serveUrl?: string };
+}
+
+/**
+ * The address a tailnet remote should call home to. Both ends are on the
+ * tailnet by construction, so this server's own tailnet identity is the
+ * answer: serve https when it's on, then magic dns, then the tailnet ip.
+ */
+export function defaultTailscaleReturn(net: NetLike | null): string | null {
+  if (!net?.tailscale.installed) return null;
+  if (net.tailscale.serveOn && net.tailscale.serveUrl) return net.tailscale.serveUrl;
+  if (net.tailscale.dnsName) return `http://${net.tailscale.dnsName}:${net.port}`;
+  if (net.tailscale.ip4) return `http://${net.tailscale.ip4}:${net.port}`;
+  return null;
+}

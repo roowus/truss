@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { deviceLabel, peerAlreadyAdded } from "../src/lib/device";
+import { defaultTailscaleReturn, deviceLabel, peerAlreadyAdded } from "../src/lib/device";
 import { buildModelOptions, modelValue, splitModelValue } from "../src/lib/models";
 
 /* the chat header's device chip + model picker logic (pure halves) */
@@ -82,4 +82,37 @@ test("buildModelOptions: empty catalog + no model -> no options (picker hides it
   const opts = buildModelOptions([], "pi", "m", "p");
   assert.equal(opts.length, 1);
   assert.equal(opts[0].value, "p/m");
+});
+
+/* the wizard's return address: on tailscale the device pick implies the
+   return path — this server's own tailnet identity, no second selection */
+
+const NET = {
+  port: 4040,
+  tailscale: {
+    installed: true,
+    ip4: "100.107.125.118",
+    dnsName: "rewvis.tail208cbf.ts.net",
+    serveOn: false,
+  },
+};
+
+test("defaultTailscaleReturn: serve https wins when on", () => {
+  const net = { ...NET, tailscale: { ...NET.tailscale, serveOn: true, serveUrl: "https://rewvis.tail208cbf.ts.net" } };
+  assert.equal(defaultTailscaleReturn(net), "https://rewvis.tail208cbf.ts.net");
+});
+
+test("defaultTailscaleReturn: magic dns name next", () => {
+  assert.equal(defaultTailscaleReturn(NET), "http://rewvis.tail208cbf.ts.net:4040");
+});
+
+test("defaultTailscaleReturn: tailnet ip when no dns", () => {
+  const net = { ...NET, tailscale: { installed: true, ip4: "100.107.125.118" } };
+  assert.equal(defaultTailscaleReturn(net), "http://100.107.125.118:4040");
+});
+
+test("defaultTailscaleReturn: null without tailscale or without any address", () => {
+  assert.equal(defaultTailscaleReturn(null), null);
+  assert.equal(defaultTailscaleReturn({ port: 4040, tailscale: { installed: false } }), null);
+  assert.equal(defaultTailscaleReturn({ port: 4040, tailscale: { installed: true } }), null);
 });
