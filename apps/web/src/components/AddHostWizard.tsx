@@ -25,6 +25,12 @@ export function AddHostWizard({ onClose }: { onClose: () => void }) {
   const [err, setErr] = useState<string | null>(null);
   const [created, setCreated] = useState<{ id: string; token: string } | null>(null);
   const [busy, setBusy] = useState(false);
+  /* installer delivery (issue #1): taildrop to the picked device, or mint a
+     short typeable pairing command */
+  const [pairCmd, setPairCmd] = useState<{ command: string; code: string; expiresAt: number } | null>(null);
+  const [pairBusy, setPairBusy] = useState(false);
+  const [dropState, setDropState] = useState<"idle" | "sending" | "sent" | "failed">("idle");
+  const [dropErr, setDropErr] = useState<string | null>(null);
 
   useEffect(() => {
     be?.netInfo().then(setNet).catch(() => setNet(null));
@@ -88,6 +94,8 @@ export function AddHostWizard({ onClose }: { onClose: () => void }) {
     const t = window.setInterval(() => void store.refreshHosts(), 2000);
     return () => window.clearInterval(t);
   }, [step, online]);
+
+  const pickedPeerLabel = pickedPeer ? peers?.peers.find((p) => p.dnsName === pickedPeer)?.hostName ?? null : null;
 
   const command = created && serverAddr
     ? `curl -fsSL ${serverAddr}/agent/install.sh?host=${created.id} | sh -s -- ${created.token}`
@@ -222,10 +230,54 @@ export function AddHostWizard({ onClose }: { onClose: () => void }) {
               Run this on <b className="text-[var(--t-fg)]">{label}</b>. It installs the agent into <span className="font-mono">~/.truss/</span> (and a user service when systemd is there). The token is in the command and lands in a chmod-600 env file — <b className="text-[var(--t-fg)]">shown only now</b>; Truss stores just its hash.
             </p>
             <div className="rounded-lg border border-[var(--t-line2)] bg-[var(--t-bg0)] p-3 font-mono text-[11px] leading-relaxed text-[var(--t-fg2)] break-all select-all">{command}</div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
               <Btn size="xs" variant="outline" icon="copy" onClick={() => { void navigator.clipboard.writeText(command); store.toast("ok", "Copied", "run it on the remote host"); }}>Copy command</Btn>
+              {pickedPeerLabel && created && (
+                <Btn
+                  size="xs"
+                  variant="outline"
+                  icon="send"
+                  disabled={dropState === "sending" || dropState === "sent"}
+                  title={`Taildrop the ready-to-run installer to ${pickedPeerLabel} (tailscale file cp) — the token rides inside the file, not the command line`}
+                  onClick={() => {
+                    setDropState("sending");
+                    setDropErr(null);
+                    be?.taildropHost(created.id, pickedPeer!, created.token, serverAddr).then(
+                      () => setDropState("sent"),
+                      (e) => { setDropState("failed"); setDropErr(e?.message ?? String(e)); },
+                    );
+                  }}
+                >
+                  {dropState === "sent" ? `Sent to ${pickedPeerLabel} ✓` : dropState === "sending" ? "Sending…" : `Send to ${pickedPeerLabel}`}
+                </Btn>
+              )}
+              <Btn
+                size="xs"
+                variant="ghost"
+                icon="bolt"
+                disabled={pairBusy || !!pairCmd}
+                title="Mint a short single-use pairing code (10 min) — the typeable fallback"
+                onClick={() => {
+                  if (!created) return;
+                  setPairBusy(true);
+                  be?.pairHost(created.id, created.token, serverAddr).then(
+                    (r) => setPairCmd({ command: r.command, code: r.code, expiresAt: r.expiresAt }),
+                    (e) => store.toast("error", "Couldn't mint a pairing code", e?.message ?? String(e)),
+                  ).finally(() => setPairBusy(false));
+                }}
+              >
+                {pairCmd ? "Code minted" : "Short command"}
+              </Btn>
               <span className="text-[10.5px] text-[var(--t-dim)]">needs node ≥ 20 on the remote + the harness CLIs it should host</span>
             </div>
+            {dropErr && <p className="text-[11px] text-[var(--t-red)]">Taildrop failed: {dropErr} — use the copy command or the short one instead.</p>}
+            {dropState === "sent" && <p className="text-[11px] text-[var(--t-teal)]">In the device's taildrop inbox: run <span className="font-mono">sh ~/Downloads/truss-install-{created?.id}.sh</span> (taildrop lands there by default).</p>}
+            {pairCmd && (
+              <div className="rounded-lg border border-[var(--t-line)] bg-[var(--t-bg0)] px-3 py-2">
+                <div className="font-mono text-[12px] text-[var(--t-fg)] break-all select-all">{pairCmd.command}</div>
+                <div className="mt-0.5 text-[10px] text-[var(--t-dim)]">code <span className="font-mono text-[var(--t-amber)]">{pairCmd.code}</span> · single-use · expires {ago(pairCmd.expiresAt)} — after that the code is dead, mint another</div>
+              </div>
+            )}
             <div className="flex justify-end gap-2 pt-1">
               <Btn variant="ghost" onClick={() => setStep(1)}>Back</Btn>
               <Btn variant="amber" onClick={() => setStep(3)}>It's running →</Btn>
