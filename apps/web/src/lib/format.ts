@@ -37,6 +37,12 @@ export function ago(t: number, now = Date.now()) {
   if (s < 86400) return `${Math.floor(s / 3600)}h`;
   return `${Math.floor(s / 86400)}d`;
 }
+export const TRASH_RETENTION_DAYS = 30;
+/** days a trashed chat has left before it is purged (issue #5): the delete
+   stamp plus the retention window, never below 0 once the window has passed */
+export function daysLeftInTrash(deletedAt: number, now = Date.now(), retentionDays = TRASH_RETENTION_DAYS) {
+  return Math.max(0, Math.ceil((deletedAt + retentionDays * 86_400_000 - now) / 86_400_000));
+}
 export function fmtSize(n: number): string {
   const r = Math.round(n);
   if (r < 1024) return `${r} B`;

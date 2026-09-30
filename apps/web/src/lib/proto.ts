@@ -43,6 +43,8 @@ export interface SessionMeta {
   project?: string;
   state: SessionState;
   archived?: number;
+  /** set while the session sits in the 30-day trash (raw rows from /api/trash) */
+  deleted_at?: string | number | null;
   created_at: string | number;
   updated_at: string | number;
   live: boolean;

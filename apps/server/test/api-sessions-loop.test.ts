@@ -272,6 +272,10 @@ test("archive hides from the default list; hard delete removes row + events", as
   /* ghosts */
   assert.equal((await api(`/api/sessions/ghost/purge`, { method: "POST" })).status, 404);
   assert.equal((await api(`/api/sessions/ghost/restore`, { method: "POST" })).status, 404);
+  /* same for DELETE ?hard=1 — deleteSession throws on a ghost, the route says 404, not 500 */
+  const ghostDel = await api(`/api/sessions/ghost?hard=1`, { method: "DELETE" });
+  assert.equal(ghostDel.status, 404);
+  assert.ok(String(ghostDel.body.error).includes("no such session"));
 });
 
 test("unknown sessions reject cleanly everywhere", async () => {

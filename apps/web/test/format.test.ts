@@ -9,6 +9,8 @@ import {
   fmtTokens,
   fmtCost,
   ago,
+  daysLeftInTrash,
+  TRASH_RETENTION_DAYS,
   fmtSize,
   shortPath,
   argSummary,
@@ -81,6 +83,18 @@ test("ago: now, s, m, h, d, future clamps to now", () => {
   assert.equal(ago(now - 2 * 3_600_000, now), "2h");
   assert.equal(ago(now - 2 * 86_400_000, now), "2d");
   assert.equal(ago(now + 60_000, now), "now"); // future timestamps clamp via Math.max(0, ...)
+});
+
+test("daysLeftInTrash: the purge countdown a trash row shows (issue #5 asks for days-remaining, not time-since-delete)", () => {
+  const now = 1_700_000_000_000;
+  const day = 86_400_000;
+  assert.equal(TRASH_RETENTION_DAYS, 30, "same window as the server's TRASH_RETENTION_MS");
+  assert.equal(daysLeftInTrash(now, now), 30, "just deleted: the full window left");
+  assert.equal(daysLeftInTrash(now - day, now), 29);
+  assert.equal(daysLeftInTrash(now - 29 * day, now), 1);
+  assert.equal(daysLeftInTrash(now - 29 * day - 3_600_000, now), 1, "23h left still reads 1 — the last day never rounds to 0 early");
+  assert.equal(daysLeftInTrash(now - 30 * day, now), 0, "at the window it is purged");
+  assert.equal(daysLeftInTrash(now - 45 * day, now), 0, "long past the window clamps at 0");
 });
 
 test("fmtSize: B rounding, KB decimals, MB/GB/TB boundaries", () => {

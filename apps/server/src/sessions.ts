@@ -392,7 +392,6 @@ export function setProjectArchived(project: string, archived: boolean): number {
   return rows.length;
 }
 
-/** close (if live) + delete the row and its entire event log */
 /** exactly 30 days — the number in the feature's name (issue #5) */
 export const TRASH_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 

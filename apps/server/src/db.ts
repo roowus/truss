@@ -122,6 +122,10 @@ const listDeletedSessionsStmt = db.prepare(`
   SELECT * FROM sessions WHERE deleted_at IS NOT NULL ORDER BY deleted_at DESC
 `);
 
+const knownHarnessRefsStmt = db.prepare(`
+  SELECT harness_ref FROM sessions WHERE harness_ref IS NOT NULL
+`);
+
 const getSessionStmt = db.prepare(`SELECT * FROM sessions WHERE id = ?`);
 
 const listEventsStmt = db.prepare(`
@@ -256,6 +260,12 @@ export const store = {
   /** the 30-day trash (issue #5): stamped rows, newest first */
   listDeletedSessions(): SessionRow[] {
     return listDeletedSessionsStmt.all() as SessionRow[];
+  },
+
+  /** every harness_ref ever seen, trashed rows included — import dedupe must
+     not lose a ref just because its session is in the trash (issue #5) */
+  knownHarnessRefs(): string[] {
+    return (knownHarnessRefsStmt.all() as { harness_ref: string }[]).map((r) => r.harness_ref);
   },
 
   setDeletedAt(id: string, at: number | null) {
