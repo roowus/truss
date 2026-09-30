@@ -115,6 +115,7 @@ export interface TodoItem {
   createdBy: "user" | "agent";
   sharedEditors: string[];
   deniedEditors: string[];
+  sharedWith: string[];
   createdAt: number;
   updatedAt: number;
 }
@@ -138,6 +139,8 @@ export interface FeedItem {
   data: Record<string, unknown>;
   state: FeedState;
   sharedWith: string[];
+  /** idempotency key — same key updates instead of duplicating */
+  dedupeKey?: string;
   createdAt: number;
   updatedAt: number;
 }
