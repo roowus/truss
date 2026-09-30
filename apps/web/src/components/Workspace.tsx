@@ -28,6 +28,7 @@ import { HostPanel } from "@/panels/HostPanel";
 import { SettingsPanel } from "@/panels/SettingsPanel";
 import { DesktopStrip } from "./DesktopStrip";
 import { isOvercrowded, tabCloseBehavior } from "@/lib/tabClose";
+import { TAB_DRAG_MIME, encodeTabDrag } from "@/lib/tabDnd";
 import { TabPicker } from "./TabPicker";
 import { Btn, Icon, StateDot, TrussLogo } from "./ui";
 import { harnessStyle } from "@/lib/format";
@@ -144,7 +145,18 @@ function TrussTab({ api, params }: IDockviewPanelHeaderProps<{ sessionId?: strin
       onMouseDown={(e) => {
         if (e.button === 1) { e.preventDefault(); api.close(); }
       }}
-      title={`${title}\nRight-click to copy or move to another workspace\n(middle-click closes)`}
+      /* cross-workspace drag (issue #9): dockview's native drag can't leave
+         its instance, so the tab also carries an HTML5 payload for the
+         workspace strip. The two coexist — dockview keeps the strip, the
+         strip takes the workspace transfer. */
+      draggable
+      onDragStart={(e) => {
+        const from = desktops.spaceOfPanel(api.id);
+        if (!from) return;
+        e.dataTransfer.setData(TAB_DRAG_MIME, encodeTabDrag({ from, panelId: api.id }));
+        e.dataTransfer.effectAllowed = "move";
+      }}
+      title={`${title}\nDrag onto a workspace above to move it there\nRight-click to copy or move to another workspace\n(middle-click closes)`}
     >
       <span style={{ color: kind === "chat" ? color : undefined }} className={cn("shrink-0", kind === "chat" ? "" : "opacity-70")}>
         <Icon name={KIND_ICON[kind] ?? "layout"} size={12} />
