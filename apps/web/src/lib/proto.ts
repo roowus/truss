@@ -187,6 +187,7 @@ export interface TailscalePeer {
 
 export interface NetInfo {
   port: number;
+  bind?: string;
   tailscale: { installed: boolean; ip4?: string; dnsName?: string; serveOn?: boolean; serveUrl?: string };
   lan: string[];
 }
