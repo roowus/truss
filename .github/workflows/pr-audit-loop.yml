@@ -94,7 +94,7 @@ jobs:
       # Provider endpoints (Anthropic-compatible). If runs fail auth, confirm
       # the base URLs for your accounts.
       ZAI_BASE_URL: https://api.z.ai/api/anthropic
-      FW_BASE_URL: https://api.fireworks.ai/inference/anthropic
+      FW_BASE_URL: https://api.fireworks.ai/inference
       # Model IDs. Verify the GLM id on your Z.AI plan; if it 404s, try
       # glm-4.5-flash.
       GLM_MODEL: glm-5.3-flash
@@ -471,7 +471,7 @@ jobs:
             codebase), write the converged result and wrap-up, and end.
           claude_args: |
             --model ${{ env.GLM_MODEL }}
-            --max-turns 60
+            --max-turns 100
             --add-dir ${{ runner.temp }}/review-out
             --allowed-tools "Bash(git -C pr-work:*),Bash(pnpm:*),Bash(env -u:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh issue view:*),Read,Write,Edit,Glob,Grep"
 
@@ -489,7 +489,7 @@ jobs:
           prompt: *fix-prompt-r1
           claude_args: |
             --model ${{ env.KIMI_MODEL }}
-            --max-turns 60
+            --max-turns 100
             --add-dir ${{ runner.temp }}/review-out
             --allowed-tools "Bash(git -C pr-work:*),Bash(pnpm:*),Bash(env -u:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh issue view:*),Read,Write,Edit,Glob,Grep"
 
@@ -792,7 +792,7 @@ jobs:
             wrap-up, and end.
           claude_args: |
             --model ${{ steps.fixmodel-r2.outputs.model }}
-            --max-turns 60
+            --max-turns 100
             --add-dir ${{ runner.temp }}/review-out
             --allowed-tools "Bash(git -C pr-work:*),Bash(pnpm:*),Bash(env -u:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh issue view:*),Read,Write,Edit,Glob,Grep"
 
@@ -811,7 +811,7 @@ jobs:
           prompt: *fix-prompt-r2
           claude_args: |
             --model ${{ env.KIMI_MODEL }}
-            --max-turns 60
+            --max-turns 100
             --add-dir ${{ runner.temp }}/review-out
             --allowed-tools "Bash(git -C pr-work:*),Bash(pnpm:*),Bash(env -u:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh issue view:*),Read,Write,Edit,Glob,Grep"
 
@@ -1114,7 +1114,7 @@ jobs:
             wrap-up, and end.
           claude_args: |
             --model ${{ steps.fixmodel-r3.outputs.model }}
-            --max-turns 60
+            --max-turns 100
             --add-dir ${{ runner.temp }}/review-out
             --allowed-tools "Bash(git -C pr-work:*),Bash(pnpm:*),Bash(env -u:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh issue view:*),Read,Write,Edit,Glob,Grep"
 
@@ -1133,7 +1133,7 @@ jobs:
           prompt: *fix-prompt-r3
           claude_args: |
             --model ${{ env.KIMI_MODEL }}
-            --max-turns 60
+            --max-turns 100
             --add-dir ${{ runner.temp }}/review-out
             --allowed-tools "Bash(git -C pr-work:*),Bash(pnpm:*),Bash(env -u:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh issue view:*),Read,Write,Edit,Glob,Grep"
 

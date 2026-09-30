@@ -42,7 +42,7 @@ jobs:
       # Provider endpoints (Anthropic-compatible). If runs fail auth, confirm
       # the base URLs for your accounts.
       ZAI_BASE_URL: https://api.z.ai/api/anthropic
-      FW_BASE_URL: https://api.fireworks.ai/inference/anthropic
+      FW_BASE_URL: https://api.fireworks.ai/inference
       # Model IDs. Verify the GLM id on your Z.AI plan; if it 404s, try
       # glm-4.5-flash.
       GLM_MODEL: glm-5.3-flash
