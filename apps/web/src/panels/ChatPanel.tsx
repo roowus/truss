@@ -4,7 +4,7 @@ import { store, useApp, useNow, capsOf, type Msg, type ToolRun, type Perm, type 
 import { argSummary, fmtMs, harnessStyle, shortPath, baseHarness } from "@/lib/format";
 import { deviceLabel } from "@/lib/device";
 import { buildModelOptions, modelValue, splitModelValue } from "@/lib/models";
-import { planHeaderFit } from "@/lib/headerFit";
+import { planHeaderFit, HEADER_CLUSTER, HEADER_GAP } from "@/lib/headerFit";
 import { CHAT_WIDTH_DEFAULT, commitChatWidth, dragDisplayWidth, readChatWidthPref, resolveChatWidth, writeChatWidthPref } from "@/lib/chatWidth";
 import { openPanel, openAgentShell, renameSessionPanels } from "@/lib/workspace";
 import { Btn, Empty, HarnessMark, Icon, IconBtn, Select, Spinner, StateDot, STATE_META } from "@/components/ui";
@@ -74,11 +74,12 @@ function ChatHeader({ id }: { id: string }) {
   /* overflow planning (issue #3): the right cluster must never get clipped
      by the pane edge. The planner (lib/headerFit) collapses rightmost-first
      into the ⋯ menu; Stop and the menu trigger never collapse. Measured:
-     header width via ResizeObserver, left cluster via a ref, the title gets
-     a 56px reservation (it truncates beyond that). */
+     header width via ResizeObserver, left cluster via a ref (the device chip
+     caps at 8rem, so a long remote label cannot inflate the measurement),
+     the title gets a 56px reservation (it truncates beyond that). */
   const headerRef = useRef<HTMLDivElement>(null);
   const leftRef = useRef<HTMLSpanElement>(null);
-  const [plan, setPlan] = useState<{ visible: string[]; overflow: string[] }>({ visible: ["model", "stop", "trajectory", "more"], overflow: [] });
+  const [plan, setPlan] = useState<{ visible: string[]; overflow: string[] }>({ visible: ["select", "stop", "trajectory", "more"], overflow: [] });
 
   /* which device this session runs on: bare harness id = this server,
      harness@hostId = that remote host (labeled from the registry) */
@@ -98,16 +99,15 @@ function ChatHeader({ id }: { id: string }) {
   useEffect(() => {
     const el = headerRef.current;
     if (!el) return;
-    const items = [
-      ...(hasModel ? [{ id: "model", width: 170 }] : []),
-      ...(busy ? [{ id: "stop", width: 58, essential: true }] : []),
-      { id: "trajectory", width: 28 },
-      { id: "more", width: 28, essential: true },
-    ];
+    /* the model Select only when there is a catalog, Stop only while running */
+    const items = HEADER_CLUSTER.filter((it) => (it.id === "select" ? hasModel : it.id === "stop" ? busy : true));
     const measure = () => {
       const leftW = leftRef.current?.getBoundingClientRect().width ?? 200;
       const available = el.clientWidth - leftW - 56 /* title reservation */ - 24 /* paddings */;
-      setPlan(planHeaderFit(items, Math.max(0, available), { triggerWidth: 28, gap: 6 }));
+      /* triggerWidth 0: the ⋯ trigger is priced once, as the essential `more`
+         item — it is rendered on every plan, so collapsing adds nothing to
+         the row for it to reserve */
+      setPlan(planHeaderFit(items, Math.max(0, available), { triggerWidth: 0, gap: HEADER_GAP }));
     };
     const ro = new ResizeObserver(measure);
     ro.observe(el);
@@ -121,11 +121,11 @@ function ChatHeader({ id }: { id: string }) {
       <span ref={leftRef} className="flex items-center gap-2 shrink-0">
         <HarnessMark harness={meta.harness} size={18} />
         <span
-          className="shrink-0 inline-flex items-center gap-1 h-5 px-1.5 rounded border border-[var(--t-line)] text-[10px] font-mono text-[var(--t-mute)]"
+          className="shrink-0 min-w-0 max-w-[8rem] inline-flex items-center gap-1 h-5 px-1.5 rounded border border-[var(--t-line)] text-[10px] font-mono text-[var(--t-mute)]"
           title={`session runs on ${device}`}
         >
           <Icon name="host" size={10} className={hostId ? "text-[var(--t-teal)]" : "text-[var(--t-dim)]"} />
-          {device}
+          <span className="min-w-0 truncate">{device}</span>
         </span>
         <span className="flex items-center gap-1.5 shrink-0" title={STATE_META[meta.state]?.hint}>
           <StateDot state={meta.state} size={6} />
@@ -135,13 +135,15 @@ function ChatHeader({ id }: { id: string }) {
       </span>
       <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-[var(--t-fg)]" title={tooltip}>{meta.title}</span>
       <div className="ml-auto flex items-center gap-1.5 shrink-0">
-        {hasModel && plan.visible.includes("model") && (
+        {hasModel && plan.visible.includes("select") && (
+          /* w-auto is load-bearing: the .t-input component width is 100% and
+             would otherwise fill the cluster. The planner reserves the cap. */
           <Select
             value={currentValue}
             options={modelOptions}
             onChange={onModelPick}
             ariaLabel="Switch model"
-            className="!h-6 !px-2 !py-0 !text-[11px] font-mono text-[var(--t-mute)] w-[170px] shrink-0"
+            className="!h-6 !px-2 !py-0 !text-[11px] font-mono text-[var(--t-mute)] w-auto max-w-[170px] shrink-0"
           />
         )}
         {busy && (
@@ -156,7 +158,7 @@ function ChatHeader({ id }: { id: string }) {
         <>
           <div className="fixed inset-0 z-40" onClick={() => setMenu(false)} />
           <div className="absolute right-2 top-[42px] z-50 w-52 rounded-lg bg-[var(--t-bg2)] border border-[var(--t-line2)] shadow-2xl py-1 t-pop">
-            {plan.overflow.includes("model") && (
+            {plan.overflow.includes("select") && (
               <div className="px-2 py-1.5" onClick={(e) => e.stopPropagation()}>
                 <Select
                   value={currentValue}
