@@ -119,6 +119,13 @@ export interface TodoItem {
 export type FeedType = "todo" | "permission" | "work_done" | "task_run" | "error" | "context" | "report" | "note";
 export type FeedImportance = "low" | "normal" | "high" | "urgent";
 export type FeedState = "unread" | "read" | "saved" | "dismissed" | "done";
+export interface PromptAttachment {
+  name: string;
+  path: string;
+  size: number;
+  mime?: string;
+}
+
 export interface FeedItem {
   id: string;
   type: FeedType;
@@ -226,7 +233,7 @@ export type ProtoEvent =
   | (Base & { type: "session.deleted" })
   | (Base & { type: "todo.upsert"; todo: TodoItem })
   | (Base & { type: "feed.upsert"; item: FeedItem })
-  | (Base & { type: "msg.start"; messageId: string; role: "user" | "assistant" | "system"; at: At })
+  | (Base & { type: "msg.start"; messageId: string; role: "user" | "assistant" | "system"; at: At; attachments?: PromptAttachment[] })
   | (Base & { type: "msg.chunk"; messageId: string; text: string; channel?: string })
   | (Base & { type: "msg.done"; messageId: string; stopReason?: string })
   | (Base & { type: "tool.call"; toolCallId: string; name: string; args: unknown; callId?: string })

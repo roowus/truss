@@ -286,6 +286,17 @@ const MessageView = memo(function MessageView({ m, harness, live }: { m: Msg; ha
     return (
       <div className="t-in flex flex-col items-end">
         <div className="mb-1 mr-1 text-[10px] font-medium uppercase tracking-[0.08em] text-[var(--t-dim)]">you</div>
+        {/* attachment chips survive reload (msg.start carries the refs) */}
+        {!!m.attachments?.length && (
+          <div className="mb-1 flex flex-wrap justify-end gap-1 max-w-[85%]">
+            {m.attachments.map((a) => (
+              <span key={a.path} className="inline-flex items-center gap-1 h-5 px-1.5 rounded-md bg-[var(--t-bg2)] border border-[var(--t-line2)] text-[10px] font-mono text-[var(--t-mute)]" title={`${a.path} · ${a.size} B`}>
+                <Icon name="clip" size={9} />
+                {a.name}
+              </span>
+            ))}
+          </div>
+        )}
         <div className="max-w-[85%] rounded-xl rounded-br-[4px] bg-[var(--t-bg3)] px-3.5 py-2 text-[13.5px] leading-relaxed text-[var(--t-fg)] whitespace-pre-wrap break-words">{text}</div>
       </div>
     );
@@ -461,6 +472,9 @@ function Composer({ id }: { id: string }) {
   const [text, setText] = useState(drafts.get(id) ?? "");
   const [sending, setSending] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [atts, setAtts] = useState<import("@/lib/proto").PromptAttachment[]>([]);
+  const [uploading, setUploading] = useState(false);
+  const fileRef = useRef<HTMLInputElement>(null);
   const ta = useRef<HTMLTextAreaElement>(null);
   const now = useNow(1000, meta.state === "spawning");
 
@@ -490,21 +504,38 @@ function Composer({ id }: { id: string }) {
   const dead = meta.state === "closed" || meta.state === "error";
   const spawning = meta.state === "spawning";
   const queues = !!caps?.queueWhileRunning;
-  const blocked = (running && !queues) || spawning || sending;
-  const canSend = !!text.trim() && !blocked;
+  const blocked = (running && !queues) || spawning || sending || uploading;
+  const canSend = (!!text.trim() || atts.length > 0) && !blocked;
 
   const send = async () => {
     if (!canSend) return;
     setSending(true);
     setErr(null);
     try {
-      await store.prompt(id, text);
+      await store.prompt(id, text, atts.length ? atts : undefined);
       setText("");
+      setAtts([]);
     } catch (e: any) {
       if (e.status === 409 && dead) setErr(`This session can't be resumed — the harness has no stored reference for it. Start a new session in ${shortPath(meta.cwd)}.`);
       else setErr(e.message ?? String(e));
     } finally {
       setSending(false);
+    }
+  };
+
+  const attachFiles = async (files: FileList | File[]) => {
+    setErr(null);
+    setUploading(true);
+    try {
+      for (const f of Array.from(files)) {
+        const up = await store.upload(id, f);
+        setAtts((a) => [...a, { ...up, mime: f.type || undefined }]);
+      }
+    } catch (e: any) {
+      setErr(e.message ?? String(e));
+    } finally {
+      setUploading(false);
+      if (fileRef.current) fileRef.current.value = "";
     }
   };
 
@@ -535,7 +566,30 @@ function Composer({ id }: { id: string }) {
           <button onClick={() => setErr(null)} className="opacity-60 hover:opacity-100"><Icon name="x" size={12} /></button>
         </div>
       )}
+      {/* attachment chips (uploaded into the workspace, referenced by path) */}
+      {atts.length > 0 && (
+        <div className="mb-1.5 flex flex-wrap gap-1 px-0.5">
+          {atts.map((a) => (
+            <span key={a.path} className="inline-flex items-center gap-1 h-5 px-1.5 rounded-md bg-[var(--t-bg2)] border border-[var(--t-line2)] text-[10.5px] font-mono text-[var(--t-fg2)]" title={`${a.path} (${a.size} B)`}>
+              <Icon name="clip" size={10} className="text-[var(--t-dim)]" />
+              {a.name}
+              <button onClick={() => setAtts((x) => x.filter((y) => y.path !== a.path))} className="text-[var(--t-dim)] hover:text-[var(--t-red)]" aria-label={`Remove ${a.name}`}>
+                <Icon name="x" size={9} />
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
       <div className={cn("flex items-end gap-1.5 rounded-xl border bg-[var(--t-bg0)] transition-colors focus-within:border-[var(--t-mute)] px-2 py-1.5", dead ? "border-dashed border-[var(--t-line2)]" : "border-[var(--t-line2)]")}>
+        <input
+          ref={fileRef}
+          type="file"
+          multiple
+          className="hidden"
+          aria-label="Attach files"
+          onChange={(e) => { if (e.target.files?.length) void attachFiles(e.target.files); }}
+        />
+        <IconBtn icon="clip" label={uploading ? "Uploading…" : "Attach files (they land in .truss-uploads/ in the workspace)"} disabled={uploading || sending} onClick={() => fileRef.current?.click()} className="mb-0.5 shrink-0" />
         <textarea
           ref={ta}
           value={text}

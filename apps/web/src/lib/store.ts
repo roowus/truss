@@ -23,7 +23,7 @@ export const toMs = (at: string | number | undefined): number => {
 
 /* ---------------- view model ---------------- */
 export interface Segment { channel: string; text: string }
-export interface Msg { id: string; role: "user" | "assistant" | "system"; segments: Segment[]; done: boolean; stopReason?: string; at: number }
+export interface Msg { id: string; role: "user" | "assistant" | "system"; segments: Segment[]; done: boolean; stopReason?: string; at: number; attachments?: import("./proto").PromptAttachment[] }
 export interface ToolRun { id: string; name: string; args: unknown; callId?: string; output?: string; status: "running" | "ok" | "fail"; durationMs?: number; startedAt: number }
 export interface Perm { requestId: string; tool: string; reason: string; options: string[]; choice?: string; at: number }
 export interface Call {
@@ -95,7 +95,7 @@ export function reduce(v: SessionView, ev: ProtoEvent, frameTime: number): Sessi
       if (v.msgs[ev.messageId]) return v;
       return {
         ...v,
-        msgs: { ...v.msgs, [ev.messageId]: { id: ev.messageId, role: ev.role, segments: [], done: false, at: toMs(ev.at) } },
+        msgs: { ...v.msgs, [ev.messageId]: { id: ev.messageId, role: ev.role, segments: [], done: false, at: toMs(ev.at), ...(ev.attachments?.length ? { attachments: ev.attachments } : {}) } },
         items: [...v.items, { kind: "msg", id: ev.messageId }],
       };
     }
@@ -532,8 +532,17 @@ class Store {
     void this.ensureHydrated(session.id);
     return session;
   }
-  async prompt(id: string, text: string) {
-    await this.be.prompt(id, text);
+  async prompt(id: string, text: string, attachments?: import("./proto").PromptAttachment[]) {
+    await this.be.prompt(id, text, attachments);
+  }
+  /** upload a File into the session workspace; returns the attachable ref */
+  async upload(id: string, file: File): Promise<import("./proto").PromptAttachment> {
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    let bin = "";
+    const CHUNK = 8192;
+    for (let i = 0; i < bytes.length; i += CHUNK) bin += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
+    const { upload } = await this.be.upload(id, file.name, btoa(bin));
+    return upload;
   }
   async interrupt(id: string) {
     try {
