@@ -8,6 +8,7 @@ import { openPanel } from "@/lib/workspace";
 import { Markdown } from "./Markdown";
 import type { FeedItem, FeedState, FeedType } from "@/lib/proto";
 import { cn } from "@/utils/cn";
+import { CARD_ACTION_ICON_PX, CARD_ACTION_SIZE_PX, feedCardActions } from "@/lib/feedActions";
 
 /**
  * Feed — the unified inbox. Permission decisions (actionable), agent-filed
@@ -195,13 +196,36 @@ function FeedCard({ item, sessions, now, setState }: {
               <Btn size="xs" variant="ghost" icon="chat" onClick={() => openPanel("chat", { sessionId: s.id })}>Open session</Btn>
             )}
             <span className="ml-auto" />
-            {/* universal actions */}
-            <CardAction icon="check" label={unread ? "Mark read" : "Mark unread"} onClick={() => setState(item.id, unread ? "read" : "unread")} />
-            <CardAction icon="tag" label={item.state === "saved" ? "Unsave" : "Save"} active={item.state === "saved"} onClick={() => setState(item.id, item.state === "saved" ? "read" : "saved")} />
-            <button ref={shareRef} onClick={() => setShareOpen((v) => !v)} className="w-6 h-6 grid place-items-center rounded text-[var(--t-dim)] hover:text-[var(--t-fg)] hover:bg-white/5" title="Share to another agent's session" aria-label="Share">
-              <Icon name="send" size={11} />
-            </button>
-            <CardAction icon="x" label="Dismiss" onClick={() => setState(item.id, "dismissed")} />
+            {/* universal actions — descriptors carry label + tooltip (issue #25:
+               bigger, brighter, self-explaining) */}
+            {feedCardActions(item).map((a) =>
+              a.id === "share" ? (
+                <button
+                  key={a.id}
+                  ref={shareRef}
+                  onClick={() => setShareOpen((v) => !v)}
+                  style={{ width: CARD_ACTION_SIZE_PX, height: CARD_ACTION_SIZE_PX }}
+                  className="grid place-items-center rounded-md text-[var(--t-mute)] hover:text-[var(--t-fg)] hover:bg-white/8 border border-transparent hover:border-[var(--t-line2)]"
+                  title={a.tooltip}
+                  aria-label={a.label}
+                >
+                  <Icon name={a.icon} size={CARD_ACTION_ICON_PX} />
+                </button>
+              ) : (
+                <CardAction
+                  key={a.id}
+                  icon={a.icon}
+                  label={a.label}
+                  tooltip={a.tooltip}
+                  active={a.id === "save" && item.state === "saved"}
+                  onClick={() => {
+                    if (a.id === "read") setState(item.id, unread ? "read" : "unread");
+                    else if (a.id === "save") setState(item.id, item.state === "saved" ? "read" : "saved");
+                    else if (a.id === "dismiss") setState(item.id, "dismissed");
+                  }}
+                />
+              ),
+            )}
           </div>
           {item.sharedWith.length > 0 && (
             <div className="mt-1.5 font-mono text-[9.5px] text-[var(--t-dim)]">shared with {item.sharedWith.map((id) => sessions[id]?.title ?? id).join(", ")}</div>
@@ -226,10 +250,16 @@ function TodoQuickAction({ todoId, onDone }: { todoId: string; onDone: () => voi
   );
 }
 
-function CardAction({ icon, label, onClick, active }: { icon: string; label: string; onClick: () => void; active?: boolean }) {
+function CardAction({ icon, label, tooltip, onClick, active }: { icon: string; label: string; tooltip: string; onClick: () => void; active?: boolean }) {
   return (
-    <button onClick={onClick} title={label} aria-label={label} className={cn("w-6 h-6 grid place-items-center rounded hover:bg-white/5", active ? "text-[var(--t-sky)]" : "text-[var(--t-dim)] hover:text-[var(--t-fg)]")}>
-      <Icon name={icon} size={11} />
+    <button
+      onClick={onClick}
+      title={tooltip}
+      aria-label={label}
+      style={{ width: CARD_ACTION_SIZE_PX, height: CARD_ACTION_SIZE_PX }}
+      className={cn("grid place-items-center rounded-md border border-transparent hover:bg-white/8 hover:border-[var(--t-line2)]", active ? "text-[var(--t-sky)]" : "text-[var(--t-mute)] hover:text-[var(--t-fg)]")}
+    >
+      <Icon name={icon} size={CARD_ACTION_ICON_PX} />
     </button>
   );
 }
