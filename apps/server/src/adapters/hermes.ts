@@ -91,13 +91,17 @@ export const hermesAdapter: HarnessAdapter = {
 
     let res: { sessionId: string; models?: HermesModelState };
     if (opts.resumeRef) {
-      /* hermes-acp advertises sessionCapabilities.resume; cwd is required */
-      res = { sessionId: opts.resumeRef };
-      await client.call("session/resume", {
+      /* hermes-acp advertises sessionCapabilities.resume; cwd is required.
+         READ the response (issue #14): it carries the model catalog AND the
+         real session id — hermes mints a fresh one when the persisted session
+         is gone, and addressing the dead id makes every later call a whisper
+         into the void */
+      const r = (await client.call("session/resume", {
         sessionId: opts.resumeRef,
         cwd: opts.cwd,
         mcpServers: [],
-      });
+      })) as { sessionId?: string; models?: HermesModelState } | null;
+      res = { sessionId: r?.sessionId ?? opts.resumeRef, models: r?.models };
     } else {
       res = (await client.call("session/new", { cwd: resolveCwd(opts.cwd).cwd, mcpServers: trussMcp(opts.sessionId) })) as {
         sessionId: string;
