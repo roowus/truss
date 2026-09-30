@@ -206,8 +206,9 @@ export function parsePasswd(text: string): Map<number, string> {
   for (const ln of text.split("\n")) {
     const parts = ln.split(":");
     if (parts.length < 3) continue;
-    const uid = Number(parts[2]);
-    if (Number.isInteger(uid)) out.set(uid, parts[0]);
+    /* a malformed uid field must not become uid 0 — Number("") is 0, so
+       "svc:x::1000:…" would label every root-owned process "svc" */
+    if (/^\d+$/.test(parts[2])) out.set(Number(parts[2]), parts[0]);
   }
   return out;
 }
@@ -338,7 +339,7 @@ export async function collectMetrics(): Promise<HostMetrics> {
       cpuModel: cpuModel(),
       cores: cpu.perCore.length,
     },
-    uptimeSec: Number(read("/proc/uptime").split(" ")[0] ?? 0),
+    uptimeSec: uptimeNow, // the read the proc loop already did, not a second one
     cpu: { usage, perCore, load, procs: procsNow.map.size, threads, running: procsTotal, blocked: procsBlocked },
     pressure: pressure(),
     mem: {
