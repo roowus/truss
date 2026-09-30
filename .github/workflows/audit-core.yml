@@ -29,13 +29,20 @@ on:
         type: string
         default: ""
     outputs:
-      signal: ${{ jobs.audit.outputs.signal }}
-      verdict: ${{ jobs.audit.outputs.verdict }}
-      critical: ${{ jobs.audit.outputs.critical }}
-      high: ${{ jobs.audit.outputs.high }}
-      medium: ${{ jobs.audit.outputs.medium }}
-      low: ${{ jobs.audit.outputs.low }}
-      majors: ${{ jobs.audit.outputs.majors }}
+      signal:
+        value: ${{ jobs.audit.outputs.signal }}
+      verdict:
+        value: ${{ jobs.audit.outputs.verdict }}
+      critical:
+        value: ${{ jobs.audit.outputs.critical }}
+      high:
+        value: ${{ jobs.audit.outputs.high }}
+      medium:
+        value: ${{ jobs.audit.outputs.medium }}
+      low:
+        value: ${{ jobs.audit.outputs.low }}
+      majors:
+        value: ${{ jobs.audit.outputs.majors }}
 
 jobs:
   audit:

@@ -34,11 +34,16 @@ on:
         type: string
         default: "zai"
     outputs:
-      signal: ${{ jobs.fix.outputs.signal }}
-      fixed: ${{ jobs.fix.outputs.fixed }}
-      refuted: ${{ jobs.fix.outputs.refuted }}
-      declined: ${{ jobs.fix.outputs.declined }}
-      head: ${{ jobs.fix.outputs.head }}
+      signal:
+        value: ${{ jobs.fix.outputs.signal }}
+      fixed:
+        value: ${{ jobs.fix.outputs.fixed }}
+      refuted:
+        value: ${{ jobs.fix.outputs.refuted }}
+      declined:
+        value: ${{ jobs.fix.outputs.declined }}
+      head:
+        value: ${{ jobs.fix.outputs.head }}
 
 jobs:
   fix:
