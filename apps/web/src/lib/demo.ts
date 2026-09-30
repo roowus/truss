@@ -719,6 +719,7 @@ export function createDemoBackend(): Backend {
     createHost: async (label: string) => ({ host: { id: "new-host", label, tokenPrefix: "…demo02", createdAt: Date.now(), revoked: false, note: "", online: false } as never, token: "truss_agent_demo" }),
     setSessionModel: async () => ({ mode: "stored" as const }),
     trash: async () => ({ sessions: [] }),
+    bulkDeleteSessions: async (ids) => ({ deleted: ids.length }),
     restoreSession: async () => ({ ok: true }),
     purgeSession: async () => ({ ok: true }),
     rotateHostToken: async () => ({ token: "truss_agent_demo_rotated" }),

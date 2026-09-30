@@ -104,14 +104,22 @@ export function Sidebar({ onNew }: { onNew: () => void }) {
                       <span className="truncate">{project || "unfiled"}</span>
                       {running > 0 && <span className="text-[var(--t-amber)]">{running}</span>}
                     </button>
-                    {groupMode === "project" && !!project && (
-                      <button
-                        className="opacity-0 group-hover/grp:opacity-70 hover:!opacity-100 shrink-0"
-                        title={`Archive the whole “${project}” project (${list.length} session${list.length === 1 ? "" : "s"}) — history kept`}
-                        onClick={() => void store.archiveProject(project, true)}
-                      >
-                        <Icon name="archive" size={11} />
-                      </button>
+                    {!!project && (
+                      <span className="flex items-center gap-0.5 shrink-0">
+                        {groupMode === "project" && (
+                          <button
+                            className="opacity-0 group-hover/grp:opacity-70 hover:!opacity-100"
+                            title={`Archive the whole “${project}” project (${list.length} session${list.length === 1 ? "" : "s"}) — history kept`}
+                            onClick={() => void store.archiveProject(project, true)}
+                          >
+                            <Icon name="archive" size={11} />
+                          </button>
+                        )}
+                        {/* bulk trash the group's chats (issue #4) — two-click,
+                            recoverable for 30 days; the folder itself is
+                            never touched */}
+                        <GroupTrash ids={list.map((x) => x.id)} name={project || "unfiled"} />
+                      </span>
                     )}
                   </div>
                 )}
@@ -287,5 +295,30 @@ function TrashSection() {
       </button>
       {open && trash.map((s) => <SessionRow key={s.id} s={s} now={now} trashView />)}
     </div>
+  );
+}
+
+
+/* two-click bulk trash for a sidebar group (issue #4) */
+function GroupTrash({ ids, name }: { ids: string[]; name: string }) {
+  const [confirm, setConfirm] = useState(false);
+  useEffect(() => {
+    if (!confirm) return;
+    const t = window.setTimeout(() => setConfirm(false), 3000);
+    return () => window.clearTimeout(t);
+  }, [confirm]);
+  if (ids.length === 0) return null;
+  return (
+    <button
+      className={cn("opacity-0 group-hover/grp:opacity-70 hover:!opacity-100", confirm && "!opacity-100 text-[var(--t-red)]")}
+      title={confirm ? `Click again: move all ${ids.length} chats under “${name}” to trash` : `Move all chats under “${name}” to trash (recoverable 30 days; the folder is never touched)`}
+      onClick={() => {
+        if (!confirm) return setConfirm(true);
+        setConfirm(false);
+        void store.bulkDeleteSessions(ids);
+      }}
+    >
+      <Icon name="trash" size={11} />
+    </button>
   );
 }

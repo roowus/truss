@@ -22,6 +22,7 @@ import {
   sendPrompt,
   switchModel,
   setBroadcaster,
+  deleteSessions,
   purgeSession,
   restoreSession,
   type EventFrame,
@@ -440,6 +441,12 @@ app.post("/api/sessions/:id/purge", async (req, reply) => {
   } catch (err) {
     return reply.code(404).send({ error: String(err instanceof Error ? err.message : err) });
   }
+});
+
+app.post("/api/sessions/bulk-delete", async (req, reply) => {
+  const { ids } = (req.body ?? {}) as { ids?: string[] };
+  if (!Array.isArray(ids)) return reply.code(400).send({ error: "ids[] required" });
+  return { deleted: deleteSessions(ids) };
 });
 
 app.delete("/api/sessions/:id", async (req) => {

@@ -347,6 +347,16 @@ class Store {
       this.toast("error", "Restore failed", e.message);
     }
   }
+  /** bulk trash move — the sidebar's per-group "delete all" (issue #4) */
+  async bulkDeleteSessions(ids: string[]) {
+    try {
+      const { deleted } = await this.be.bulkDeleteSessions(ids);
+      await Promise.all([this.refreshSessions(), this.refreshTrash()]);
+      this.toast("ok", `${deleted} moved to trash`, "recoverable for 30 days");
+    } catch (e: any) {
+      this.toast("error", "Bulk delete failed", e.message);
+    }
+  }
   async purgeSession(id: string) {
     try {
       await this.be.purgeSession(id);
