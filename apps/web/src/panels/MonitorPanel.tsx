@@ -206,18 +206,30 @@ function MonitorBody({ m, hist }: { m: HostMetrics; hist: { t: number; cpu: numb
         </section>
       </div>
 
-      {/* top processes */}
+      {/* top processes (top-25 like the reference monitor; narrow panes
+          shed the least-vital columns first) */}
       <section className="rounded-lg border border-[var(--t-line)] bg-[var(--t-bg0)]/60 overflow-hidden">
         <div className="font-mono text-[10px] uppercase tracking-wider text-[var(--t-dim)] px-3 pt-2.5 pb-1.5">top processes</div>
-        <div className="grid grid-cols-[64px_1fr_64px_72px_40px] gap-2 px-3 pb-1 text-[9.5px] font-mono uppercase tracking-wider text-[var(--t-dim)] border-b border-[var(--t-line)]/60">
-          <span>pid</span><span>command</span><span className="text-right">cpu %</span><span className="text-right">rss</span><span className="text-right">state</span>
+        <div className="grid grid-cols-[56px_minmax(0,1fr)_56px_56px_64px] sm:grid-cols-[56px_minmax(0,1fr)_64px_56px_56px_64px_40px] md:grid-cols-[56px_minmax(0,1fr)_72px_56px_56px_56px_64px_64px_40px] gap-2 px-3 pb-1 text-[9.5px] font-mono uppercase tracking-wider text-[var(--t-dim)] border-b border-[var(--t-line)]/60">
+          <span>pid</span><span>command</span>
+          <span className="text-right hidden md:block">user</span>
+          <span className="text-right">cpu %</span>
+          <span className="text-right hidden sm:block">mem %</span>
+          <span className="text-right hidden md:block">thr</span>
+          <span className="text-right">rss</span>
+          <span className="text-right hidden sm:block">age</span>
+          <span className="text-right">st</span>
         </div>
         {m.procs.map((p) => (
-          <div key={p.pid} className="grid grid-cols-[64px_1fr_64px_72px_40px] gap-2 px-3 py-1 border-b border-[var(--t-line)]/40 last:border-b-0 font-mono text-[11px]">
+          <div key={p.pid} className="grid grid-cols-[56px_minmax(0,1fr)_56px_56px_64px] sm:grid-cols-[56px_minmax(0,1fr)_64px_56px_56px_64px_40px] md:grid-cols-[56px_minmax(0,1fr)_72px_56px_56px_56px_64px_64px_40px] gap-2 px-3 py-1 border-b border-[var(--t-line)]/40 last:border-b-0 font-mono text-[11px]">
             <span className="text-[var(--t-dim)] tabular-nums">{p.pid}</span>
             <span className="truncate text-[var(--t-fg2)]" title={p.cmd}>{p.cmd}</span>
+            <span className="text-right text-[var(--t-dim)] truncate hidden md:block">{p.user}</span>
             <span className="text-right tabular-nums" style={{ color: GAUGE_C(p.cpu) }}>{p.cpu}</span>
+            <span className="text-right text-[var(--t-mute)] tabular-nums hidden sm:block">{p.memPct}</span>
+            <span className="text-right text-[var(--t-mute)] tabular-nums hidden md:block">{p.threads}</span>
             <span className="text-right text-[var(--t-mute)] tabular-nums">{p.rssMb} MB</span>
+            <span className="text-right text-[var(--t-dim)] tabular-nums hidden sm:block">{fmtUptime(p.ageSec)}</span>
             <span className="text-right text-[var(--t-dim)]">{p.state}</span>
           </div>
         ))}

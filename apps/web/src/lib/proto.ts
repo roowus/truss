@@ -144,7 +144,7 @@ export interface HostMetrics {
   disks: { device: string; mount: string; fs: string; total: number; used: number; pct: number }[];
   net: { iface: string; rxBps: number; txBps: number }[];
   temps: { label: string; c: number }[];
-  procs: { pid: number; cmd: string; cpu: number; rssMb: number; state: string }[];
+  procs: { pid: number; cmd: string; cpu: number; rssMb: number; state: string; user: string; memPct: number; threads: number; ageSec: number }[];
 }
 export interface HistPoint { t: number; cpu: number; mem: number; rx: number; tx: number }
 export interface MonitorEntry { hostname: string; metrics: HostMetrics; history: HistPoint[] }

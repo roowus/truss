@@ -118,10 +118,13 @@ test("rates: a second sample ~150ms later yields in-range rates", async () => {
   }
 });
 
-test("procs: top-10, sorted by cpu desc, entries well-formed", async () => {
+test("procs: top-25, sorted by cpu desc, entries well-formed", async () => {
+  /* AMENDED by https://github.com/roowus/truss/issues/10: the cap was 10;
+     the reference monitor (monitor.rewis) shows top-25 + "all", so the
+     collector's cap rose to 25 */
   const m = await collectMetrics();
   assert.ok(m.procs.length >= 1);
-  assert.ok(m.procs.length <= 10);
+  assert.ok(m.procs.length <= 25);
   for (let i = 1; i < m.procs.length; i++) {
     assert.ok(
       m.procs[i - 1].cpu >= m.procs[i].cpu,
