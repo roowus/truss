@@ -177,7 +177,7 @@ export const piAdapter: HarnessAdapter = {
     const canResumeInPlace = !!opts.resumeRef && !cwdFellBack;
     const args = ["--mode", "rpc", "--session-dir", sessionDir, "--provider", provider, "--model", model];
     if (canResumeInPlace && opts.resumeRef) args.push("--session", opts.resumeRef);
-    const proc = spawn("pi", args, {
+    const proc = spawn(process.env.TRUSS_PI_BIN ?? "pi", args, {
       cwd: safeCwd,
       stdio: ["pipe", "pipe", "inherit"], // stderr is diagnostics, never protocol
       env: { ...process.env },
@@ -215,6 +215,23 @@ export const piAdapter: HarnessAdapter = {
     });
     proc.on("exit", (code) => {
       if (!h.disposed) {
+        /* settle the open turn BEFORE the error state (issue #29): an
+           unsettled bubble streams forever (the frozen chat) and the
+           in-flight trajectory row never closes */
+        if (h.currentMessageId) {
+          emit({ type: "msg.done", sessionId: sid, messageId: h.currentMessageId, stopReason: `error: pi exited (${code}) mid-turn` });
+          h.currentMessageId = null;
+        }
+        if (h.currentCallId) {
+          emit({
+            type: "llm.call.done",
+            sessionId: sid,
+            callId: h.currentCallId,
+            status: 500,
+            latencyMs: Date.now() - h.currentCallStartedAt,
+          });
+          h.currentCallId = null;
+        }
         emit({ type: "session.state", sessionId: sid, state: "error", detail: `pi exited (${code})` });
       }
       h.queue.close();

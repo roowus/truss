@@ -66,7 +66,7 @@ export function startFeedAutopost() {
             type: "work_done",
             sessionId: sid,
             title: `${s?.title ?? sid} finished`,
-            body: `Turn settled after ${Math.round(ms / 1000)}s.`,
+            body: finalTextExcerpt(sid) ?? `Turn settled after ${Math.round(ms / 1000)}s.`,
             importance: "low",
           });
         }
@@ -111,4 +111,32 @@ export function startFeedAutopost() {
       return;
     }
   });
+}
+
+/** the turn's final assistant text, bounded — the work_done card used to say
+   only "Turn settled after Ns" while the actual report sat in chat (issue
+   #29: pi has no MCP, so this excerpt IS the report reaching the inbox) */
+function finalTextExcerpt(sessionId: string, maxChars = 600): string | null {
+  const evs = store.listEvents(sessionId).map((f) => f.ev);
+  /* final completed assistant message: its text-channel chunks joined */
+  let textId: string | null = null;
+  for (let i = evs.length - 1; i >= 0; i--) {
+    const e = evs[i];
+    if (e.type === "msg.done" && !e.stopReason) {
+      // find its role via the matching start
+      const start = [...evs].reverse().find((x) => x.type === "msg.start" && (x as { messageId?: string }).messageId === (e as { messageId?: string }).messageId);
+      if ((start as { role?: string } | undefined)?.role === "assistant") {
+        textId = (e as { messageId?: string }).messageId ?? null;
+        break;
+      }
+    }
+  }
+  if (!textId) return null;
+  const text = evs
+    .filter((e) => e.type === "msg.chunk" && (e as { messageId?: string }).messageId === textId && ((e as { channel?: string }).channel ?? "text") === "text")
+    .map((e) => String((e as { text?: string }).text ?? ""))
+    .join("")
+    .trim();
+  if (!text) return null;
+  return text.length > maxChars ? text.slice(0, maxChars).trimEnd() + "…" : text;
 }
