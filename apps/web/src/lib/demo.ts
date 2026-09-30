@@ -727,6 +727,8 @@ export function createDemoBackend(): Backend {
     rotateHostToken: async () => ({ token: "truss_agent_demo_rotated" }),
     revokeHost: async () => ({ ok: true }),
     deleteHost: async () => ({ ok: true }),
+    pairHost: async (_id, _t, serverUrl) => ({ code: "k3xm7q", expiresAt: Date.now() + 600_000, url: `${serverUrl}/i/k3xm7q`, command: `curl -fsSL ${serverUrl}/i/k3xm7q | sh` }),
+    taildropHost: async () => ({ ok: true, file: "truss-install-demo.sh" }),
     metrics: async () => {
       const t = Date.now();
       /* typed as the real shape: the monitor table renders this fixture with

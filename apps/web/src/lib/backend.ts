@@ -95,6 +95,10 @@ export interface Backend {
   rotateHostToken(id: string): Promise<{ token: string }>;
   revokeHost(id: string, revoked: boolean): Promise<unknown>;
   deleteHost(id: string): Promise<unknown>;
+  /** installer delivery (issue #1): short single-use pairing command, or
+     taildrop the standalone script to the picked tailnet device */
+  pairHost(id: string, token: string, serverUrl: string): Promise<{ code: string; expiresAt: number; url: string; command: string }>;
+  taildropHost(id: string, peer: string, token: string, serverUrl: string): Promise<{ ok: boolean; file: string }>;
   /** Monitor: local + remote host vitals */
   metrics(): Promise<MonitorData>;
   /** network reachability (tailscale detect, LAN addrs, serve toggle) */
@@ -225,6 +229,8 @@ export function createLiveBackend(): Backend {
     rotateHostToken: (id) => req("POST", `/api/hosts/${encodeURIComponent(id)}/token`, {}),
     revokeHost: (id, revoked) => req("POST", `/api/hosts/${encodeURIComponent(id)}/revoke`, { revoked }),
     deleteHost: (id) => req("DELETE", `/api/hosts/${encodeURIComponent(id)}`),
+    pairHost: (id, token, serverUrl) => req("POST", `/api/hosts/${encodeURIComponent(id)}/pair`, { token, serverUrl }),
+    taildropHost: (id, peer, token, serverUrl) => req("POST", `/api/hosts/${encodeURIComponent(id)}/taildrop`, { peer, token, serverUrl }),
     metrics: () => req("GET", "/api/metrics"),
     netInfo: () => req("GET", "/api/net"),
     tailscalePeers: () => req("GET", "/api/net/tailscale/peers"),
