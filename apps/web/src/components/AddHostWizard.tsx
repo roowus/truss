@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { store, useApp } from "@/lib/store";
 import { ago } from "@/lib/format";
 import { defaultTailscaleReturn, peerAlreadyAdded } from "@/lib/device";
+import { buildInstallCommand } from "@/lib/installCommand";
 import type { TailscalePeer } from "@/lib/proto";
 import { Btn, Icon, Select, Spinner } from "./ui";
 import { cn } from "@/utils/cn";
@@ -97,9 +98,9 @@ export function AddHostWizard({ onClose }: { onClose: () => void }) {
 
   const pickedPeerLabel = pickedPeer ? peers?.peers.find((p) => p.dnsName === pickedPeer)?.hostName ?? null : null;
 
-  const command = created && serverAddr
-    ? `curl -fsSL ${serverAddr}/agent/install.sh?host=${created.id} | sh -s -- ${created.token}`
-    : "";
+  /* shell-quoted (issue #22): a bare ? in the URL trips zsh's glob
+     expansion ("no matches found") — the macOS default shell */
+  const command = created && serverAddr ? buildInstallCommand(serverAddr, created.id, created.token) : "";
 
   return (
     <div className="fixed inset-0 z-[100] grid place-items-center bg-black/50" onPointerDown={(e) => e.target === e.currentTarget && onClose()}>

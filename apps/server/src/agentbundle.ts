@@ -67,7 +67,7 @@ export function installScript(hostId: string, serverUrl: string): string {
      the wizard, and lands chmod 600 in the env file */
   return `#!/bin/sh
 # Truss node-agent installer — host "${host.label.replace(/"/g, "")}" (${host.id})
-# usage: curl -fsSL ${serverUrl}/agent/install.sh?host=${host.id} | sh -s -- <token-from-the-wizard>
+# usage: curl -fsSL '${serverUrl}/agent/install.sh?host=${host.id}' | sh -s -- <token-from-the-wizard>
 set -eu
 
 TOKEN="\${1:-}"
