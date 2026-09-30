@@ -125,12 +125,23 @@ test("initialize: protocolVersion, serverInfo, capabilities, instructions (guide
   assert.equal(typeof res.instructions, "string");
   assert.ok(res.instructions.includes("file_todo"), "POSTING_GUIDE rides as MCP instructions");
 
-  /* session-scoped initialize: reads the caller's practices — none exist in
-     the fake HOME, so instructions stay the bare posting guide even scoped */
-  const scoped = await mcp("initialize", undefined, "ghost-no-such-session");
+  /* session-scoped initialize with a GHOST id now fails loudly (issue #36) —
+     a stale MCP URL must not silently serve generic instructions */
+  const ghost = await mcp("initialize", undefined, "ghost-no-such-session");
+  assert.equal(ghost.status, 404, "ghost caller: 404, not a silent bare session");
+  assert.match(ghost.body.error.message, /no such session/);
+
+  /* scoped with a REAL session: 200 + the caller's practices compose in */
+  const made = await api("/api/sessions", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ harness: "pi", cwd: "/tmp", title: "init-scope" }),
+  });
+  const scoped = await mcp("initialize", undefined, made.body.session.id);
   assert.equal(scoped.status, 200);
   assert.equal(scoped.body.result.protocolVersion, "2025-03-26");
   assert.ok(scoped.body.result.instructions.includes("Truss tools you have"));
+  await api(`/api/sessions/${made.body.session.id}?hard=1`, { method: "DELETE" });
 });
 
 test("tools/list: every documented tool is present, each with an object inputSchema", async () => {
@@ -521,23 +532,38 @@ test("error paths: isError tool results vs true JSON-RPC errors vs 202 notificat
   assert.equal(unscoped.isError, true);
   assert.ok(unscoped.text.includes("unscoped MCP connection — respawn the session"));
 
-  /* nonexistent session id: the route does NOT validate :sessionId, so
-     file_todo dies deep in the store with a raw SQLite FK violation instead
-     of a clean "no such session" (reporting as a surprise — see summary).
-     feed_items.session_id has no FK at all, so post_feed with a ghost id
-     SUCCEEDS — same route, inconsistent depth of failure. */
-  const ghostTodo = await call("file_todo", { title: "ghost todo", postToFeed: false }, "ghost-session-id");
-  assert.equal(ghostTodo.isError, true);
-  assert.match(ghostTodo.text, /FOREIGN KEY constraint failed/, ghostTodo.text);
-  const ghostFeed = await call("post_feed", { title: "ghost card" }, "ghost-session-id");
-  assert.equal(ghostFeed.isError, false, "post_feed happily files for a nonexistent session");
+  /* nonexistent session id (FIXED, issue #36): the route validates the
+     caller — a ghost gets a clean 404 + JSON-RPC error instead of a deep FK
+     crash (file_todo) or a silent ghost card in the user's inbox (post_feed) */
+  for (const tool of ["file_todo", "post_feed"] as const) {
+    const r = await mcp("tools/call", { name: tool, arguments: { title: "ghost" } }, "ghost-session-id");
+    assert.equal(r.status, 404, `${tool}: ghost caller rejected at the route`);
+    assert.match(r.body.error.message, /no such session/, `${tool}: clean error, not a sqlite crash`);
+  }
   const inbox = await api("/api/feed");
-  assert.ok(inbox.body.items.some((i: Ev) => i.id === ghostFeed.data.id && i.sessionId === "ghost-session-id"));
+  assert.ok(!inbox.body.items.some((i: Ev) => i.sessionId === "ghost-session-id"), "nothing lands under a ghost");
 
   /* GET on the endpoint exists only to say no */
   const g = await fetch(`${srv.base}/mcp/truss`);
   assert.equal(g.status, 405);
   assert.equal(g.headers.get("allow"), "POST");
+});
+
+test("ghost caller ids get a clean 404 JSON-RPC error — never an FK crash, never a ghost inbox card (issue #36)", async () => {
+  const ghost = "ghost-session";
+  for (const tool of ["file_todo", "post_feed", "list_todos"] as const) {
+    const r = await fetch(`${srv.base}/mcp/truss/${ghost}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: tool, arguments: { title: "x" } } }),
+    });
+    assert.equal(r.status, 404, `${tool}: ghost rejected at the route`);
+    const body = await r.json();
+    assert.match(body.error.message, /no such session/, `${tool}: clean error, not a sqlite crash`);
+  }
+  /* and nothing landed in the inbox under the ghost */
+  const feed = await fetch(`${srv.base}/api/feed`).then((r) => r.json());
+  assert.ok(!feed.items.some((c: { sessionId?: string }) => c.sessionId === ghost), "no ghost cards in the inbox");
 });
 
 test("session tools over MCP: list/get/rename/project/archive/harnesses/agents/costs/settings + create/prompt/close/delete", async () => {
