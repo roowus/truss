@@ -316,7 +316,11 @@ async function resumeSessionOnce(id: string, opts: { spawnTimeoutMs?: number }):
   }
 }
 
-export async function sendPrompt(sessionId: string, text: string) {
+export async function sendPrompt(
+  sessionId: string,
+  text: string,
+  attachments?: { name: string; path: string; size: number; mime?: string }[],
+) {
   let s = live.get(sessionId);
   if (!s) {
     const row = store.getSession(sessionId);
@@ -331,7 +335,8 @@ export async function sendPrompt(sessionId: string, text: string) {
   }
   // the user bubble is a local echo: instant in UI, persisted like everything else
   const messageId = `u-${Date.now()}`;
-  sink({ type: "msg.start", sessionId, messageId, role: "user", at: Date.now() });
+  const atts = attachments?.length ? attachments : undefined;
+  sink({ type: "msg.start", sessionId, messageId, role: "user", at: Date.now(), ...(atts ? { attachments: atts } : {}) });
   sink({ type: "msg.chunk", sessionId, messageId, text });
   sink({ type: "msg.done", sessionId, messageId });
   // auto-title from the first prompt
@@ -343,10 +348,15 @@ export async function sendPrompt(sessionId: string, text: string) {
   /* practices for harnesses without MCP (pi): TRUSS.md layers + the posting
      guide ride the first prompt of the session, marked and collapsible */
   let outbound = text;
+  if (atts) {
+    /* attachments ride as workspace-relative paths — text-only harnesses
+       (pi) can still open them with their read tool */
+    outbound += "\n\n[attached files]\n" + atts.map((a) => `- ${a.path} (${a.name}, ${a.size} B)`).join("\n");
+  }
   if (row && !MCP_ATTACHED.has(baseOf(row.harness)) && !firstPromptDone.has(sessionId)) {
     const { composed } = composePractices(row.cwd, row.project);
     if (composed.trim()) {
-      outbound = `[truss practices — follow these; they're the user's house rules]\n${composed}\n\n${POSTING_GUIDE_PI}\n[/truss practices]\n\n${text}`;
+      outbound = `[truss practices — follow these; they're the user's house rules]\n${composed}\n\n${POSTING_GUIDE_PI}\n[/truss practices]\n\n${outbound}`;
     }
     firstPromptDone.add(sessionId);
   }

@@ -36,6 +36,7 @@ import {
   searchFiles,
   writeFile as writeWorkspaceFile,
 } from "./files.js";
+import { saveUpload } from "./uploads.js";
 import { gitBranches, gitDiff, gitGraph, gitStatus, gitSwitch } from "./git.js";
 import { createTask, deleteTask, listTasks, runTask, updateTask, type TaskStatus } from "./tasks.js";
 import { createTodo, listTodos, resolveTodoAccess, setTodoBroadcaster, userUpdateTodo } from "./todos.js";
@@ -360,13 +361,30 @@ app.get("/api/sessions/:id/events", async (req, reply) => {
 
 app.post("/api/sessions/:id/prompt", async (req, reply) => {
   const { id } = req.params as { id: string };
-  const { text } = (req.body ?? {}) as { text?: string };
-  if (!text?.trim()) return reply.code(400).send({ error: "text is required" });
+  const { text, attachments } = (req.body ?? {}) as { text?: string; attachments?: { name: string; path: string; size: number; mime?: string }[] };
+  if (!text?.trim() && !attachments?.length) return reply.code(400).send({ error: "text is required" });
   try {
-    await sendPrompt(id, text);
+    await sendPrompt(id, text ?? "", attachments);
     return { ok: true };
   } catch (err) {
     return reply.code(409).send({ error: String(err) });
+  }
+});
+
+/* chat attachments (issue #2): land in the session workspace's
+   .truss-uploads/ so every harness can read them by path. base64 JSON —
+   multipart would buy nothing at LAN scale. 32 MB route-local cap. */
+app.post("/api/sessions/:id/upload", { bodyLimit: 34 * 1024 * 1024 }, async (req, reply) => {
+  const { id } = req.params as { id: string };
+  const row = store.getSession(id);
+  if (!row) return reply.code(404).send({ error: "no such session" });
+  const { name, dataBase64 } = (req.body ?? {}) as { name?: string; dataBase64?: string };
+  if (!name || typeof dataBase64 !== "string") return reply.code(400).send({ error: "name and dataBase64 required" });
+  try {
+    const data = Buffer.from(dataBase64, "base64");
+    return { upload: saveUpload(row.cwd, name, data) };
+  } catch (err) {
+    return reply.code(400).send({ error: String(err instanceof Error ? err.message : err) });
   }
 });
 

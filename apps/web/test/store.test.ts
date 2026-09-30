@@ -289,3 +289,19 @@ test("session.updated for an unknown session refreshes the trash list too (resto
     s.refreshSessionsSoon = origSoon;
   }
 });
+
+test("msg.start attachments ride onto the message (transcript chips survive reload); absent stays absent", () => {
+  const atts = [{ name: "error.log", path: ".truss-uploads/error.log", size: 1234, mime: "text/plain" }];
+  let v = emptyView();
+  v = reduce(v, { type: "msg.start", sessionId: "s", messageId: "m1", role: "user", at: 1000, attachments: atts } as never, T0);
+  assert.deepEqual(v.msgs["m1"].attachments, atts, "refs on the message");
+  v = reduce(v, { type: "msg.chunk", sessionId: "s", messageId: "m1", text: "see attached" } as never, T0 + 1);
+  assert.deepEqual(v.msgs["m1"].attachments, atts, "chunks keep them");
+  v = reduce(v, { type: "msg.done", sessionId: "s", messageId: "m1" } as never, T0 + 2);
+  assert.deepEqual(v.msgs["m1"].attachments, atts, "done keeps them");
+
+  // no attachments -> no field (backward-compat with old event logs)
+  let v2 = emptyView();
+  v2 = reduce(v2, { type: "msg.start", sessionId: "s", messageId: "m2", role: "user", at: 1000 } as never, T0);
+  assert.ok(!("attachments" in v2.msgs["m2"]), "no phantom field on plain messages");
+});
