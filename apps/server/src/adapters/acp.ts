@@ -13,6 +13,10 @@ import type { AdapterHandle } from "./types.js";
  * notifications are routed to session handlers by params.sessionId.
  */
 
+/** per-request budget for ACP calls (initialize, session/new, …) — generous
+   for cold python/model boots, never ten minutes (issue #12) */
+export const ACP_DEFAULT_TIMEOUT_MS = 60_000;
+
 /* ── ACP wire shapes (only what Truss consumes) ── */
 
 export interface AcpUpdate {
@@ -58,8 +62,13 @@ export class AcpClient {
   private sessionHandlers = new Map<string, SessionHandler>();
   private ready: Promise<void> | null = null;
   private exitListenersAttached = false;
+  /** in-flight request → its timeout timer (cleared on answer) */
+  private timers = new Map<string, ReturnType<typeof setTimeout>>();
 
-  constructor(private launch: AcpLaunchSpec) {}
+  constructor(
+    private launch: AcpLaunchSpec,
+    private opts: { requestTimeoutMs?: number } = {},
+  ) {}
 
   async ensure(): Promise<void> {
     if (this.ready) return this.ready;
@@ -93,6 +102,8 @@ export class AcpClient {
       proc.on("exit", () => {
         for (const p of this.pending.values()) p.rej(new Error("acp server exited"));
         this.pending.clear();
+        for (const t of this.timers.values()) clearTimeout(t);
+        this.timers.clear();
         this.proc = null;
         this.ready = null;
       });
@@ -112,11 +123,23 @@ export class AcpClient {
         process.once("exit", shutdown);
       }
 
-      const init = (await this.call("initialize", {
-        protocolVersion: 1,
-        clientCapabilities: { fs: { readTextFile: false, writeTextFile: false } },
-      })) as { protocolVersion?: number };
-      if (!init.protocolVersion) throw new Error("acp initialize failed");
+      try {
+        const init = (await this.call("initialize", {
+          protocolVersion: 1,
+          clientCapabilities: { fs: { readTextFile: false, writeTextFile: false } },
+        })) as { protocolVersion?: number };
+        if (!init.protocolVersion) throw new Error("acp initialize failed");
+      } catch (e) {
+        /* a failed boot must not orphan the half-started child — a dead
+           harness that consumed initialize and wedged would otherwise leak
+           a process per ensure() attempt (issue #12's silent multiplier) */
+        try {
+          proc.kill("SIGKILL");
+        } catch {
+          /* already gone */
+        }
+        throw e;
+      }
     })();
     this.ready.catch(() => {
       this.ready = null;
@@ -149,7 +172,30 @@ export class AcpClient {
     const id = `truss-${++this.idc}`;
     this.proc.stdin.write(JSON.stringify({ jsonrpc: "2.0", id, method, params }) + "\n");
     return new Promise((res, rej) => {
-      this.pending.set(id, { res: res as (v: unknown) => void, rej });
+      /* a wedged harness (issue #12: hermes session/new stalled 10m03s) must
+         fail fast and loud instead of pending forever */
+      const budget = this.opts.requestTimeoutMs ?? ACP_DEFAULT_TIMEOUT_MS;
+      const timer = setTimeout(() => {
+        if (this.pending.delete(id)) {
+          this.timers.delete(id);
+          rej(new Error(`acp ${method} timed out after ${Math.round(budget / 1000)}s`));
+        }
+      }, budget);
+      /* timeouts are failure signaling, not a reason to hold the loop open */
+      timer.unref?.();
+      this.timers.set(id, timer);
+      this.pending.set(id, {
+        res: (v: unknown) => {
+          clearTimeout(this.timers.get(id));
+          this.timers.delete(id);
+          res(v);
+        },
+        rej: (e: Error) => {
+          clearTimeout(this.timers.get(id));
+          this.timers.delete(id);
+          rej(e);
+        },
+      });
     });
   }
 

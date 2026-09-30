@@ -104,14 +104,22 @@ function settleOrphanedPerms(sessionId: string) {
   }
 }
 
-export async function createSession(input: {
-  harness: HarnessId;
-  cwd: string;
-  model?: string;
-  provider?: string;
-  title?: string;
-  project?: string;
-}) {
+/** the spawn budget — a wedged harness (issue #12: hermes stalled 10m03s
+   attaching MCP) must fail fast and flip the row to error, never an eternal
+   "Booting…" spinner */
+export const SPAWN_TIMEOUT_MS = 90_000;
+
+export async function createSession(
+  input: {
+    harness: HarnessId;
+    cwd: string;
+    model?: string;
+    provider?: string;
+    title?: string;
+    project?: string;
+  },
+  opts: { spawnTimeoutMs?: number } = {},
+) {
   const adapter = adapters.get(input.harness);
   if (!adapter) throw new Error(`unknown harness: ${input.harness}`);
 
@@ -138,12 +146,36 @@ export async function createSession(input: {
     at: Date.now(),
   });
 
-  const handle = await adapter.spawn({
-    sessionId: id,
-    cwd: input.cwd,
-    model: input.model,
-    provider: input.provider,
-  });
+  const budget = opts.spawnTimeoutMs ?? SPAWN_TIMEOUT_MS;
+  let spawnRej: (e: Error) => void = () => {};
+  const budgetPromise = new Promise<never>((_, rej) => (spawnRej = rej));
+  let budgetTimer: ReturnType<typeof setTimeout> | null = setTimeout(() => {
+    budgetTimer = null;
+    spawnRej(new Error(`${input.harness} didn't answer spawn within ${Math.round(budget / 1000)}s — the harness may be wedged`));
+  }, budget);
+  budgetTimer.unref?.();
+
+  let handle: AdapterHandle;
+  try {
+    handle = await Promise.race([
+      adapter.spawn({
+        sessionId: id,
+        cwd: input.cwd,
+        model: input.model,
+        provider: input.provider,
+      }),
+      budgetPromise,
+    ]);
+  } catch (err) {
+    /* timeout OR plain rejection: mark the row error so the UI tells the
+       truth instead of spinning "spawning" forever */
+    const detail = err instanceof Error ? err.message : String(err);
+    store.setSessionState(id, "error");
+    sink({ type: "session.state", sessionId: id, state: "error", detail });
+    throw err;
+  } finally {
+    if (budgetTimer) clearTimeout(budgetTimer);
+  }
   goLive(id, adapter, handle);
   /* harness refs persist lazily from the event pump (goLive) */
   return store.getSession(id)!;
