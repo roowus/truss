@@ -4,6 +4,7 @@ on:
   push:
     branches: [main, beta]
   pull_request:
+  workflow_dispatch: # the audit-fix loop dispatches this on a PR head it pushed (bot pushes do not fire pull_request events)
 
 jobs:
   verify:

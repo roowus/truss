@@ -193,9 +193,11 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       issues: write
+      actions: write
     env:
       GH_TOKEN: ${{ github.token }}
       PR_NUMBER: ${{ github.event.issue.number }}
+      HEAD_REF: ${{ needs.check.outputs.head_ref }}
       CID: ${{ needs.check.outputs.comment_id }}
       A1_VERDICT: ${{ needs.audit-r1.outputs.verdict }}
       A1_SIG: ${{ needs.audit-r1.outputs.signal }}
@@ -268,7 +270,16 @@ jobs:
               echo "**Converged at the first audit** — no critical/important findings. Minor findings, if any, are listed in the audit above."
             fi
             echo
-            echo "Merging stays a human decision; \`ci\` runs on the pushed head as usual."
+            if [ "$F1_SIG" = "continue" ] || [ "$F2_SIG" = "continue" ] || [ "$F3_SIG" = "continue" ]; then
+              # Bot pushes do not fire pull_request events, so dispatch ci on
+              # the head the loop pushed.
+              gh workflow run ci.yml --repo "${{ github.repository }}" --ref "$HEAD_REF" \
+                && echo "Fixes were pushed; \`ci\` was dispatched on the head branch."
+            else
+              echo "No commits were pushed; nothing new for \`ci\` to run."
+            fi
+            echo
+            echo "Merging stays a human decision."
             echo
             echo "_Posted by \`${{ github.workflow }}\` · [run logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})_"
           } > "$RUNNER_TEMP/summary.md"
