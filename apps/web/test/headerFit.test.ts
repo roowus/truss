@@ -167,3 +167,27 @@ test("collapse order is stable across the shrink sweep (no oscillation)", async 
     prevOverflow = p.overflow;
   }
 });
+
+/* WIRING PINS — the planner is only as true as the geometry its one caller
+   feeds it. ChatPanel builds its items from HEADER_CLUSTER (src/lib/headerFit)
+   rather than re-declaring widths by hand; these tests keep that shared copy
+   and this spec cluster from drifting apart, and pin the trigger accounting
+   the caller relies on. */
+
+test("the wiring's exported geometry still matches the spec cluster", async () => {
+  const { HEADER_CLUSTER, HEADER_GAP } = await import("../src/lib/headerFit");
+  assert.deepEqual(HEADER_CLUSTER, CLUSTER, "ChatPanel's cluster drifted from the spec cluster — move both together");
+  assert.equal(HEADER_GAP, GAP, "ChatPanel's gap drifted from the spec gap");
+});
+
+test("the ⋯ trigger is priced once: widths that truly fit keep the model Select up", async () => {
+  const plan = await loadPlanner();
+  assert.ok(plan, "planHeaderFit must exist (see module test)");
+  /* ChatPanel renders the ⋯ trigger on every plan and reserves triggerWidth 0
+     for it. Reserving it twice (the essential `more` item AND the trigger)
+     left the footprint unchanged when trajectory collapsed, so widths in
+     ~[274, 301] pushed the model Select into the menu although it fit. */
+  const p = plan(CLUSTER, 290, { triggerWidth: 0, gap: GAP });
+  assert.deepEqual(p.overflow, ["trajectory"], "only trajectory gives way at 290px");
+  assert.deepEqual(p.visible, ["select", "stop", "more"], "the model Select stays up while 290px fits it");
+});
