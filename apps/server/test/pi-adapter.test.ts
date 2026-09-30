@@ -634,3 +634,31 @@ test("setModel: live switch sends set_model, later turns use the new model, unkn
     }
   });
 });
+
+test("a fast double-send in the agent_start gap never writes two bare prompts (issue #40)", { timeout: 20000 }, async () => {
+  await withFakePi("race", async (fake) => {
+    const handle = await piAdapter.spawn({ sessionId: "t-race", cwd: tmpdir(), provider: "truss-fw", model: "m" });
+    const { events, finished } = collect(handle);
+    try {
+      /* both sends in the same tick — before agent_start can flip busy.
+         Pre-fix the second went out as a bare prompt and pi rejected it. */
+      piAdapter.send(handle, "first");
+      piAdapter.send(handle, "second");
+
+      await waitFor(
+        () => assistantStarts(events).length === 2 && statesOf(events).at(-1) === "idle",
+        "both messages run to completion",
+        12000,
+      );
+      const cmds = logCmds(fake.logPath);
+      const prompts = cmds.filter((c) => c.type === "prompt");
+      const followUps = cmds.filter((c) => c.type === "follow_up");
+      assert.equal(prompts.length, 1, "exactly one bare prompt — the gap is closed");
+      assert.equal(prompts[0].message, "first");
+      assert.deepEqual(followUps.map((c) => c.message), ["second"], "the second queues instead of being rejected");
+    } finally {
+      piAdapter.dispose(handle);
+      await finished;
+    }
+  });
+});

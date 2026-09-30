@@ -319,6 +319,10 @@ export const piAdapter: HarnessAdapter = {
     const cmd = h.busy
       ? { type: "follow_up", message: text }
       : { type: "prompt", message: text };
+    /* mark busy optimistically the moment a prompt leaves (issue #40): a run
+       is starting NOW — the next send must follow_up even if agent_start
+       hasn't arrived yet, otherwise pi rejects it as 'agent is streaming' */
+    if (cmd.type === "prompt") h.busy = true;
     h.proc.stdin!.write(JSON.stringify(cmd) + "\n");
   },
 
@@ -390,6 +394,7 @@ function handleRecord(h: PiHandle, rec: PiRecord, emit: (ev: ProtoEvent) => void
           text: `prompt rejected: ${rec.error ?? "unknown error"}`,
         });
         emit({ type: "msg.done", sessionId: sid, messageId: id, stopReason: "error" });
+        h.busy = false; /* the rejected prompt never started a run — unblock the next send */
       }
       return;
     }
