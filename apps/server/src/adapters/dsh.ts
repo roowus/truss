@@ -64,7 +64,7 @@ function loadDshEnv(): Record<string, string> {
 /** the shared dsh ACP client — exported so tests can pin how this adapter
     calls it (the turn call's budget wiring) */
 export const client = new AcpClient({
-  command: "dsh",
+  command: process.env.TRUSS_DSH_BIN ?? "dsh",
   args: ["--profile", "acp", "--patch", PATCH],
   /* DSH_HOME pins the session store — without it a systemd-launched server
      lands dsh-acp on ~/.dsh while the real sessions live in /opt/dsh, and
@@ -146,13 +146,15 @@ export const dshAdapter: HarnessAdapter = {
     let res: { sessionId: string; configOptions?: AcpConfigOption[] };
     if (opts.resumeRef) {
       /* resume the persisted dsh session — cwd is required and must match
-         the persisted session's workspace ("session/resume cwd mismatch") */
-      res = { sessionId: opts.resumeRef };
-      await client.call("session/resume", {
+         the persisted session's workspace ("session/resume cwd mismatch").
+         READ the response (same issue #14 shape as hermes): it carries the
+         config catalog and the harness may rehome the session id */
+      const r = (await client.call("session/resume", {
         sessionId: opts.resumeRef,
         cwd: opts.cwd,
         mcpServers: [],
-      });
+      })) as { sessionId?: string; configOptions?: AcpConfigOption[] } | null;
+      res = { sessionId: r?.sessionId ?? opts.resumeRef, configOptions: r?.configOptions };
     } else {
       res = (await client.call("session/new", { cwd: resolveCwd(opts.cwd).cwd, mcpServers: trussMcp(opts.sessionId) })) as {
         sessionId: string;
