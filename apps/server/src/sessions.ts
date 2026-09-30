@@ -6,7 +6,7 @@ import { piAdapter } from "./adapters/pi.js";
 import { dshAdapter } from "./adapters/dsh.js";
 import { claudeAdapter } from "./adapters/claude.js";
 import { hermesAdapter } from "./adapters/hermes.js";
-import type { AdapterHandle, HarnessAdapter } from "./adapters/types.js";
+import type { AdapterHandle, HarnessAdapter, SessionOpts } from "./adapters/types.js";
 
 const adapters = new Map<HarnessId, HarnessAdapter>([
   [piAdapter.id, piAdapter],
@@ -109,6 +109,48 @@ function settleOrphanedPerms(sessionId: string) {
    "Booting…" spinner */
 export const SPAWN_TIMEOUT_MS = 90_000;
 
+/**
+ * Bound an adapter.spawn with the spawn budget. Every spawn goes through here
+ * — create, resume, and model-switch respawn alike: a wedged harness must fail
+ * fast at each of them. A spawn that outlives the budget can still land a live
+ * child, so the abandoned handle is disposed when it eventually settles; a
+ * spawn left dangling with no owner and no event pump leaks the harness
+ * process, one per retry.
+ */
+async function boundedSpawn(
+  adapter: HarnessAdapter,
+  opts: SessionOpts,
+  budget: number = SPAWN_TIMEOUT_MS,
+): Promise<AdapterHandle> {
+  let spawnRej: (e: Error) => void = () => {};
+  const budgetPromise = new Promise<never>((_, rej) => (spawnRej = rej));
+  const budgetTimer: ReturnType<typeof setTimeout> = setTimeout(() => {
+    spawnRej(new Error(`${adapter.id} didn't answer spawn within ${Math.round(budget / 1000)}s — the harness may be wedged`));
+  }, budget);
+  budgetTimer.unref?.();
+
+  const spawning = adapter.spawn(opts);
+  try {
+    return await Promise.race([spawning, budgetPromise]);
+  } catch (err) {
+    void spawning.then(
+      (h) => {
+        try {
+          adapter.dispose(h);
+        } catch {
+          /* already gone */
+        }
+      },
+      () => {
+        /* the spawn failed on its own — nothing to clean up */
+      },
+    );
+    throw err;
+  } finally {
+    clearTimeout(budgetTimer);
+  }
+}
+
 export async function createSession(
   input: {
     harness: HarnessId;
@@ -146,35 +188,25 @@ export async function createSession(
     at: Date.now(),
   });
 
-  const budget = opts.spawnTimeoutMs ?? SPAWN_TIMEOUT_MS;
-  let spawnRej: (e: Error) => void = () => {};
-  const budgetPromise = new Promise<never>((_, rej) => (spawnRej = rej));
-  let budgetTimer: ReturnType<typeof setTimeout> | null = setTimeout(() => {
-    budgetTimer = null;
-    spawnRej(new Error(`${input.harness} didn't answer spawn within ${Math.round(budget / 1000)}s — the harness may be wedged`));
-  }, budget);
-  budgetTimer.unref?.();
-
   let handle: AdapterHandle;
   try {
-    handle = await Promise.race([
-      adapter.spawn({
+    handle = await boundedSpawn(
+      adapter,
+      {
         sessionId: id,
         cwd: input.cwd,
         model: input.model,
         provider: input.provider,
-      }),
-      budgetPromise,
-    ]);
+      },
+      opts.spawnTimeoutMs ?? SPAWN_TIMEOUT_MS,
+    );
   } catch (err) {
     /* timeout OR plain rejection: mark the row error so the UI tells the
-       truth instead of spinning "spawning" forever */
+       truth instead of spinning "spawning" forever — the event is the write,
+       the sink persists session.state rows itself */
     const detail = err instanceof Error ? err.message : String(err);
-    store.setSessionState(id, "error");
     sink({ type: "session.state", sessionId: id, state: "error", detail });
     throw err;
-  } finally {
-    if (budgetTimer) clearTimeout(budgetTimer);
   }
   goLive(id, adapter, handle);
   /* harness refs persist lazily from the event pump (goLive) */
@@ -202,19 +234,23 @@ function goLive(id: string, adapter: HarnessAdapter, handle: AdapterHandle) {
  * (pi session file / ACP resume / claude --resume). Returns false if the
  * harness can't resume — the caller surfaces the error.
  */
-export async function resumeSession(id: string): Promise<boolean> {
+export async function resumeSession(id: string, opts: { spawnTimeoutMs?: number } = {}): Promise<boolean> {
   const row = store.getSession(id);
   if (!row?.harness_ref) return false;
   const adapter = adapters.get(row.harness);
   if (!adapter) return false;
   try {
-    const handle = await adapter.spawn({
-      sessionId: id,
-      cwd: row.cwd,
-      model: row.model ?? undefined,
-      provider: row.provider ?? undefined,
-      resumeRef: row.harness_ref,
-    });
+    const handle = await boundedSpawn(
+      adapter,
+      {
+        sessionId: id,
+        cwd: row.cwd,
+        model: row.model ?? undefined,
+        provider: row.provider ?? undefined,
+        resumeRef: row.harness_ref,
+      },
+      opts.spawnTimeoutMs ?? SPAWN_TIMEOUT_MS,
+    );
     goLive(id, adapter, handle);
     if (handle.harnessRef && handle.harnessRef !== row.harness_ref) {
       store.setHarnessRef(id, handle.harnessRef);
@@ -290,6 +326,7 @@ export async function switchModel(
   sessionId: string,
   model: string,
   provider?: string,
+  opts: { spawnTimeoutMs?: number } = {},
 ): Promise<{ mode: "live" | "restart" | "stored" }> {
   const row = store.getSession(sessionId);
   if (!row) throw new Error(`no such session: ${sessionId}`);
@@ -309,13 +346,17 @@ export async function switchModel(
          hasn't persisted anything yet, so a fresh spawn loses nothing */
       s.adapter.dispose(s.handle);
       live.delete(sessionId);
-      const handle = await s.adapter.spawn({
-        sessionId,
-        cwd: row.cwd,
-        model,
-        provider,
-        resumeRef: row.harness_ref ?? undefined,
-      });
+      const handle = await boundedSpawn(
+        s.adapter,
+        {
+          sessionId,
+          cwd: row.cwd,
+          model,
+          provider,
+          resumeRef: row.harness_ref ?? undefined,
+        },
+        opts.spawnTimeoutMs ?? SPAWN_TIMEOUT_MS,
+      );
       goLive(sessionId, s.adapter, handle);
       if (handle.harnessRef && handle.harnessRef !== row.harness_ref) {
         store.setHarnessRef(sessionId, handle.harnessRef);
