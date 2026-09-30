@@ -345,6 +345,14 @@ class DesktopManager {
     this.queueSave();
   }
 
+  /** which workspace currently owns a panel (drag payloads need the source) */
+  spaceOfPanel(panelId: string): string | undefined {
+    for (const [id, api] of this.apis) {
+      if (api.getPanel(panelId)) return id;
+    }
+    return undefined;
+  }
+
   transferPanel(from: string, panelId: string, to: string, move = false, groupId?: string, switchAfter = true) {
     if (from === to) return;
     const source = this.apis.get(from)?.getPanel(panelId);

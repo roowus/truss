@@ -5,6 +5,7 @@ import { openPanel } from "@/lib/workspace";
 import { Icon, IconBtn } from "./ui";
 import { TabPicker } from "./TabPicker";
 import { cn } from "@/utils/cn";
+import { TAB_DRAG_MIME, isTabDrag, resolveTabDrop } from "@/lib/tabDnd";
 
 export function DesktopStrip() {
   const spaces = useDesktops((s) => s.spaces);
@@ -15,6 +16,7 @@ export function DesktopStrip() {
   const [editValue, setEditValue] = useState("");
   const [menu, setMenu] = useState<string | null>(null);
   const [deleteConfirm, setDeleteConfirm] = useState(false);
+  const [dragOver, setDragOver] = useState<string | null>(null);
   const addTabRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLButtonElement | null>(null);
   const editRef = useRef<HTMLInputElement>(null);
@@ -48,7 +50,23 @@ export function DesktopStrip() {
       </div>
       <div role="tablist" aria-label="Workspaces" className="flex items-center gap-0.5 min-w-0 overflow-x-auto t-scroll-x h-full">
         {spaces.filter((sp) => !sp.archived).map((space, index) => (
-          <div key={space.id} className={cn("group relative shrink-0 flex items-center h-[30px] rounded-md", space.id === activeId ? "bg-[var(--t-bg2)]" : "hover:bg-white/[0.03]")}>
+          <div
+            key={space.id}
+            className={cn("group relative shrink-0 flex items-center h-[30px] rounded-md", space.id === activeId ? "bg-[var(--t-bg2)]" : "hover:bg-white/[0.03]", dragOver === space.id && "ring-1 ring-[var(--t-amber)] bg-[var(--t-amber)]/10")}
+            onDragOver={(e) => {
+              if (isTabDrag(e.dataTransfer.types)) {
+                e.preventDefault();
+                e.dataTransfer.dropEffect = "move";
+                setDragOver(space.id);
+              }
+            }}
+            onDragLeave={() => setDragOver((d) => (d === space.id ? null : d))}
+            onDrop={(e) => {
+              setDragOver(null);
+              const decision = resolveTabDrop(e.dataTransfer.getData(TAB_DRAG_MIME), space.id, spaces);
+              if (decision?.kind === "move") desktops.transferPanel(decision.from, decision.panelId, decision.to, true);
+            }}
+          >
             {space.id === activeId && <span className="absolute left-2 right-2 -bottom-[5px] h-[2px] bg-[var(--t-amber)] rounded-full" />}
             {editing === space.id ? (
               <input
