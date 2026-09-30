@@ -1,6 +1,10 @@
 # PR audit automations
 
-Two comment-triggered workflows, defined in `.github/workflows/`.
+Comment-triggered workflows in `.github/workflows/`. The audit and the fixer
+are each defined exactly once, as reusable workflows (`audit-core.yml`,
+`fix-core.yml`). The two comment triggers (`pr-audit.yml`,
+`pr-audit-loop.yml`) are thin callers that invoke them as jobs — the loop
+never posts fake trigger comments; it calls the audit directly per round.
 
 ## Setup (once)
 
