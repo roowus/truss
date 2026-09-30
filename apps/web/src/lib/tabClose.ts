@@ -12,10 +12,11 @@
  *   (there used to be a left over-the-icon position, which is what made the
  *   X feel like it teleported between tabs)
  *
- * visibility:
- *   - roomy:        always visible, on every tab
- *   - cramped:      always visible on the ACTIVE tab, hover-reveal on others
- *   - ultra (sliver): the active tab keeps its X; inactive tabs get none
+ * visibility (issue #8):
+ *   - roomy:        always visible, on every tab (it sits BESIDE the title)
+ *   - cramped:      hover-reveal on every tab — a pinned X sat on top of the
+ *                   narrow active tab's truncated title
+ *   - ultra sliver: hover-reveal on the ACTIVE tab; inactive tabs get none
  *     (clicking a sliver must never risk closing it — Chrome's rule)
  */
 export function tabCloseBehavior(opts: { cramped: boolean; ultra: boolean; active: boolean }): {
@@ -24,8 +25,8 @@ export function tabCloseBehavior(opts: { cramped: boolean; ultra: boolean; activ
 } {
   const { cramped, ultra, active } = opts;
   if (!cramped) return { placement: "inline", visible: "always" };
-  if (ultra) return active ? { placement: "overlay-center", visible: "always" } : { placement: "overlay-center", visible: "never" };
-  return { placement: "overlay-right", visible: active ? "always" : "hover" };
+  if (ultra) return { placement: "overlay-center", visible: active ? "hover" : "never" };
+  return { placement: "overlay-right", visible: "hover" };
 }
 
 /**
