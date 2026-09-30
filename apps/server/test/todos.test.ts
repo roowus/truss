@@ -312,3 +312,26 @@ test("agentUpdateTodo: unowned todos are world-editable; deleting the owner unow
     cleanup();
   }
 });
+
+test("answering an access request SETTLES its feed card (issue #35) — answered asks never linger unread", async () => {
+  const { db, cleanup } = await freshServer("td-settle");
+  const todos = await import("../src/todos.js");
+  const feed = await import("../src/feed.js");
+  try {
+    db.store.createSession({ id: "td-s-owner", harness: "pi", title: "owner", cwd: "/tmp" });
+    db.store.createSession({ id: "td-s-req", harness: "pi", title: "requester", cwd: "/tmp" });
+    const t = todos.createTodo({ title: "guarded", createdBy: "agent", sessionId: "td-s-owner", postToFeed: false });
+
+    const r = todos.agentUpdateTodo("td-s-req", t.id, { title: "hacked" });
+    assert.deepEqual(r, { ok: false, reason: "approval_requested" });
+    const card = feed.listFeed({}).find((c: { dedupeKey?: string }) => c.dedupeKey === `todo-access:${t.id}:td-s-req`);
+    assert.ok(card, "the ask is in the inbox");
+    assert.equal(card!.state, "unread");
+
+    todos.resolveTodoAccess(t.id, "td-s-req", true);
+    const settled = feed.getFeedItem(card!.id);
+    assert.equal(settled?.state, "done", "the card settles when answered");
+  } finally {
+    cleanup();
+  }
+});
