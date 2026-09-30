@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, Fragment } from "react";
 import type { IDockviewPanelProps } from "dockview-react";
 import { store, useApp, useNow, type Call, type SessionView } from "@/lib/store";
+import { rulerTicks, timelineBars, timelineLanes, timelineScale, TIMELINE_MIN_WIDTH_PCT } from "@/lib/requestTimeline";
 import { argSummary, fmtCost, fmtMs, fmtTokens, harnessStyle } from "@/lib/format";
 import { Empty, HarnessMark, Icon, Spinner } from "@/components/ui";
 import { cn } from "@/utils/cn";
@@ -75,9 +76,23 @@ function Trajectory({ id, view }: { id: string; view: SessionView }) {
         </div>
       </div>
 
+      {/* request timeline (issue #20): shared time axis, lanes for overlaps,
+          in-flight bars grow live, click a bar to open + jump to its row */}
+      {calls.length > 0 && (
+        <RequestTimeline
+          calls={calls}
+          now={now}
+          color={h.color}
+          onJump={(callId) => {
+            setOpen((o) => ({ ...o, [callId]: true }));
+            document.querySelector(`[data-call-id="${callId}"]`)?.scrollIntoView({ block: "center", behavior: "smooth" });
+          }}
+        />
+      )}
       {calls.length === 0 ? (
         <Empty icon="wave" title="No LLM calls yet">Every model request this session makes appears here as a row — latency, tokens, cost, and the tools it triggered.</Empty>
       ) : (
+
         <div className="flex-1 min-h-0 overflow-auto t-scroll">
           <div className="min-w-[760px]">
             <div className={cn("sticky top-0 z-10 grid items-center gap-2 px-3 h-7 bg-[var(--t-bg2)] border-b border-[var(--t-line)] font-mono text-[10px] uppercase tracking-wider text-[var(--t-dim)]", COLS)}>
@@ -102,6 +117,7 @@ function Trajectory({ id, view }: { id: string; view: SessionView }) {
                       isOpen && "bg-white/[0.03]",
                     )}
                     title={c.status ? `status: ${c.status}` : "in flight"}
+                    data-call-id={c.callId}
                   >
                     <span className="text-[var(--t-dim)] tabular-nums flex items-center gap-1">
                       <Icon name="chev" size={9} className={cn("transition-transform", isOpen && "rotate-90")} />
@@ -180,6 +196,58 @@ function Stat({ label, value, tone, title }: { label: string; value: string; ton
     <div className="shrink-0 leading-tight" title={title}>
       <div className="font-mono text-[9.5px] uppercase tracking-wider text-[var(--t-dim)]">{label}</div>
       <div className={cn("font-mono text-[12px] tabular-nums", tone === "red" ? "text-[var(--t-red)]" : tone === "amber" ? "text-[var(--t-amber)]" : "text-[var(--t-fg)]")}>{value}</div>
+    </div>
+  );
+}
+
+
+/* ---------------- the request timeline (issue #20) ---------------- */
+function RequestTimeline({ calls, now, color, onJump }: { calls: Call[]; now: number; color: string; onJump: (callId: string) => void }) {
+  const scale = timelineScale(calls, now);
+  if (!scale) return null;
+  const bars = timelineBars(calls, scale, now);
+  const lanes = timelineLanes(bars);
+  const ticks = rulerTicks(scale, 7);
+  const laneH = 9;
+  const byId: Record<string, Call> = {};
+  for (const c of calls) byId[c.callId] = c;
+  return (
+    <div className="shrink-0 border-b border-[var(--t-line)] px-3 pt-1.5 pb-2">
+      {/* ruler */}
+      <div className="relative h-4 mb-1">
+        {ticks.map((tk) => (
+          <span key={tk.t} className="absolute -translate-x-1/2 font-mono text-[9px] text-[var(--t-dim)] tabular-nums" style={{ left: `${tk.pct}%` }}>
+            +{fmtMs(tk.t - scale.t0)}
+          </span>
+        ))}
+      </div>
+      <div className="relative rounded bg-[var(--t-bg0)]/70 border border-[var(--t-line)]/60" style={{ height: lanes * laneH + 6 }} role="list" aria-label="Request timeline">
+        {ticks.map((tk) => (
+          <span key={`g${tk.t}`} className="absolute top-0 bottom-0 w-px bg-[var(--t-line)]/40" style={{ left: `${tk.pct}%` }} />
+        ))}
+        {bars.map((b) => {
+          const c = byId[b.callId];
+          const err = c.status !== undefined && c.status >= 400;
+          return (
+            <button
+              key={b.callId}
+              role="listitem"
+              onClick={() => onJump(b.callId)}
+              title={`#${c.index} ${c.model} · ${c.done ? fmtMs(c.latencyMs) : "in flight"}${err ? ` · status ${c.status}` : ""}`}
+              aria-label={`Jump to call ${c.index}`}
+              className={cn("absolute rounded-[2px] hover:brightness-125 transition-all", !c.done && "t-stripes")}
+              style={{
+                left: `${b.leftPct}%`,
+                width: `${Math.max(b.widthPct, TIMELINE_MIN_WIDTH_PCT)}%`,
+                top: 3 + b.lane * laneH,
+                height: laneH - 3,
+                background: err ? "var(--t-red)" : c.done ? color : "var(--t-amber)",
+                opacity: err ? 0.9 : 0.8,
+              }}
+            />
+          );
+        })}
+      </div>
     </div>
   );
 }
