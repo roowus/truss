@@ -125,6 +125,14 @@ jobs:
           node-version: 22
           cache: pnpm
 
+      - name: Post started note
+        id: ack
+        run: |
+          gh api "repos/${{ github.repository }}/issues/$PR_NUMBER/comments" \
+            -f body="🔁 Audit-fix loop running (up to 3 rounds) — this comment will be replaced by the summary when the loop ends. Each round's audit and wrap-up post as they land. ([run logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}))" \
+            --jq .id > "$RUNNER_TEMP/ack-id"
+          echo "comment_id=$(cat "$RUNNER_TEMP/ack-id")" >> "$GITHUB_OUTPUT"
+
       # ---------------- Round 1 ----------------
 
       - name: Audit round 1 (GLM)
@@ -1216,7 +1224,13 @@ jobs:
             echo
             echo "_Posted by \`${{ github.workflow }}\` · [run logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})_"
           } > "$RUNNER_TEMP/summary.md"
-          gh pr comment "$PR_NUMBER" --repo "${{ github.repository }}" --body-file "$RUNNER_TEMP/summary.md"
+          CID="${{ steps.ack.outputs.comment_id }}"
+          if [ -n "$CID" ]; then
+            python3 -c 'import json, sys; print(json.dumps({"body": open(sys.argv[1]).read()}))' "$RUNNER_TEMP/summary.md" \
+              | gh api -X PATCH "repos/${{ github.repository }}/issues/comments/$CID" --input - > /dev/null
+          else
+            gh pr comment "$PR_NUMBER" --repo "${{ github.repository }}" --body-file "$RUNNER_TEMP/summary.md"
+          fi
         env:
           PARSE_R1_VERDICT: ${{ steps.parse-r1.outputs.verdict }}
           PARSE_R1_SIG: ${{ steps.parse-r1.outputs.signal }}

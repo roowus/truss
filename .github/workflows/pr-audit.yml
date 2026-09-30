@@ -60,6 +60,15 @@ jobs:
             --json headRefOid > "$RUNNER_TEMP/pr.json"
           echo "head_sha=$(jq -r .headRefOid "$RUNNER_TEMP/pr.json")" >> "$GITHUB_OUTPUT"
 
+      - name: Post started note
+        id: ack
+        run: |
+          SHORT="$(echo '${{ steps.pr.outputs.head_sha }}' | cut -c1-7)"
+          gh api "repos/${{ github.repository }}/issues/$PR_NUMBER/comments" \
+            -f body="🔍 Audit running on head \`$SHORT\` — this comment will be replaced by the report when it lands. ([run logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}))" \
+            --jq .id > "$RUNNER_TEMP/ack-id"
+          echo "comment_id=$(cat "$RUNNER_TEMP/ack-id")" >> "$GITHUB_OUTPUT"
+
       # Trusted base branch (default branch) at the workspace root. The agent's
       # working directory; TRUSS.md here is the trusted conventions source.
       - uses: actions/checkout@v4
@@ -295,4 +304,10 @@ jobs:
               echo "The audit run finished without writing its report (model: $MODEL_NOTE). See the [run logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})."
             } > "$RUNNER_TEMP/comment.md"
           fi
-          gh pr comment "$PR_NUMBER" --repo "${{ github.repository }}" --body-file "$RUNNER_TEMP/comment.md"
+          CID="${{ steps.ack.outputs.comment_id }}"
+          if [ -n "$CID" ]; then
+            python3 -c 'import json, sys; print(json.dumps({"body": open(sys.argv[1]).read()}))' "$RUNNER_TEMP/comment.md" \
+              | gh api -X PATCH "repos/${{ github.repository }}/issues/comments/$CID" --input - > /dev/null
+          else
+            gh pr comment "$PR_NUMBER" --repo "${{ github.repository }}" --body-file "$RUNNER_TEMP/comment.md"
+          fi
