@@ -25,7 +25,7 @@ import { bootServer, waitFor, type TestServer } from "./server-harness.js";
  *  - there is NO DELETE /api/todos/:id — "dropped" status is the soft delete
  *  - there is NO PATCH /api/hosts/:id — labels are fixed at mint time
  *  - there is NO POST /api/feed — cards arrive via MCP post_feed / autoposters
- *  - PUT /api/layout rejects garbage with 200 {ok:false}, not a 400
+ *  - FIXED (issue #39): PUT /api/layout garbage is a 400; null clears to null
  *  - POST /api/feed/:id/share mutates sharedWith BEFORE the chat prompt, so a
  *    share to a dead session 400s but still records the share
  *  - approving a todo access request does NOT settle the request's feed card
@@ -500,16 +500,15 @@ test("layout REST: null default, v2 doc round-trips byte-identical, garbage hand
   assert.equal(again.body.layout, raw, "returned byte-identical");
   assert.deepEqual(JSON.parse(again.body.layout), doc);
 
-  /* garbage is rejected WITHOUT a 400 — 200 {ok:false} (surprise, asserted as-is)
-     and the stored doc survives */
+  /* FIXED (issue #39): garbage is a 400 with an error, and the stored doc survives */
   const junk = await put("/api/layout", { layout: 42 });
-  assert.equal(junk.status, 200);
-  assert.equal(junk.body.ok, false, "SURPRISE: non-string layout is a 200, not a 400");
+  assert.equal(junk.status, 400, "non-string layout is a 400, not a 200 lie");
+  assert.match(junk.body.error, /string or null/);
   assert.equal((await api("/api/layout")).body.layout, raw, "garbage didn't clobber the doc");
 
-  /* null clears — and reads back as "" (empty string), not null */
+  /* null clears — and reads back as null (the row is deleted, not "") */
   assert.equal((await put("/api/layout", { layout: null })).body.ok, true);
-  assert.equal((await api("/api/layout")).body.layout, "", "SURPRISE: cleared layout reads as empty string");
+  assert.equal((await api("/api/layout")).body.layout, null, "cleared layout reads back null");
 
   /* leave a sane doc behind (feedSources defaults matter to the autoposters) */
   await put("/api/layout", { layout: raw });
