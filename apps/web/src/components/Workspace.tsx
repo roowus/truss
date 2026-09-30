@@ -68,7 +68,8 @@ function TrussTab({ api, params }: IDockviewPanelHeaderProps<{ sessionId?: strin
     const d = api.onDidTitleChange((e: { title: string }) => setTitle(e.title));
     return () => d.dispose();
   }, [api]);
-  /* active (focused) tab — ultra-cramped strips only keep the X here */
+  /* active (focused) tab — an ultra-cramped strip shows an X only here
+     (hover-revealed); inactive slivers get none */
   const [active, setActive] = useState(api.isActive);
   useEffect(() => {
     setActive(api.isActive);
@@ -100,8 +101,9 @@ function TrussTab({ api, params }: IDockviewPanelHeaderProps<{ sessionId?: strin
        The strip is re-resolved on every measure and the observers re-attach
        when the tab is dragged/transferred to another strip — otherwise the
        verdict goes stale (the "works for some tabs" bug).
-       Ultra (<64px) ⇒ the hover X pops over the ICON (Chrome's favicon
-       swap), leaving the rest of the tab a safe click-to-activate target. */
+       Ultra (<64px) ⇒ the hover X centers on the sliver (16px, the
+       "overlay-center" placement in tabClose.ts) — a right-edge X would
+       overhang into the left neighbor and eat its clicks. */
     let ro: ResizeObserver | null = null;
     let mo: MutationObserver | null = null;
     let observed: Element | null = null;
@@ -158,9 +160,11 @@ function TrussTab({ api, params }: IDockviewPanelHeaderProps<{ sessionId?: strin
         </span>
       )}
       {/* one rule everywhere (lib/tabClose.ts): inline right after the title
-          when roomy; right-edge overlay when squeezed; hover-reveal except
-          the active tab (always visible) — and ultra slivers only ever show
-          the X on the active tab, never on the left over the icon */}
+          and always visible when the tab has room; once the strip squeezes
+          the tab, the X sits on top of its content instead and is
+          hover-reveal on EVERY tab, active included — nothing stays pinned.
+          Inactive ultra slivers get no X at all, so a click can never close
+          one (matches the CSS note at index.css "chrome-style tab strip"). */}
       {(() => {
         const { placement, visible } = tabCloseBehavior({ cramped, ultra, active });
         if (visible === "never") return null;
