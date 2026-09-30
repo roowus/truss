@@ -442,11 +442,15 @@ app.post("/api/sessions/:id/purge", async (req, reply) => {
   }
 });
 
-app.delete("/api/sessions/:id", async (req) => {
+app.delete("/api/sessions/:id", async (req, reply) => {
   const { id } = req.params as { id: string };
   const { hard } = req.query as { hard?: string };
-  if (hard === "1") deleteSession(id);
-  else closeSession(id);
+  try {
+    if (hard === "1") deleteSession(id);
+    else closeSession(id);
+  } catch (err) {
+    return reply.code(404).send({ error: String(err instanceof Error ? err.message : err) });
+  }
   return { ok: true };
 });
 
