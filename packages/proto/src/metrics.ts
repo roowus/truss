@@ -295,7 +295,8 @@ export async function collectMetrics(): Promise<HostMetrics> {
 
   const procsNow = procSnap();
   const ticksDelta = Math.max(1, allOf(cpu.total) - (prevProcs?.totalAll ?? allOf(cpu.total)));
-  const memTotal = meminfo().MemTotal ?? 0;
+  const mem = meminfo(); // read once — the proc loop's memPct and the mem block below share it
+  const memTotal = mem.MemTotal ?? 0;
   const uptimeNow = Number(read("/proc/uptime").split(" ")[0] ?? 0);
   const hz = clockTicks();
   const top: HostMetrics["procs"] = [];
@@ -316,7 +317,6 @@ export async function collectMetrics(): Promise<HostMetrics> {
   }
   top.sort((a, b) => b.cpu - a.cpu || b.rssMb - a.rssMb);
 
-  const mem = meminfo();
   const load = read("/proc/loadavg").split(" ").slice(0, 3).map(Number) as [number, number, number];
   const stat = read("/proc/stat");
   const procsTotal = Number(stat.match(/procs_running (\d+)/)?.[1] ?? 0);
