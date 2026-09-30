@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { IDockviewPanelProps } from "dockview-react";
 import { useApp, useNow } from "@/lib/store";
+import { useDesktops } from "@/lib/desktops";
 import { ago } from "@/lib/format";
 import { Btn, Empty, Icon, Spinner } from "@/components/ui";
 import { Spark } from "./Inspectors";
@@ -28,6 +29,7 @@ function fmtUptime(sec: number): string {
 
 export function MonitorPanel(_props: IDockviewPanelProps) {
   const be = useApp((s) => s.backend);
+  const pollMs = useDesktops((d) => d.settings.monitorRefreshMs) || 3000;
   const hosts = useApp((s) => s.hosts);
   const [data, setData] = useState<MonitorData | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -45,9 +47,9 @@ export function MonitorPanel(_props: IDockviewPanelProps) {
       );
     };
     tick();
-    const t = window.setInterval(tick, 3000);
+    const t = window.setInterval(tick, pollMs);
     return () => { off = true; window.clearInterval(t); };
-  }, [be, paused]);
+  }, [be, paused, pollMs]);
 
   /* device chips: this server + registered hosts (online = live metrics) */
   const devices = useMemo(() => {

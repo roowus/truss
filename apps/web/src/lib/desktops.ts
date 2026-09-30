@@ -35,6 +35,10 @@ export interface UiSettings {
   groupMode: "project" | "folder";
   /** which system events auto-post to the feed (read server-side too) */
   feedSources: FeedSourceSettings;
+  /** monitor poll interval ms (issue #30) */
+  monitorRefreshMs?: number;
+  /** declared in the registry; the server's purge reads its own constant for now */
+  trashRetentionDays?: number;
 }
 
 interface DesktopState {
