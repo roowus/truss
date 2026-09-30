@@ -10,6 +10,9 @@ export interface SessionOpts {
   provider?: string;
   /** resume an existing harness session (the harness's own session id) */
   resumeRef?: string;
+  /** reasoning effort for thinking-capable models (issue #27) — travels with
+     model+provider through create/switch/resume; null = harness default */
+  effort?: string | null;
 }
 
 /**

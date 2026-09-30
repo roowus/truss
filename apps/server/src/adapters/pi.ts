@@ -293,6 +293,11 @@ export const piAdapter: HarnessAdapter = {
         h.pending.delete(stateReqId);
         const sessionId = (rec?.data as { sessionId?: string } | undefined)?.sessionId;
         if (sessionId) h.harnessRef = sessionId;
+        /* the session's reasoning effort, if set (issue #27) — pi levels
+           align with effort names (low/medium/high/max; "off" clears) */
+        if (opts.effort) {
+          proc.stdin!.write(JSON.stringify({ type: "set_thinking_level", level: opts.effort }) + "\n");
+        }
       })
       .catch(() => undefined);
 

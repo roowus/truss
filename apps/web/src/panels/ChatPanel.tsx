@@ -102,6 +102,7 @@ function ChatHeader({ id }: { id: string }) {
     if (!el) return;
     const items = [
       ...(hasModel ? [{ id: "model", width: 170 }] : []),
+      { id: "effort", width: 118 },
       ...(busy ? [{ id: "stop", width: 58, essential: true }] : []),
       { id: "trajectory", width: 28 },
       { id: "more", width: 28, essential: true },
@@ -137,6 +138,23 @@ function ChatHeader({ id }: { id: string }) {
       </span>
       <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-[var(--t-fg)]" title={tooltip}>{meta.title}</span>
       <div className="ml-auto flex items-center gap-1.5 shrink-0">
+        {/* reasoning effort (issue #27) — per-session, travels with the model */}
+        {plan.visible.includes("effort") && (
+          <Select
+            size="bar"
+            value={meta.effort ?? ""}
+            options={[
+              { value: "", label: "effort: default" },
+              { value: "low", label: "effort: low" },
+              { value: "medium", label: "effort: medium" },
+              { value: "high", label: "effort: high" },
+              { value: "max", label: "effort: max" },
+            ]}
+            onChange={(v) => void store.switchEffort(id, v || null).catch(() => {})}
+            ariaLabel="Reasoning effort"
+            className="!px-2 !text-[11px] font-mono text-[var(--t-mute)] w-[118px] shrink-0"
+          />
+        )}
         {hasModel && plan.visible.includes("model") && (
           <Select
             value={currentValue}
@@ -166,6 +184,24 @@ function ChatHeader({ id }: { id: string }) {
                   onChange={(v) => { onModelPick(v); }}
                   ariaLabel="Switch model"
                   className="w-full !h-7 !text-[11.5px] font-mono"
+                />
+              </div>
+            )}
+            {plan.overflow.includes("effort") && (
+              <div className="px-2 py-1.5" onClick={(e) => e.stopPropagation()}>
+                <Select
+                  size="bar"
+                  value={meta.effort ?? ""}
+                  options={[
+                    { value: "", label: "effort: default" },
+                    { value: "low", label: "effort: low" },
+                    { value: "medium", label: "effort: medium" },
+                    { value: "high", label: "effort: high" },
+                    { value: "max", label: "effort: max" },
+                  ]}
+                  onChange={(v) => void store.switchEffort(id, v || null).catch(() => {})}
+                  ariaLabel="Reasoning effort"
+                  className="w-full !text-[11.5px] font-mono"
                 />
               </div>
             )}
