@@ -1,10 +1,11 @@
-import { memo, useEffect, useLayoutEffect, useRef, useState, useMemo, type ReactNode } from "react";
+import { createContext, memo, useContext, useEffect, useLayoutEffect, useRef, useState, useMemo, type ReactNode } from "react";
 import type { IDockviewPanelProps } from "dockview-react";
 import { store, useApp, useNow, capsOf, type Msg, type ToolRun, type Perm, type SessionView } from "@/lib/store";
 import { argSummary, fmtMs, harnessStyle, shortPath, baseHarness } from "@/lib/format";
 import { deviceLabel } from "@/lib/device";
 import { buildModelOptions, modelValue, splitModelValue } from "@/lib/models";
 import { planHeaderFit } from "@/lib/headerFit";
+import { CHAT_WIDTH_DEFAULT, dragChatWidth, readChatWidthPref, resolveChatWidth, writeChatWidthPref } from "@/lib/chatWidth";
 import { openPanel, openAgentShell, renameSessionPanels } from "@/lib/workspace";
 import { Btn, Empty, HarnessMark, Icon, IconBtn, Select, Spinner, StateDot, STATE_META } from "@/components/ui";
 import { Markdown } from "./Markdown";
@@ -48,10 +49,8 @@ export function ChatPanel({ params }: IDockviewPanelProps<P>) {
           </Empty>
         </div>
       ) : (
-        <Timeline id={id} view={view} />
+        <ChatWidthProvider timeline={<Timeline id={id} view={view} />} composer={<Composer id={id} />} perms={view ? <PermDock id={id} view={view} /> : null} />
       )}
-      {view && view.hydration === "ready" && <PermDock id={id} view={view} />}
-      <Composer id={id} />
     </div>
   );
 }
@@ -227,7 +226,7 @@ function Timeline({ id, view }: { id: string; view: SessionView }) {
         {view.items.length === 0 ? (
           <EmptyChat id={id} />
         ) : (
-          <div className="max-w-[760px] mx-auto px-4 py-5 space-y-4">
+          <div className="mx-auto px-4 py-5 space-y-4" style={{ maxWidth: useContext(ChatColumnCtx) }}>
             {view.items.map((it) =>
               it.kind === "msg" ? (
                 <MessageView key={it.id} m={view.msgs[it.id]} harness={meta.harness} live={it.id === lastMsgId && meta.state === "running"} />
@@ -526,8 +525,10 @@ function Composer({ id }: { id: string }) {
     hint = <><Icon name="lock" size={12} /> {meta.harness} can't take input mid-run — draft is held, or <button className="underline" onClick={() => store.interrupt(id)}>interrupt</button>.</>;
   }
 
+  const columnW = useContext(ChatColumnCtx);
   return (
     <div className="shrink-0 p-3 pt-2">
+      <div className="mx-auto" style={{ maxWidth: columnW }}>
       {err && (
         <div className="mb-2 flex items-start gap-2 text-[12px] text-[var(--t-red)] bg-[color-mix(in_oklab,var(--t-red)_9%,transparent)] border border-[color-mix(in_oklab,var(--t-red)_25%,transparent)] rounded-md px-2.5 py-1.5">
           <Icon name="alert" size={13} className="mt-0.5" />
@@ -574,6 +575,84 @@ function Composer({ id }: { id: string }) {
           {hint}
         </div>
       )}
+      </div>
     </div>
   );
 }
+
+
+/* ---------------- draggable chat column width (issue #6) ---------------- */
+
+/* one width state shared by the timeline and the composer (same axis), with
+   hover-revealed drag handles at the panel's side edges */
+function ChatWidthProvider({ timeline, composer, perms }: { timeline: ReactNode; composer: ReactNode; perms: ReactNode }) {
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const [columnW, setColumnW] = useState(0);
+  const [pref, setPref] = useState<number | null>(() => (typeof localStorage !== "undefined" ? readChatWidthPref(localStorage) : null));
+  const dragRef = useRef<{ originX: number; base: number; side: "left" | "right" } | null>(null);
+  const [dragging, setDragging] = useState(false);
+
+  useEffect(() => {
+    const el = wrapRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => setColumnW(el.clientWidth));
+    ro.observe(el);
+    setColumnW(el.clientWidth);
+    return () => ro.disconnect();
+  }, []);
+
+  const width = pref === null ? CHAT_WIDTH_DEFAULT : resolveChatWidth(columnW, pref);
+
+  const onPointerDown = (side: "left" | "right") => (e: React.PointerEvent) => {
+    e.preventDefault();
+    dragRef.current = { originX: e.clientX, base: width, side };
+    setDragging(true);
+    const move = (ev: PointerEvent) => {
+      const d = dragRef.current;
+      if (!d) return;
+      setPref(Math.round(dragChatWidth(d.base, d.originX, ev.clientX, d.side)));
+    };
+    const up = (ev: PointerEvent) => {
+      const d = dragRef.current;
+      dragRef.current = null;
+      setDragging(false);
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      if (d) {
+        const finalW = Math.round(dragChatWidth(d.base, d.originX, ev.clientX, d.side));
+        setPref(finalW);
+        if (typeof localStorage !== "undefined") writeChatWidthPref(localStorage, finalW);
+      }
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  };
+
+  const handleCls = (side: "left" | "right") =>
+    cn(
+      "absolute top-0 bottom-0 w-2 z-20 cursor-col-resize group/edge",
+      side === "left" ? "left-0" : "right-0",
+    );
+  const gripCls = cn(
+    "absolute top-1/2 -translate-y-1/2 w-[3px] h-10 rounded-full transition-colors",
+    "bg-[var(--t-line2)] group-hover/edge:bg-[var(--t-amber)]",
+    dragging && "bg-[var(--t-amber)]",
+  );
+
+  return (
+    <div ref={wrapRef} className="relative flex-1 min-h-0 flex flex-col">
+      {/* the shared column axis — timeline content and composer align to it */}
+      <div className="flex-1 min-h-0 flex flex-col" style={{ ["--t-chatw" as never]: `${width}px` }}>
+        <ChatColumnCtx.Provider value={width}>{timeline}{perms}{composer}</ChatColumnCtx.Provider>
+      </div>
+      {/* edge drag handles */}
+      {(["left", "right"] as const).map((side) => (
+        <div key={side} className={handleCls(side)} onPointerDown={onPointerDown(side)} title="Drag to resize the chat column" aria-label={`Resize chat column (${side} edge)`} role="separator" aria-orientation="vertical">
+          <span className={cn(gripCls, side === "left" ? "left-0.5" : "right-0.5")} />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+const ChatColumnCtx = createContext<number>(CHAT_WIDTH_DEFAULT);
