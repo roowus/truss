@@ -8,6 +8,7 @@ import { planHeaderFit, HEADER_CLUSTER, HEADER_GAP } from "@/lib/headerFit";
 import { CHAT_WIDTH_DEFAULT, commitChatWidth, dragDisplayWidth, readChatWidthPref, resolveChatWidth, writeChatWidthPref } from "@/lib/chatWidth";
 import { filesFromTransfer, isFileDrag } from "@/lib/attach";
 import { formatSessionRef } from "@/lib/sessionRef";
+import { RAIL_INSET, activeRailIndex, railIndexAtOffset, railMarkTop, railNaturalHeight, turnRailItems } from "@/lib/turnRail";
 import { openPanel, openAgentShell, renameSessionPanels } from "@/lib/workspace";
 import { Btn, Empty, HarnessMark, Icon, IconBtn, Select, Spinner, StateDot, STATE_META } from "@/components/ui";
 import { Markdown } from "./Markdown";
@@ -241,26 +242,33 @@ function Timeline({ id, view }: { id: string; view: SessionView }) {
   /* the shared chat column width (issue #6) — hooks stay top-level, never
      inside the JSX ternary below */
   const columnW = useContext(ChatColumnCtx);
+  /* the turn rail (issue #7): one mark per user message at the right edge */
+  const railItems = useMemo(() => turnRailItems(view.items, view.msgs), [view.items, view.msgs]);
+  const [railActive, setRailActive] = useState(-1);
 
   return (
     <div className="relative flex-1 min-h-0">
-      <div ref={ref} onScroll={onScroll} className="absolute inset-0 overflow-y-auto t-scroll">
+      <div ref={ref} onScroll={() => { onScroll(); railSpy(ref.current, railItems, setRailActive); }} className="absolute inset-0 overflow-y-auto t-scroll">
         {view.items.length === 0 ? (
           <EmptyChat id={id} />
         ) : (
           <div className="mx-auto px-4 py-5 space-y-4" style={{ maxWidth: columnW }}>
-            {view.items.map((it) =>
-              it.kind === "msg" ? (
-                <MessageView key={it.id} m={view.msgs[it.id]} harness={meta.harness} live={it.id === lastMsgId && meta.state === "running"} />
-              ) : it.kind === "tool" ? (
-                <ToolRow key={it.id} t={view.tools[it.id]} callIndex={view.tools[it.id].callId ? view.calls[view.tools[it.id].callId!]?.index : undefined} sessionId={id} />
-              ) : (
-                <PermInline key={it.id} p={view.perms[it.id]} />
-              ),
-            )}
+            {view.items.map((it) => (
+              <div key={it.id} data-iid={it.id}>
+                {it.kind === "msg" ? (
+                  <MessageView m={view.msgs[it.id]} harness={meta.harness} live={it.id === lastMsgId && meta.state === "running"} />
+                ) : it.kind === "tool" ? (
+                  <ToolRow t={view.tools[it.id]} callIndex={view.tools[it.id].callId ? view.calls[view.tools[it.id].callId!]?.index : undefined} sessionId={id} />
+                ) : (
+                  <PermInline p={view.perms[it.id]} />
+                )}
+              </div>
+            ))}
+
           </div>
         )}
       </div>
+      <TurnRail items={railItems} active={railActive} scroller={ref} />
       {showJump && (
         <button
           onClick={() => {
@@ -676,6 +684,7 @@ function Composer({ id }: { id: string }) {
 }
 
 
+<<<<<<< HEAD
 /* ---------------- draggable chat column width (issue #6) ---------------- */
 
 /* one width state shared by the timeline and the composer (same axis), with
@@ -777,3 +786,60 @@ function ChatWidthProvider({ timeline, composer, perms }: { timeline: ReactNode;
 }
 
 const ChatColumnCtx = createContext<number>(CHAT_WIDTH_DEFAULT);
+=======
+/* ---------------- the turn rail (issue #7) ---------------- */
+
+/* scroll-spy: active mark = last user-row top at/above the read line (30%
+   down the viewport reads naturally) */
+function railSpy(scroller: HTMLDivElement | null, items: { id: string }[], set: (i: number) => void) {
+  if (!scroller) return;
+  const tops = items.map((it) => {
+    const el = scroller.querySelector(`[data-iid="${it.id}"]`);
+    return el ? (el as HTMLElement).offsetTop - scroller.clientHeight * 0.3 : 0;
+  });
+  set(activeRailIndex(tops, scroller.scrollTop));
+}
+
+function TurnRail({ items, active, scroller }: { items: { id: string; index: number; preview: string }[]; active: number; scroller: React.RefObject<HTMLDivElement | null> }) {
+  if (items.length < 2) return null; // a rail for one turn is noise
+  const jumpTo = (i: number) => {
+    const el = scroller.current?.querySelector(`[data-iid="${items[i].id}"]`);
+    el?.scrollIntoView({ block: "start", behavior: "smooth" });
+  };
+  return (
+    <div
+      className="absolute right-1 top-0 bottom-0 w-4 z-10 select-none"
+      style={{ height: "100%" }}
+      aria-label="Turn rail"
+    >
+      <div
+        className="absolute right-1 top-1/2 -translate-y-1/2 flex flex-col"
+        style={{ height: railNaturalHeight(items.length), maxHeight: "80%" }}
+        onClick={(e) => {
+          const r = (e.currentTarget as HTMLDivElement).getBoundingClientRect();
+          const i = railIndexAtOffset(e.clientY - r.top, items.length);
+          if (i >= 0) jumpTo(i);
+        }}
+      >
+        {items.map((it) => (
+          <button
+            key={it.id}
+            onClick={(e) => { e.stopPropagation(); jumpTo(it.index); }}
+            title={it.preview || "(empty prompt)"}
+            aria-label={`Jump to turn ${it.index + 1}: ${it.preview.slice(0, 40)}`}
+            className="group/rail relative block"
+            style={{ position: "absolute", top: railMarkTop(it.index) - 3, right: 0, width: 12, height: RAIL_INSET, padding: 0 }}
+          >
+            <span
+              className={cn(
+                "block w-1.5 h-1.5 rounded-full transition-colors",
+                it.index === active ? "bg-[var(--t-amber)] scale-125" : "bg-[var(--t-line2)] group-hover/rail:bg-[var(--t-mute)]",
+              )}
+            />
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+>>>>>>> 811e811 (feat #7: the turn rail)
