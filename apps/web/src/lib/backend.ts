@@ -11,6 +11,7 @@ import type {
   HostInfo,
   MonitorData,
   NetInfo,
+  PromptAttachment,
   TailscalePeer,
   SessionMeta,
   SkillInfo,
@@ -55,7 +56,9 @@ export interface Backend {
   /** switch a session's model: live where the harness supports it, else restart-with-history or stored for next resume */
   setSessionModel(id: string, model: string, provider?: string): Promise<{ mode: "live" | "restart" | "stored" }>;
   getEvents(id: string): Promise<{ events: Frame[] }>;
-  prompt(id: string, text: string): Promise<{ ok: boolean }>;
+  prompt(id: string, text: string, attachments?: PromptAttachment[]): Promise<{ ok: boolean }>;
+  /** upload a file into the session's workspace (.truss-uploads/) for attaching */
+  upload(id: string, name: string, dataBase64: string): Promise<{ upload: PromptAttachment }>;
   interrupt(id: string): Promise<{ ok: boolean }>;
   permission(id: string, requestId: string, choice: string): Promise<{ ok: boolean }>;
   deleteSession(id: string, hard: boolean): Promise<unknown>;
@@ -179,7 +182,8 @@ export function createLiveBackend(): Backend {
     setSessionModel: (id, model, provider) =>
       req("POST", `/api/sessions/${encodeURIComponent(id)}/model`, { model, provider }),
     getEvents: (id) => req("GET", `/api/sessions/${encodeURIComponent(id)}/events`),
-    prompt: (id, text) => req("POST", `/api/sessions/${encodeURIComponent(id)}/prompt`, { text }),
+    prompt: (id, text, attachments) => req("POST", `/api/sessions/${encodeURIComponent(id)}/prompt`, { text, attachments }),
+    upload: (id, name, dataBase64) => req("POST", `/api/sessions/${encodeURIComponent(id)}/upload`, { name, dataBase64 }),
     interrupt: (id) => req("POST", `/api/sessions/${encodeURIComponent(id)}/interrupt`, {}),
     permission: (id, requestId, choice) =>
       req("POST", `/api/sessions/${encodeURIComponent(id)}/permission`, { requestId, choice }),

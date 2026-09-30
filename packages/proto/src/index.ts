@@ -110,12 +110,23 @@ export interface FeedUpsert {
 }
 
 /* ── message stream ── */
+/** a file attached to a user prompt (lands in the workspace .truss-uploads/) */
+export interface PromptAttachment {
+  name: string;
+  /** workspace-root-relative path */
+  path: string;
+  size: number;
+  mime?: string;
+}
+
 export interface MsgStart {
   type: "msg.start";
   sessionId: string;
   messageId: string;
   role: "user" | "assistant" | "system";
   at: number;
+  /** user prompts only: attached files (transcript chips survive reload) */
+  attachments?: PromptAttachment[];
 }
 export interface MsgChunk {
   type: "msg.chunk";
