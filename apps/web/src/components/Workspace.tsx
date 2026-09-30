@@ -28,6 +28,7 @@ import { HostPanel } from "@/panels/HostPanel";
 import { SettingsPanel } from "@/panels/SettingsPanel";
 import { DesktopStrip } from "./DesktopStrip";
 import { crampedVerdict, tabCloseBehavior, ultraVerdict } from "@/lib/tabClose";
+import { layoutTabStrip, STANDARD_TAB_WIDTH, type TabSpec } from "@/lib/tabStrip";
 import { TAB_DRAG_MIME, encodeTabDrag } from "@/lib/tabDnd";
 import { TabPicker } from "./TabPicker";
 import { Btn, Icon, StateDot, TrussLogo } from "./ui";
@@ -111,14 +112,41 @@ function TrussTab({ api, params }: IDockviewPanelHeaderProps<{ sessionId?: strin
     const measure = () => {
       const strip = tab.closest(".dv-tabs-container");
       if (!strip) return;
-      const probes = [...strip.querySelectorAll(".truss-tab-probe")].map((p) => (p as HTMLElement).offsetWidth);
-      let natural = 0;
-      for (const w of probes) natural += w + 38;
-      /* sticky verdicts (issue #21): a sash drag wobbles the strip width by a
-         pixel or two near the boundary — without the deadband every tab's X
-         flipped mode on the same pixel, mid-drag */
-      setCramped((prev) => crampedVerdict(prev, natural, strip.clientWidth));
-      setUltra((prev) => crampedVerdict(prev, natural, strip.clientWidth) && ultraVerdict(prev, tab.getBoundingClientRect().width));
+      /* uniform tab widths (issue #23): probe each tab's natural width, then
+         layout the strip — roomy = all exactly STANDARD; crowded = the
+         active tab fully displayed, inactives compress uniformly above the
+         floor. Widths apply to the dockview shells imperatively (they own
+         the flex row). */
+      const specs: { spec: TabSpec; shell: HTMLElement }[] = [];
+      for (const probe of strip.querySelectorAll(".truss-tab-probe")) {
+        const shell = (probe as HTMLElement).closest(".dv-tab") as HTMLElement | null;
+        if (!shell) continue;
+        specs.push({
+          spec: {
+            id: shell.getAttribute("data-tab-panel-id") ?? String(specs.length),
+            naturalWidth: (probe as HTMLElement).offsetWidth + 38,
+            active: shell.classList.contains("dv-active-tab"),
+          },
+          shell,
+        });
+      }
+      const widths = new Map(layoutTabStrip({ stripWidth: strip.clientWidth, tabs: specs.map((x) => x.spec) }).map((w) => [w.id, w.width]));
+      for (const { spec, shell } of specs) {
+        const w = widths.get(spec.id);
+        if (w) {
+          shell.style.width = `${w}px`;
+          shell.style.flex = "0 0 auto";
+        }
+      }
+      /* sticky verdicts (issue #21); the active tab never compresses, so it
+         composes roomy regardless (its X stays inline+always — #23 rule) */
+      const myWidth = tab.getBoundingClientRect().width;
+      const natural = specs.length * STANDARD_TAB_WIDTH;
+      setCramped((prev) => crampedVerdict(prev, natural, strip.clientWidth) && !active);
+      setUltra((prev) => {
+        if (!crampedVerdict(prev, natural, strip.clientWidth)) return false;
+        return ultraVerdict(prev, myWidth);
+      });
     };
     const attach = () => {
       const strip = tab.closest(".dv-tabs-container");
