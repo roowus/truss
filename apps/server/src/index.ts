@@ -909,11 +909,14 @@ app.get("/api/costs", async () => {
 
 /* ── layout persistence (dockview serialized state) ── */
 app.get("/api/layout", async () => ({ layout: store.getKv("dockview-layout") ?? null }));
-app.put("/api/layout", async (req) => {
+app.put("/api/layout", async (req, reply) => {
   const { layout } = (req.body ?? {}) as { layout?: string | null };
-  /* null clears a saved layout (e.g. after a cleanup, or stale session refs) */
-  if (layout !== null && typeof layout !== "string") return { ok: false };
-  store.setKv("dockview-layout", layout ?? "");
+  /* null clears a saved layout (e.g. after a cleanup, or stale session refs);
+     garbage is a 400 — a 200-ok:false lies to clients about what happened
+     (issue #39) */
+  if (layout !== null && typeof layout !== "string") return reply.code(400).send({ error: "layout must be a string or null" });
+  if (layout === null) store.delKv("dockview-layout");
+  else store.setKv("dockview-layout", layout);
   return { ok: true };
 });
 

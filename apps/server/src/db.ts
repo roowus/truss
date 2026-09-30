@@ -249,6 +249,11 @@ export const store = {
     return db.prepare(`SELECT * FROM sessions WHERE project = @p`).all({ p: project }) as SessionRow[];
   },
 
+  /** clearing a value deletes the row (reads back undefined, not "") */
+  delKv(key: string) {
+    db.prepare(`DELETE FROM kv WHERE key = ?`).run(key);
+  },
+
   getKv(key: string): string | undefined {
     const row = kvGet.get(key) as { value: string } | undefined;
     return row?.value;
