@@ -62,8 +62,6 @@ export class AcpClient {
   private sessionHandlers = new Map<string, SessionHandler>();
   private ready: Promise<void> | null = null;
   private exitListenersAttached = false;
-  /** in-flight request → its timeout timer (cleared on answer) */
-  private timers = new Map<string, ReturnType<typeof setTimeout>>();
 
   constructor(
     private launch: AcpLaunchSpec,
@@ -100,10 +98,15 @@ export class AcpClient {
       });
 
       proc.on("exit", () => {
+        /* only the CURRENT process may flush client state — after a failed
+           boot the half-started child is killed and its exit can land after a
+           retry has already spawned a healthy replacement; flushing for the
+           dead one would reject the retry's initialize and get that new child
+           killed in turn */
+        if (this.proc !== proc) return;
+        /* every rejected entry clears its own timer in the wrapper below */
         for (const p of this.pending.values()) p.rej(new Error("acp server exited"));
         this.pending.clear();
-        for (const t of this.timers.values()) clearTimeout(t);
-        this.timers.clear();
         this.proc = null;
         this.ready = null;
       });
@@ -167,32 +170,34 @@ export class AcpClient {
     }
   }
 
-  call(method: string, params: unknown): Promise<unknown> {
+  /**
+   * One JSON-RPC request. Budgeted so a wedged harness fails fast instead of
+   * pending forever (issue #12). `timeoutMs` overrides the budget for this one
+   * call; 0 runs it unbudgeted — the turn call does that, because a turn is as
+   * long as the agent needs and budgeting it would fail every long turn and
+   * lose its output.
+   */
+  call(method: string, params: unknown, timeoutMs?: number): Promise<unknown> {
     if (!this.proc?.stdin) return Promise.reject(new Error("acp server not running"));
     const id = `truss-${++this.idc}`;
     this.proc.stdin.write(JSON.stringify({ jsonrpc: "2.0", id, method, params }) + "\n");
     return new Promise((res, rej) => {
-      /* a wedged harness (issue #12: hermes session/new stalled 10m03s) must
-         fail fast and loud instead of pending forever */
-      const budget = this.opts.requestTimeoutMs ?? ACP_DEFAULT_TIMEOUT_MS;
-      const timer = setTimeout(() => {
-        if (this.pending.delete(id)) {
-          this.timers.delete(id);
-          rej(new Error(`acp ${method} timed out after ${Math.round(budget / 1000)}s`));
-        }
-      }, budget);
+      const budget = timeoutMs ?? this.opts.requestTimeoutMs ?? ACP_DEFAULT_TIMEOUT_MS;
+      const timer =
+        budget > 0
+          ? setTimeout(() => {
+              if (this.pending.delete(id)) rej(new Error(`acp ${method} timed out after ${Math.round(budget / 1000)}s`));
+            }, budget)
+          : null;
       /* timeouts are failure signaling, not a reason to hold the loop open */
-      timer.unref?.();
-      this.timers.set(id, timer);
+      timer?.unref?.();
       this.pending.set(id, {
         res: (v: unknown) => {
-          clearTimeout(this.timers.get(id));
-          this.timers.delete(id);
+          if (timer) clearTimeout(timer);
           res(v);
         },
         rej: (e: Error) => {
-          clearTimeout(this.timers.get(id));
-          this.timers.delete(id);
+          if (timer) clearTimeout(timer);
           rej(e);
         },
       });

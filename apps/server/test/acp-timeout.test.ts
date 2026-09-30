@@ -1,29 +1,38 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { freshServer } from "./helpers.js";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { freshServer, tick } from "./helpers.js";
 import type { AdapterHandle, HarnessAdapter, SessionOpts } from "../src/adapters/types.js";
+import type { ProtoEvent } from "@truss/proto";
 
-/* SPEC-TESTS for ACP request timeouts — https://github.com/roowus/truss/issues/12
-   ("Spawning a hermes session took over 10m03s"). These FAIL on purpose
-   today: they pin the contract a fix must satisfy.
+/* CONTRACT TESTS for ACP request timeouts — https://github.com/roowus/truss/issues/12
+   ("Spawning a hermes session took over 10m03s"). The contract below is
+   IMPLEMENTED in AcpClient and these tests pin it — every test here is
+   green at this head.
 
-   Root cause candidate (see the issue for the live repro numbers):
-   AcpClient.call (apps/server/src/adapters/acp.ts:147-154) returns a promise
-   that pends FOREVER when the server never answers — no timeout anywhere on
-   the initialize / session/new path. A hermes-acp that stalls during
-   session/new (e.g. attaching the truss MCP server) wedges the spawn until
-   something downstream gives up — the user measured 10m03s.
+   What the fix does (see the issue for the live repro numbers that shaped
+   it): AcpClient.call budgets each request, so a hermes-acp that stalls
+   during session/new (e.g. attaching the truss MCP server) rejects at the
+   budget instead of wedging the spawn for ten minutes. The budget covers the
+   spawn-phase and control calls; the turn call opts out, because a turn is
+   as long as the agent needs.
 
    The contract:
 
    - new AcpClient(launch, { requestTimeoutMs }) — a per-request budget.
      A call whose answer never arrives REJECTS with a "timed out" error at
      the budget instead of pending forever.
+   - call(method, params, timeoutMs) — a per-call override; 0 runs the call
+     unbudgeted. session/prompt uses it: a turn past the budget must still
+     complete, or every long turn fails and loses its output.
    - ACP_DEFAULT_TIMEOUT_MS is exported and sane (10s–120s): a spawn can
      never wedge for ten minutes by default.
    - ensure() respects the budget for its internal initialize, and after a
-     timeout the client can be RETRIED (ready resets) — no permanently
-     poisoned singleton.
+     timeout the client can be RETRIED (ready resets, and the killed boot's
+     exit never touches the retried process) — no permanently poisoned
+     singleton.
    - Happy path unchanged: a responsive server initializes and answers
      calls well inside the budget.
 
@@ -34,7 +43,7 @@ import type { AdapterHandle, HarnessAdapter, SessionOpts } from "../src/adapters
 
 interface AcpClientLike {
   ensure(): Promise<void>;
-  call(method: string, params: unknown): Promise<unknown>;
+  call(method: string, params: unknown, timeoutMs?: number): Promise<unknown>;
 }
 
 /* consume stdin, never answer — the wedged harness */
@@ -44,19 +53,42 @@ const DEAD_SERVER = `process.stdin.on("data",()=>{});`;
 const INIT_ONLY_SERVER = `let b="";process.stdin.setEncoding("utf8");process.stdin.on("data",c=>{b+=c;let i;while((i=b.indexOf("\\n"))>=0){const l=b.slice(0,i).trim();b=b.slice(i+1);if(!l)continue;let r;try{r=JSON.parse(l)}catch{continue}if(r.id!=null&&r.method==="initialize"){process.stdout.write(JSON.stringify({jsonrpc:"2.0",id:r.id,result:{protocolVersion:1}})+"\\n")}}});`;
 /* answer every request: initialize gets a protocolVersion, everything else {ok:true} */
 const ECHO_SERVER = `let b="";process.stdin.setEncoding("utf8");process.stdin.on("data",c=>{b+=c;let i;while((i=b.indexOf("\\n"))>=0){const l=b.slice(0,i).trim();b=b.slice(i+1);if(!l)continue;let r;try{r=JSON.parse(l)}catch{continue}if(r.id!=null&&r.method){process.stdout.write(JSON.stringify({jsonrpc:"2.0",id:r.id,result:r.method==="initialize"?{protocolVersion:1}:{ok:true}})+"\\n")}}});`;
+/* answer initialize after TRUSS_TEST_BOOT_DELAY ms (the child inherits the
+   test's env at spawn, so each boot picks its own delay): the boot that times
+   out is killed while still alive, so its exit event lands near a retry's
+   own boot */
+const SLOW_INIT_SERVER = `let b="";const d=+(process.env.TRUSS_TEST_BOOT_DELAY||400);process.stdin.setEncoding("utf8");process.stdin.on("data",c=>{b+=c;let i;while((i=b.indexOf("\\n"))>=0){const l=b.slice(0,i).trim();b=b.slice(i+1);if(!l)continue;let r;try{r=JSON.parse(l)}catch{continue}if(r.id!=null&&r.method==="initialize"){setTimeout(()=>{process.stdout.write(JSON.stringify({jsonrpc:"2.0",id:r.id,result:{protocolVersion:1}})+"\\n")},d)}}});`;
+/* answer ONLY initialize and a late session/prompt; every other method pends —
+   isolates the turn call's opt-out from the budget control calls still have */
+const SLOW_PROMPT_SERVER = `let b="";process.stdin.setEncoding("utf8");process.stdin.on("data",c=>{b+=c;let i;while((i=b.indexOf("\\n"))>=0){const l=b.slice(0,i).trim();b=b.slice(i+1);if(!l)continue;let r;try{r=JSON.parse(l)}catch{continue}if(r.id!=null&&r.method==="initialize"){process.stdout.write(JSON.stringify({jsonrpc:"2.0",id:r.id,result:{protocolVersion:1}})+"\\n")}else if(r.id!=null&&r.method==="session/prompt"){setTimeout(()=>{process.stdout.write(JSON.stringify({jsonrpc:"2.0",id:r.id,result:{ok:true}})+"\\n")},600)}}});`;
 
 const NODE = process.execPath;
 
-async function makeClient(kind: "dead" | "echo" | "init-only", opts?: { requestTimeoutMs?: number }): Promise<{ client: AcpClientLike; kill: () => void }> {
+/* a stand-in hermes-acp for the adapter-level turn test: initialize +
+   session/new answer fast, session/prompt answers after 300ms (the shape of a
+   real agent turn), then the process exits. The adapter pins its binary path
+   when its module first loads — and sessions.ts imports it — so the fake is
+   written and TRUSS_HERMES_BIN pointed at it HERE, before any test imports
+   sessions.js. Only the turn test ever calls its spawn. */
+const HERMES_FAKE = `let b="";process.stdin.setEncoding("utf8");process.stdin.on("data",c=>{b+=c;let i;while((i=b.indexOf("\\n"))>=0){const l=b.slice(0,i).trim();b=b.slice(i+1);if(!l)continue;let r;try{r=JSON.parse(l)}catch{continue}if(r.id!=null&&r.method){let res={ok:true};if(r.method==="initialize")res={protocolVersion:1};if(r.method==="session/new")res={sessionId:"hs-fake-1"};if(r.method==="session/prompt"){setTimeout(()=>{process.stdout.write(JSON.stringify({jsonrpc:"2.0",id:r.id,result:res})+"\\n",()=>process.exit(0))},300)}else{process.stdout.write(JSON.stringify({jsonrpc:"2.0",id:r.id,result:res})+"\\n")}}}});`;
+const HERMES_FAKE_DIR = mkdtempSync(join(tmpdir(), "truss-fake-hermes-"));
+const HERMES_FAKE_BIN = join(HERMES_FAKE_DIR, "hermes-acp");
+writeFileSync(HERMES_FAKE_BIN, "#!/usr/bin/env node\n" + HERMES_FAKE + "\n", { mode: 0o755 });
+process.env.TRUSS_HERMES_BIN = HERMES_FAKE_BIN;
+
+async function makeClient(kind: "dead" | "echo" | "init-only" | "slow-init" | "slow-prompt", opts?: { requestTimeoutMs?: number }): Promise<{ client: AcpClientLike; kill: () => void }> {
   const { AcpClient } = await import("../src/adapters/acp.js");
-  const script = kind === "dead" ? DEAD_SERVER : kind === "init-only" ? INIT_ONLY_SERVER : ECHO_SERVER;
-  const client: AcpClientLike =
-    // the options argument is the new contract — the cast keeps this file
-    // typechecking before it exists
-    new (AcpClient as unknown as new (launch: { command: string; args: string[] }, o?: { requestTimeoutMs?: number }) => AcpClientLike)(
-      { command: NODE, args: ["-e", script] },
-      opts,
-    );
+  const script =
+    kind === "dead"
+      ? DEAD_SERVER
+      : kind === "init-only"
+        ? INIT_ONLY_SERVER
+        : kind === "slow-init"
+          ? SLOW_INIT_SERVER
+          : kind === "slow-prompt"
+            ? SLOW_PROMPT_SERVER
+            : ECHO_SERVER;
+  const client: AcpClientLike = new AcpClient({ command: NODE, args: ["-e", script] }, opts);
   return { client, kill: () => (client as any).proc?.kill("SIGKILL") };
 }
 
@@ -99,6 +131,49 @@ test("ensure() times out its own initialize, then lets the caller RETRY (no pois
     );
     assert.match(second, /^rejected: /, "a retry re-attempts and rejects again");
     assert.ok(Date.now() - t < 3000, "the retry must actually re-run (not return a stuck promise)");
+  } finally {
+    kill();
+  }
+});
+
+test("a retry after a boot timeout succeeds — the killed boot's exit must not touch the new process", async () => {
+  /* the first boot answers initialize at 400ms, past the 150ms budget: it
+     times out and is SIGKILLed while still alive, so its exit event lands
+     just after the retry has spawned and written its own initialize. The
+     retry must boot on the healthy second process — not be rejected by the
+     dead boot's exit handler and get its child killed in turn. */
+  const { client, kill } = await makeClient("slow-init", { requestTimeoutMs: 150 });
+  try {
+    process.env.TRUSS_TEST_BOOT_DELAY = "400";
+    const first = await client.ensure().then(() => "resolved", (e: Error) => `rejected: ${e.message}`);
+    assert.match(first, /^rejected: .*timed ?out/i, `the slow first boot times out — got: ${first}`);
+    process.env.TRUSS_TEST_BOOT_DELAY = "10";
+    const second = await client.ensure().then(() => "resolved", (e: Error) => `rejected: ${e.message}`);
+    assert.equal(second, "resolved", `the retry must complete on the healthy second boot — got: ${second}`);
+  } finally {
+    delete process.env.TRUSS_TEST_BOOT_DELAY;
+    kill();
+  }
+});
+
+test("the turn call opts out of the budget — session/prompt answered past it still completes", async () => {
+  /* one client, 300ms budget: a control call that never answers rejects at
+     the budget, but the turn call (0 = unbudgeted) settles when the harness
+     settles — at 600ms here, past the budget. Budgeting the turn is what
+     made every turn over a minute fail and lose its output. */
+  const { client, kill } = await makeClient("slow-prompt", { requestTimeoutMs: 300 });
+  try {
+    await client.ensure();
+    const control = await client.call("session/new", { cwd: "/tmp", mcpServers: [] }).then(
+      () => "resolved",
+      (e: Error) => `rejected: ${e.message}`,
+    );
+    assert.match(control, /^rejected: .*timed ?out/i, "control calls stay budgeted");
+    const turn = await client.call("session/prompt", { sessionId: "hs-1", prompt: [] }, 0).then(
+      () => "resolved",
+      (e: Error) => `rejected: ${e.message}`,
+    );
+    assert.equal(turn, "resolved", `a turn past the budget must complete — got: ${turn}`);
   } finally {
     kill();
   }
@@ -185,6 +260,130 @@ test("a rejected spawn marks the session error instead of leaving it 'spawning' 
     assert.equal(row!.state, "error", "not 'spawning' — the spinner must stop somewhere truthful");
   } finally {
     sessions.unregisterAdapter("fake-failspawn" as never);
+    cleanup();
+  }
+});
+
+/* ── the turn itself must survive the budget ── */
+
+test("a hermes turn settles through send() against a fake ACP server", async () => {
+  const { hermesAdapter } = await import("../src/adapters/hermes.js");
+  let h: AdapterHandle | null = null;
+  try {
+    h = await hermesAdapter.spawn({ sessionId: "t-turn", cwd: "/tmp" });
+    hermesAdapter.send(h, "hello");
+    /* the turn settles when llm.call.done lands — the spawn's own
+       session.state idle is already in the queue before the turn starts */
+    const seen: ProtoEvent[] = [];
+    const settled = (async () => {
+      for await (const ev of hermesAdapter.events(h!)) {
+        seen.push(ev);
+        if (ev.type === "llm.call.done") return;
+      }
+    })();
+    const outcome = await Promise.race([
+      settled.then(() => "settled"),
+      new Promise<string>((r) => setTimeout(() => r("never settled"), 4000)),
+    ]);
+    assert.equal(
+      outcome,
+      "settled",
+      `the turn must settle on the prompt's own answer — got: ${outcome}; events: ${JSON.stringify(seen)}`,
+    );
+    const done = seen.find((e) => e.type === "llm.call.done") as { status?: number } | undefined;
+    assert.equal(done?.status, 200, "the turn closes 200, not the 500 of a failed budget");
+    const msg = seen.find((e) => e.type === "msg.done") as { stopReason?: string } | undefined;
+    assert.ok(msg, "the assistant message closes");
+    assert.equal(msg!.stopReason, undefined, "it closes as a finished turn, not an error");
+  } finally {
+    if (h) hermesAdapter.dispose(h);
+    try {
+      rmSync(HERMES_FAKE_DIR, { recursive: true, force: true });
+    } catch {
+      /* the fake may still be exiting; tmp dirs get reaped anyway */
+    }
+  }
+});
+
+/* ── every spawn path is bounded, and a budget timeout orphans nothing ── */
+
+test("the spawn budget doesn't orphan a harness that lands late — the abandoned handle is disposed", async () => {
+  const { cleanup } = await freshServer("spawn-late");
+  const sessions = await import("../src/sessions.js");
+  let disposed = 0;
+  const lateAdapter: HarnessAdapter = {
+    ...spawnNeverAdapter("fake-late"),
+    /* outlives the budget, then lands a live child — the shape of a cold
+       python boot that just missed the deadline */
+    spawn: () => new Promise<AdapterHandle>((res) => setTimeout(() => res({ sessionId: "late-1" }), 500)),
+    dispose: () => {
+      disposed++;
+    },
+  };
+  sessions.registerAdapter("fake-late" as never, lateAdapter);
+  try {
+    await assert.rejects(() =>
+      sessions.createSession({ harness: "fake-late" as never, cwd: "/tmp" }, { spawnTimeoutMs: 200 }),
+    );
+    assert.equal(disposed, 0, "nothing to dispose before the late spawn lands");
+    await tick(600);
+    assert.equal(disposed, 1, "the late handle is disposed instead of leaking the harness process");
+  } finally {
+    sessions.unregisterAdapter("fake-late" as never);
+    cleanup();
+  }
+});
+
+test("resumeSession is bounded too: a wedged spawn returns false instead of hanging forever", async () => {
+  const { db, cleanup } = await freshServer("resume-budget");
+  const sessions = await import("../src/sessions.js");
+  sessions.registerAdapter("fake-resume" as never, spawnNeverAdapter("fake-resume"));
+  try {
+    /* a closed session with a harness ref — exactly what resume spawns for */
+    db.store.createSession({ id: "res-1", harness: "fake-resume" as never, title: "t", cwd: "/tmp" });
+    db.store.setHarnessRef("res-1", "hr-1");
+    const outcome = await Promise.race([
+      sessions.resumeSession("res-1", { spawnTimeoutMs: 300 }).then(
+        (ok: boolean) => `returned ${ok}`,
+        (e: Error) => `rejected: ${e.message}`,
+      ),
+      new Promise<string>((r) => setTimeout(() => r("still pending at 3s"), 3000)),
+    ]);
+    assert.equal(outcome, "returned false", `a wedged resume must give up fast — got: ${outcome}`);
+  } finally {
+    sessions.unregisterAdapter("fake-resume" as never);
+    cleanup();
+  }
+});
+
+test("switchModel's respawn is bounded too: a wedged restart rejects instead of hanging forever", async () => {
+  const { cleanup } = await freshServer("switch-budget");
+  const sessions = await import("../src/sessions.js");
+  let spawns = 0;
+  const adapter: HarnessAdapter = {
+    ...spawnNeverAdapter("fake-switch"),
+    spawn: () => {
+      spawns++;
+      return spawns === 1 ? Promise.resolve({ sessionId: "sw-1" }) : new Promise(() => {});
+    },
+  };
+  sessions.registerAdapter("fake-switch" as never, adapter);
+  try {
+    const s = await sessions.createSession({ harness: "fake-switch" as never, cwd: "/tmp" });
+    const outcome = await Promise.race([
+      sessions.switchModel(s.id, "m2", "p2", { spawnTimeoutMs: 300 }).then(
+        () => "resolved",
+        (e: Error) => `rejected: ${e.message}`,
+      ),
+      new Promise<string>((r) => setTimeout(() => r("still pending at 3s"), 3000)),
+    ]);
+    assert.match(
+      outcome,
+      /^rejected: .*(spawn|wedged|timed ?out)/i,
+      `a wedged model-switch respawn must fail fast — got: ${outcome}`,
+    );
+  } finally {
+    sessions.unregisterAdapter("fake-switch" as never);
     cleanup();
   }
 });

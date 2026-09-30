@@ -139,10 +139,17 @@ export const hermesAdapter: HarnessAdapter = {
     beginAcpTurn(h);
 
     void client
-      .call("session/prompt", {
-        sessionId: h.acpSessionId,
-        prompt: [{ type: "text", text }],
-      })
+      .call(
+        "session/prompt",
+        {
+          sessionId: h.acpSessionId,
+          prompt: [{ type: "text", text }],
+        },
+        /* the turn call resolves only when the whole agent turn settles, so it
+           carries no per-request budget — a turn past the budget must finish,
+           not fail and lose its output (issue #12 budgets the spawn phase) */
+        0,
+      )
       .then((result) => {
         /* hermes settles with real per-turn usage */
         const usage = (result as { usage?: { inputTokens?: number; outputTokens?: number } } | null)

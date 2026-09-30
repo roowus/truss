@@ -192,10 +192,17 @@ export const dshAdapter: HarnessAdapter = {
     beginAcpTurn(h);
 
     void client
-      .call("session/prompt", {
-        sessionId: h.acpSessionId,
-        prompt: [{ type: "text", text }],
-      })
+      .call(
+        "session/prompt",
+        {
+          sessionId: h.acpSessionId,
+          prompt: [{ type: "text", text }],
+        },
+        /* the turn call resolves only when the whole agent turn settles, so it
+           carries no per-request budget — a turn past the budget must finish,
+           not fail and lose its output (issue #12 budgets the spawn phase) */
+        0,
+      )
       .then(() => settleAcpTurn(h, { ok: true }))
       .catch((err: Error) => settleAcpTurn(h, { ok: false, detail: err.message }));
   },
