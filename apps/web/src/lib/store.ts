@@ -653,6 +653,14 @@ class Store {
     }
   }
 
+  async renameTerminal(id: string, title: string) {
+    try {
+      await this.be.renameTerminal(id, title);
+      await this.refreshTerminals();
+    } catch (e: any) {
+      this.toast("error", "Rename failed", e.message);
+    }
+  }
   async refreshTerminals() {
     try {
       const { terminals } = await this.be.listTerminals();

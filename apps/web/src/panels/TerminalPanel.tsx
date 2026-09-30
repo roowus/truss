@@ -67,6 +67,10 @@ export function TerminalPanel({ params, api, containerApi }: IDockviewPanelProps
         setStatus(h.alive ? { kind: "live" } : { kind: "exited" });
         if (h.title && h.title !== api.title) api.setTitle(h.title);
       },
+      onTitle: (title) => {
+        if (title && title !== api.title) api.setTitle(title); // live rename, no reattach
+        void store.refreshTerminals?.();
+      },
       onOut: (d) => term.write(d),
       onExit: (code) => {
         setStatus({ kind: "exited", code });

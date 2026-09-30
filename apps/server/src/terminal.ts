@@ -75,6 +75,19 @@ export function createTerminal(opts: { cwd?: string; shell?: string; title?: str
   return { id, title: t.title };
 }
 
+/** rename a shell (issue #31): trimmed, 1..64 chars; attached clients get a
+   {type:"title"} frame so open tabs rename live without reattach */
+export function renameTerminal(id: string, title: string): { id: string; title: string } {
+  const t = terms.get(id);
+  if (!t) throw new Error(`no such terminal: ${id}`);
+  const clean = String(title ?? "").trim();
+  if (!clean) throw new Error("title must not be empty");
+  if (clean.length > 64) throw new Error("title too long (64 characters max)");
+  t.title = clean;
+  for (const c of t.clients) c.send(JSON.stringify({ type: "title", title: clean }));
+  return { id, title: clean };
+}
+
 export function listTerminals() {
   return [...terms.values()].map((t) => ({ id: t.id, title: t.title, cwd: t.cwd, alive: t.alive }));
 }

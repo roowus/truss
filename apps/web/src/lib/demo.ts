@@ -665,6 +665,7 @@ export function createDemoBackend(): Backend {
       terminals.set(t.info.id, t);
       return { terminal: { ...t.info, alive: true } };
     },
+    renameTerminal: async (id: string, title: string) => ({ id, title }),
     async deleteTerminal(tid) {
       await net(20);
       terminals.delete(tid);
