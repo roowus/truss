@@ -7,6 +7,7 @@ import { buildModelOptions, modelValue, splitModelValue } from "@/lib/models";
 import { planHeaderFit, HEADER_CLUSTER, HEADER_GAP } from "@/lib/headerFit";
 import { CHAT_WIDTH_DEFAULT, commitChatWidth, dragDisplayWidth, readChatWidthPref, resolveChatWidth, writeChatWidthPref } from "@/lib/chatWidth";
 import { filesFromTransfer, isFileDrag } from "@/lib/attach";
+import { formatSessionRef } from "@/lib/sessionRef";
 import { openPanel, openAgentShell, renameSessionPanels } from "@/lib/workspace";
 import { Btn, Empty, HarnessMark, Icon, IconBtn, Select, Spinner, StateDot, STATE_META } from "@/components/ui";
 import { Markdown } from "./Markdown";
@@ -189,7 +190,21 @@ function ChatHeader({ id }: { id: string }) {
               </button>
             ))}
             <div className="my-1 border-t border-[var(--t-line)]" />
+            <button
+              onClick={() => {
+                const refText = formatSessionRef(meta, hosts);
+                void navigator.clipboard.writeText(refText);
+                store.toast("ok", "Reference copied", refText);
+                setMenu(false);
+              }}
+              className="w-full flex items-center gap-2.5 px-3 h-8 text-left text-[12.5px] text-[var(--t-fg2)] hover:bg-white/[0.05]"
+              title="Copy a one-line reference (id · harness · host · directory) to paste into another chat"
+            >
+              <Icon name="clip" size={13} className="text-[var(--t-mute)]" />
+              Copy reference
+            </button>
             <div className="px-3 py-1.5 text-[11px] text-[var(--t-dim)] leading-relaxed break-all">
+              <span className="font-mono text-[var(--t-mute)]">{formatSessionRef(meta, hosts)}</span><br />
               {meta.harness}{meta.model && ` · ${meta.model}`}<br />{shortPath(meta.cwd)}
             </div>
           </div>
