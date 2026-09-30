@@ -188,3 +188,25 @@ export function feedSources(): FeedSources {
     return def;
   }
 }
+
+/** the share message: no note → exactly today's template; a note rides
+   verbatim in its own marked section (issue #24) */
+export function composeShareMessage(item: { title: string; body?: string }, note?: string): string {
+  const base = `**[shared from your feed]** ${item.title}${item.body ? `\n\n${item.body}` : ""}`;
+  const n = (note ?? "").trim();
+  if (!n) return base;
+  return `${base}\n\n**[note from the user]**\n${n}`;
+}
+
+/** share = record + prompt, as ONE call (issue #24). Validates both ends
+   first, prompts, THEN records — a dead session no longer leaves a phantom
+   share on the card (the old route recorded before prompting). */
+export async function shareFeedToSession(id: string, sessionId: string, note?: string): Promise<{ id: string }> {
+  const item = getFeedItem(id);
+  if (!item) throw new Error(`no such feed item: ${id}`);
+  if (!store.getSession(sessionId)) throw new Error(`no such session: ${sessionId}`);
+  const { sendPrompt } = await import("./sessions.js");
+  await sendPrompt(sessionId, composeShareMessage(item, note));
+  shareFeedItem(id, sessionId);
+  return { id: item.id };
+}
