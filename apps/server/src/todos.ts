@@ -288,6 +288,9 @@ export function resolveTodoAccess(todoId: string, requesterId: string, approve: 
     : [...new Set([...t.deniedEditors, requesterId])];
   store.run(`UPDATE todos SET shared_editors = ?, denied_editors = ?, updated_at = ? WHERE id = ?`,
     JSON.stringify(shared), JSON.stringify(denied), Date.now(), todoId);
+  /* settle the request's card (issue #35): an answered ask must not linger
+     unread in the inbox forever */
+  settleFeedWhere(`todo-access:${todoId}:${requesterId}`, "done");
   const next = getTodo(todoId)!;
   broadcast(next);
   return next;
