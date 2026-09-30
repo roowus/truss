@@ -14,8 +14,20 @@ export function fmtMs(ms?: number) {
   if (ms === undefined || ms === null || Number.isNaN(ms)) return "—";
   if (ms < 1000) return `${Math.round(ms)}ms`;
   if (ms < 60_000) return `${(ms / 1000).toFixed(ms < 10_000 ? 2 : 1)}s`;
-  const m = Math.floor(ms / 60_000);
-  return `${m}m${String(Math.round((ms % 60_000) / 1000)).padStart(2, "0")}s`;
+  if (ms < 3_600_000) {
+    const m = Math.floor(ms / 60_000);
+    return `${m}m${String(Math.round((ms % 60_000) / 1000)).padStart(2, "0")}s`;
+  }
+  /* hours, then days (issue #41: a turn days after the first used to read
+     "+5456m31s" — 91 hours in minutes) */
+  if (ms < 86_400_000) {
+    const h = Math.floor(ms / 3_600_000);
+    const m = Math.round((ms % 3_600_000) / 60_000);
+    return m ? `${h}h ${m}m` : `${h}h`;
+  }
+  const d = Math.floor(ms / 86_400_000);
+  const h = Math.round((ms % 86_400_000) / 3_600_000);
+  return h ? `${d}d ${h}h` : `${d}d`;
 }
 export function fmtTokens(n?: number) {
   if (n === undefined || n === null) return "—";
