@@ -4,7 +4,13 @@ import { isOvercrowded, tabCloseBehavior } from "../src/lib/tabClose";
 
 /* the tab X used to teleport between three positions (inline-but-ml-auto,
    right-edge overlay, LEFT over the icon) and change rules across
-   workspaces. These pin the single consistent contract. */
+   workspaces. These pin the single consistent contract.
+
+   AMENDED by https://github.com/roowus/truss/issues/8: when the X overlays
+   tab content (cramped / ultra), it is hover-reveal on EVERY tab — a pinned
+   "always" X sat on top of the narrow active tab's truncated title. The
+   roomy inline X stays always-visible (it sits beside the title, not on
+   it), and inactive ultra slivers stay X-less (misclick protection). */
 
 test("roomy tab: inline, right after the title, always visible — on every tab", () => {
   for (const active of [true, false]) {
@@ -15,10 +21,10 @@ test("roomy tab: inline, right after the title, always visible — on every tab"
   }
 });
 
-test("cramped strip: right-edge overlay; active tab keeps the X, others reveal on hover", () => {
+test("cramped strip: right-edge overlay, hover-reveal on EVERY tab — the active tab's X no longer covers its title (issue #8)", () => {
   assert.deepEqual(tabCloseBehavior({ cramped: true, ultra: false, active: true }), {
     placement: "overlay-right",
-    visible: "always",
+    visible: "hover",
   });
   assert.deepEqual(tabCloseBehavior({ cramped: true, ultra: false, active: false }), {
     placement: "overlay-right",
@@ -26,12 +32,13 @@ test("cramped strip: right-edge overlay; active tab keeps the X, others reveal o
   });
 });
 
-test("ultra sliver: centered mini X only on the active tab; inactive slivers have none (never misclick-close)", () => {
+test("ultra sliver: centered mini X hover-revealed on the active tab; inactive slivers have none (never misclick-close)", () => {
   /* centered + 16px: a right-anchored 20px X on a 19px sliver overhangs 3px
-     into the LEFT neighbor and eats its clicks — centering keeps it inside */
+     into the LEFT neighbor and eats its clicks — centering keeps it inside.
+     visible: hover (issue #8) — a pinned X read as phantom text on a sliver */
   assert.deepEqual(tabCloseBehavior({ cramped: true, ultra: true, active: true }), {
     placement: "overlay-center",
-    visible: "always",
+    visible: "hover",
   });
   assert.deepEqual(tabCloseBehavior({ cramped: true, ultra: true, active: false }), {
     placement: "overlay-center",
