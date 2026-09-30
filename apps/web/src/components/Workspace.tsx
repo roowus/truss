@@ -27,7 +27,7 @@ import { MonitorPanel } from "@/panels/MonitorPanel";
 import { HostPanel } from "@/panels/HostPanel";
 import { SettingsPanel } from "@/panels/SettingsPanel";
 import { DesktopStrip } from "./DesktopStrip";
-import { isOvercrowded, tabCloseBehavior } from "@/lib/tabClose";
+import { crampedVerdict, tabCloseBehavior, ultraVerdict } from "@/lib/tabClose";
 import { TAB_DRAG_MIME, encodeTabDrag } from "@/lib/tabDnd";
 import { TabPicker } from "./TabPicker";
 import { Btn, Icon, StateDot, TrussLogo } from "./ui";
@@ -112,9 +112,13 @@ function TrussTab({ api, params }: IDockviewPanelHeaderProps<{ sessionId?: strin
       const strip = tab.closest(".dv-tabs-container");
       if (!strip) return;
       const probes = [...strip.querySelectorAll(".truss-tab-probe")].map((p) => (p as HTMLElement).offsetWidth);
-      const crowded = isOvercrowded(probes, strip.clientWidth);
-      setCramped(crowded);
-      setUltra(crowded && tab.getBoundingClientRect().width < 64);
+      let natural = 0;
+      for (const w of probes) natural += w + 38;
+      /* sticky verdicts (issue #21): a sash drag wobbles the strip width by a
+         pixel or two near the boundary — without the deadband every tab's X
+         flipped mode on the same pixel, mid-drag */
+      setCramped((prev) => crampedVerdict(prev, natural, strip.clientWidth));
+      setUltra((prev) => crampedVerdict(prev, natural, strip.clientWidth) && ultraVerdict(prev, tab.getBoundingClientRect().width));
     };
     const attach = () => {
       const strip = tab.closest(".dv-tabs-container");
