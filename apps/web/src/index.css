@@ -63,6 +63,12 @@ body {
   --dv-inactivegroup-visiblepanel-tab-color: var(--t-mute);
   --dv-inactivegroup-hiddenpanel-tab-color: var(--t-dim);
   --dv-tab-divider-color: transparent;
+  /* issue #32: dockview's context menu falls back to the transparent tab
+     background/divider when these are unset — the menu renders as floating
+     text. Give it the popover surface + a visible border, scoped to the
+     menu so tabs stay intentionally transparent. */
+  --dv-context-menu-background-color: var(--t-bg2);
+  --dv-context-menu-color: var(--t-fg);
   --dv-separator-border: transparent;
   --dv-sash-color: transparent;
   --dv-active-sash-color: var(--t-amber);
@@ -94,6 +100,7 @@ body {
    neighbor's tabs — clip the header row. Popovers are portals, unharmed. */
 .truss-dock .dv-tabs-and-actions-container { overflow: hidden; }
 .truss-dock .dv-tab { padding: 0 !important; }
+.truss-dock .dv-context-menu { border: 1px solid var(--t-line2); box-shadow: 0 12px 40px rgba(0,0,0,0.5); }
 
 /* ── chrome-style tab strip: tabs compress to fit — no horizontal scroll,
    no overflow dropdown. The close button pops onto the tab itself on hover
