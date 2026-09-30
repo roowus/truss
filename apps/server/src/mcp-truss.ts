@@ -566,6 +566,17 @@ export function registerMcpTruss(app: FastifyInstance) {
     const rpc = req.body as { id?: string | number; method: string; params?: Record<string, any> };
     reply.header("Content-Type", "application/json");
 
+    /* issue #36: the per-session URL must validate — a ghost caller id used
+       to die deep on the todos FK or, worse, post_feed SUCCEEDED into the
+       user's real inbox under a nonexistent session */
+    if (callerId && !store.getSession(callerId)) {
+      return reply.code(404).send({
+        jsonrpc: "2.0",
+        id: rpc?.id ?? null,
+        error: { code: -32602, message: `no such session: ${callerId}` },
+      });
+    }
+
     const respond = (result: unknown) => ({ jsonrpc: "2.0", id: rpc.id ?? null, result });
     const fail = (code: number, message: string) => ({
       jsonrpc: "2.0",
