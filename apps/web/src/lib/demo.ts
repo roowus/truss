@@ -17,7 +17,7 @@ type Dist<T> = T extends unknown ? Omit<T, "sessionId"> : never;
 type EvBody = Dist<ProtoEvent>;
 
 const CAPS: Record<string, Capabilities> = {
-  pi: { permissions: false, subagents: false, streaming: true, queueWhileRunning: true },
+  pi: { permissions: false, subagents: false, streaming: true, queueWhileRunning: true, effort: true },
   dsh: { permissions: true, subagents: false, streaming: true, queueWhileRunning: false },
   "claude-code": { permissions: true, subagents: true, streaming: true, queueWhileRunning: false },
   hermes: { permissions: true, subagents: false, streaming: true, queueWhileRunning: false },

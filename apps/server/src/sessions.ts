@@ -353,6 +353,7 @@ export async function switchModel(
         cwd: row.cwd,
         model,
         provider,
+        effort: row.effort ?? undefined,
         resumeRef: row.harness_ref ?? undefined,
       });
       goLive(sessionId, s.adapter, handle);
@@ -395,18 +396,29 @@ export async function setSessionEffort(sessionId: string, effort: string | null)
   let mode: "restart" | "stored" = "stored";
   if (s) {
     if (row.state === "running") {
-      throw new Error("session is running — interrupt it, then change effort (the harness can't swap mid-turn)");
+      throw new Error("session is running: interrupt it, then change effort (the harness can't swap mid-turn)");
     }
     s.adapter.dispose(s.handle);
     live.delete(sessionId);
-    const handle = await s.adapter.spawn({
-      sessionId,
-      cwd: row.cwd,
-      model: row.model ?? undefined,
-      provider: row.provider ?? undefined,
-      effort: clean ?? undefined,
-      resumeRef: row.harness_ref ?? undefined,
-    });
+    let handle: AdapterHandle;
+    try {
+      handle = await s.adapter.spawn({
+        sessionId,
+        cwd: row.cwd,
+        model: row.model ?? undefined,
+        provider: row.provider ?? undefined,
+        effort: clean ?? undefined,
+        resumeRef: row.harness_ref ?? undefined,
+      });
+    } catch (err) {
+      /* the session is out of `live` now and can't take prompts, so the row
+         must not keep saying idle: report error like createSession does, and
+         sendPrompt's resume-on-prompt path picks it back up */
+      const detail = err instanceof Error ? err.message : String(err);
+      store.setSessionState(sessionId, "error");
+      sink({ type: "session.state", sessionId, state: "error", detail });
+      throw err;
+    }
     goLive(sessionId, s.adapter, handle);
     if (handle.harnessRef && handle.harnessRef !== row.harness_ref) {
       store.setHarnessRef(sessionId, handle.harnessRef);
@@ -418,9 +430,10 @@ export async function setSessionEffort(sessionId: string, effort: string | null)
   sink({ type: "session.updated", sessionId, effort: clean });
 
   const noteId = `m-sys-${Date.now()}`;
+  const suffix = mode === "restart" ? " (harness restarted, history kept)" : " (applies when the session resumes)";
   const note = clean
-    ? `reasoning effort ${mode === "restart" ? "switched" : "set"} to ${clean}${mode === "restart" ? " — harness restarted, history kept" : " — applies when the session resumes"}`
-    : `reasoning effort cleared to the harness default${mode === "restart" ? " — harness restarted, history kept" : " — applies when the session resumes"}`;
+    ? `reasoning effort ${mode === "restart" ? "switched" : "set"} to ${clean}${suffix}`
+    : `reasoning effort cleared to the harness default${suffix}`;
   sink({ type: "msg.start", sessionId, messageId: noteId, role: "system", at: Date.now() });
   sink({ type: "msg.chunk", sessionId, messageId: noteId, text: note });
   sink({ type: "msg.done", sessionId, messageId: noteId });

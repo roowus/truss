@@ -450,6 +450,7 @@ app.post("/api/sessions/:id/upload", { bodyLimit: 34 * 1024 * 1024 }, async (req
 app.post("/api/sessions/:id/effort", async (req, reply) => {
   const { id } = req.params as { id: string };
   const { effort } = (req.body ?? {}) as { effort?: string | null };
+  if (effort != null && typeof effort !== "string") return reply.code(400).send({ error: "effort must be a string or null" });
   try {
     return await setSessionEffort(id, effort ?? null);
   } catch (err) {

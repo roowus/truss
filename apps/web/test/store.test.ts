@@ -245,6 +245,27 @@ test("session.updated patches model/provider in place (model switch reflects imm
   delete store.state.sessions["ms-1"];
 });
 
+test("session.updated patches effort in place, and null clears it (issue #27)", async () => {
+  store.set((s) => ({
+    sessions: {
+      ...s.sessions,
+      "ef-1": {
+        id: "ef-1", harness: "pi", title: "t", cwd: "/tmp", state: "idle",
+        created_at: 0, updated_at: 0, live: true, effort: "low",
+      } as never,
+    },
+  }));
+  const onFrame = store as unknown as { onFrame: (f: { seq: number; ev: unknown }) => void };
+  onFrame.onFrame({ seq: 20, ev: { type: "session.updated", sessionId: "ef-1", effort: "high" } as never });
+  assert.equal(store.state.sessions["ef-1"].effort, "high", "the header chip refreshes on the broadcast");
+  onFrame.onFrame({ seq: 21, ev: { type: "session.updated", sessionId: "ef-1", effort: null } as never });
+  assert.equal(store.state.sessions["ef-1"].effort, undefined, "null clears back to the harness default");
+  onFrame.onFrame({ seq: 22, ev: { type: "session.updated", sessionId: "ef-1", title: "renamed" } as never });
+  assert.equal(store.state.sessions["ef-1"].title, "renamed");
+  assert.equal(store.state.sessions["ef-1"].effort, undefined, "unrelated updates keep the cleared effort cleared");
+  delete store.state.sessions["ef-1"];
+});
+
 test("msg.start attachments ride onto the message (transcript chips survive reload); absent stays absent", () => {
   const atts = [{ name: "error.log", path: ".truss-uploads/error.log", size: 1234, mime: "text/plain" }];
   let v = emptyView();

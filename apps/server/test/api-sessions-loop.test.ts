@@ -187,6 +187,34 @@ test("model switch over HTTP: live mode, row updated, transcript note, next turn
   assert.equal(bad.status, 400, "missing model rejected");
 });
 
+test("effort over HTTP: a non-string level is a 400, a real one restarts and persists (issue #27)", async () => {
+  const c = await api("/api/sessions", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ harness: "pi", cwd: "/tmp", title: "loop-effort", provider: "test-prov", model: "m-fast" }),
+  });
+  const id = c.body.session.id;
+
+  const bad = await api(`/api/sessions/${id}/effort`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ effort: 5 }),
+  });
+  assert.equal(bad.status, 400, "a non-string level is rejected at the route, not as a 409 TypeError from normalizeEffort");
+  assert.equal(bad.body.error, "effort must be a string or null");
+
+  const ok = await api(`/api/sessions/${id}/effort`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ effort: "high" }),
+  });
+  assert.equal(ok.status, 200);
+  assert.equal(ok.body.mode, "restart", "pi has no live effort hook, so a live session respawns");
+
+  const meta = await api(`/api/sessions/${id}`);
+  assert.equal(meta.body.session.effort, "high", "the row carries the new level");
+});
+
 test("closed session resumes on prompt with the stored harness ref (server-restart path)", async () => {
   const c = await api("/api/sessions", {
     method: "POST",

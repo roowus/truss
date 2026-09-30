@@ -5,19 +5,16 @@ import type { AdapterHandle, HarnessAdapter, SessionOpts } from "../src/adapters
 
 /* SPEC-TESTS for a reasoning-effort changer in chats —
    https://github.com/roowus/truss/issues/27
-   ("Add effort changer in chats"). These FAIL on purpose today: they pin the
-   contract a fix must satisfy.
+   ("Add effort changer in chats"). These pin the contract the implementation
+   satisfies.
 
-   Today there is no effort anywhere: the chat header has a model dropdown
-   and nothing else; SessionOpts carries { sessionId, cwd, model, provider,
-   resumeRef } (adapters/types.ts:5-13); the session row stores model +
-   provider as a pair (the "never split them" migration). Effort joins that
-   pair: it's per-session state that must travel through create, live-switch,
-   and resume exactly like model does.
+   The session row stores model + provider as a pair (the "never split them"
+   migration). Effort joins that pair: it's per-session state that must
+   travel through create, live-switch, and resume exactly like model does.
 
    The contract:
 
-   - SessionOpts gains effort?: string | null; createSession forwards it to
+   - SessionOpts carries effort?: string | null; createSession forwards it to
      adapter.spawn AND persists it on the session row;
    - sessions.setSessionEffort(id, effort) — mirrors switchModel: live
      session → respawn carrying the new effort (restart mode); not-live →
@@ -28,12 +25,14 @@ import type { AdapterHandle, HarnessAdapter, SessionOpts } from "../src/adapters
    - normalizeEffort(v): "High" → "high", whitespace/empty/null → null
      (cleared), unknown levels pass through (harnesses differ);
 
-   Adapter wiring (dsh config-option / hermes reasoning config / pi thinking
-   level / claude thinking budget) and the header selector are acceptance
-   criteria, not here. */
+   Adapter wiring for the remaining harnesses (dsh config-option / hermes
+   reasoning config / claude thinking budget) is acceptance criteria,
+   not here. */
 
 interface FakeRec {
   spawnOpts: SessionOpts[];
+  /** when set, the next spawn rejects (the failed-respawn path) */
+  failSpawn?: boolean;
 }
 
 function fakeAdapter(id: string, rec: FakeRec): HarnessAdapter {
@@ -44,6 +43,7 @@ function fakeAdapter(id: string, rec: FakeRec): HarnessAdapter {
       return [];
     },
     async spawn(opts: SessionOpts): Promise<AdapterHandle> {
+      if (rec.failSpawn) throw new Error("spawn blew up");
       rec.spawnOpts.push(opts);
       return { sessionId: opts.sessionId, harnessRef: `ref-${opts.sessionId}` };
     },
@@ -75,7 +75,7 @@ test("createSession forwards effort to the adapter spawn and persists it on the 
     assert.equal(
       (rec.spawnOpts[0] as any).effort,
       "high",
-      "effort must reach the harness — today SessionOpts drops it (adapters/types.ts:5-13)",
+      "effort must reach the harness, not just the row",
     );
     assert.equal((db.store.getSession(s.id) as any).effort, "high", "effort persists on the session row (a new column, like provider)");
   } finally {
@@ -118,6 +118,43 @@ test("effort survives resume: the model+provider+effort triple never splits", as
     assert.equal(ok, true);
     assert.equal(rec.spawnOpts.length, 2, "respawned from the stored ref");
     assert.equal((rec.spawnOpts[1] as any).effort, "max", "resume carries effort — a model-only resume silently reverts effort");
+  } finally {
+    cleanup();
+  }
+});
+
+test("switchModel's restart path carries the stored effort (the triple never splits)", async () => {
+  const { db, sessions, rec, mk, cleanup } = await setup("effort-model-switch");
+  try {
+    const s = await mk({ effort: "high" });
+    /* the fake has no setModel, so switchModel takes the dispose+respawn path */
+    await (sessions as any).switchModel(s.id, "m2", "p2");
+    assert.equal(rec.spawnOpts.length, 2, "restart mode: dispose + respawn");
+    assert.equal((rec.spawnOpts[1] as any).model, "m2");
+    assert.equal((rec.spawnOpts[1] as any).effort, "high", "a model switch must not silently revert effort (issue #27 criterion 2)");
+    assert.equal((db.store.getSession(s.id) as any).effort, "high", "row effort untouched by the model switch");
+  } finally {
+    cleanup();
+  }
+});
+
+test("a failed respawn marks the session error instead of leaving it dead but idle", async () => {
+  const { db, sessions, rec, mk, cleanup } = await setup("effort-respawn-fail");
+  try {
+    const states: string[] = [];
+    sessions.setBroadcaster((f: any) => {
+      if (f.ev.type === "session.state") states.push(f.ev.state);
+    });
+    try {
+      const s = await mk({ effort: "low" });
+      rec.failSpawn = true;
+      await assert.rejects(() => (sessions as any).setSessionEffort(s.id, "high"), /blew up/);
+      assert.equal(db.store.getSession(s.id)!.state, "error", "the session is out of `live` and can't take prompts, so the row must say error");
+      assert.ok(states.includes("error"), "session.state error so the UI tells the truth");
+      assert.equal((db.store.getSession(s.id) as any).effort, "low", "the failed switch left the stored effort untouched");
+    } finally {
+      sessions.setBroadcaster(() => {});
+    }
   } finally {
     cleanup();
   }

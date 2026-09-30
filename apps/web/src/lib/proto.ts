@@ -8,6 +8,9 @@ export interface Capabilities {
   subagents: boolean;
   streaming: boolean;
   queueWhileRunning: boolean;
+  /** the harness consumes a session's reasoning effort (issue #27); absent
+     means it doesn't, so the header hides the effort selector */
+  effort?: boolean;
 }
 
 export interface HarnessInfo {
