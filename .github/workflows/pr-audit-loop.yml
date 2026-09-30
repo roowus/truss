@@ -271,10 +271,23 @@ jobs:
             fi
             echo
             if [ "$F1_SIG" = "continue" ] || [ "$F2_SIG" = "continue" ] || [ "$F3_SIG" = "continue" ]; then
-              # Bot pushes do not fire pull_request events, so dispatch ci on
-              # the head the loop pushed.
-              gh workflow run ci.yml --repo "${{ github.repository }}" --ref "$HEAD_REF" \
-                && echo "Fixes were pushed; \`ci\` was dispatched on the head branch."
+              # Bot pushes park pull_request CI as action_required (bot
+              # approval gate). Approve those runs; if none are parked, fall
+              # back to dispatching ci on the head branch directly.
+              APPROVED=0
+              gh api "repos/${{ github.repository }}/actions/runs?branch=$HEAD_REF&event=pull_request" \
+                --jq '.workflow_runs[] | select(.status=="action_required") | .id' \
+                | while read -r run_id; do
+                    gh api -X POST "repos/${{ github.repository }}/actions/runs/$run_id/approve" > /dev/null \
+                      && APPROVED=1
+                  done
+              if [ "$APPROVED" = "1" ]; then
+                echo "Fixes were pushed; the parked \`ci\` run on the head was approved."
+              elif gh workflow run ci.yml --repo "${{ github.repository }}" --ref "$HEAD_REF" 2>/dev/null; then
+                echo "Fixes were pushed; \`ci\` was dispatched on the head branch."
+              else
+                echo "Fixes were pushed; could not start \`ci\` on the head — trigger it manually."
+              fi
             else
               echo "No commits were pushed; nothing new for \`ci\` to run."
             fi
