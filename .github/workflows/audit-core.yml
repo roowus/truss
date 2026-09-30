@@ -325,6 +325,7 @@ jobs:
           {
             echo "majors<<TRUSS_MAJORS_EOF"
             cat "$MAJORS"
+            echo ""  # guard: cat output may lack a trailing newline — without it the closing delimiter lands mid-line and the output command dies
             echo "TRUSS_MAJORS_EOF"
           } >> "$GITHUB_OUTPUT"
 
