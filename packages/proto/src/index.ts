@@ -74,7 +74,9 @@ export interface TodoItem {
   status: TodoStatus;
   doneAt?: number;
   createdBy: "user" | "agent";
-  sharedEditors: string[]; // sessionIds approved via todo-access cards
+  sharedEditors: string[];
+  /** view-share roster (issue #26) — distinct from edit sharing */
+  sharedWith: string[]; // sessionIds approved via todo-access cards
   deniedEditors: string[]; // sessionIds denied (their edits are refused quietly)
   createdAt: number;
   updatedAt: number;
@@ -92,7 +94,9 @@ export interface FeedItem {
   importance: FeedImportance;
   data: Record<string, unknown>; // per-type payload (perm requestId/options, todo id, …)
   state: FeedState;
-  sharedWith: string[]; // sessionIds that may read it via MCP
+  sharedWith: string[];
+  /** idempotency key — same key updates instead of duplicating */
+  dedupeKey?: string; // sessionIds that may read it via MCP
   createdAt: number;
   updatedAt: number;
 }

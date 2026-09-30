@@ -335,7 +335,7 @@ test("feed REST: inbox visibility, state transitions, share into a session chat"
     const deadShare = await post(`/api/feed/${item.id}/share`, { sessionId: "bogus-session" });
     assert.equal(deadShare.status, 400, "prompt into a dead session fails");
     const mutated = (await api("/api/feed?state=saved")).body.items.find((i: Ev) => i.id === item.id);
-    assert.ok(mutated.sharedWith.includes("bogus-session"), "SURPRISE: failed share still records sharedWith (mutation precedes the prompt)");
+    assert.ok(!mutated.sharedWith.includes("bogus-session"), "FIXED (issue #24): a failed share records nothing — validate both ends, prompt, then record");
 
     /* dismiss hides from the default inbox, kept under the filter */
     const dis = await post(`/api/feed/${item.id}/state`, { state: "dismissed" });

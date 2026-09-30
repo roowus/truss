@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import type { IDockviewPanelProps } from "dockview-react";
 import { store, useApp, useNow } from "@/lib/store";
 import { ago, shortPath } from "@/lib/format";
@@ -6,6 +6,7 @@ import { Btn, Empty, Icon, Select, Spinner } from "@/components/ui";
 import { openPanel } from "@/lib/workspace";
 import type { TodoItem, TodoPriority, TodoSubtask } from "@/lib/proto";
 import { cn } from "@/utils/cn";
+import { SharePop } from "./FeedPanel";
 
 /**
  * Todos — the user's checklist, filed mostly by agents (file_todo MCP tool).
@@ -391,6 +392,7 @@ function SubtaskBar({ t, patch }: { t: TodoItem; patch: ViewProps["patch"] }) {
 function TodoRow({ t, sessions, now, patch }: { t: TodoItem } & Omit<ViewProps, "items">) {
   const [open, setOpen] = useState(false);
   const s = t.sessionId ? sessions[t.sessionId] : undefined;
+  const share = useTodoShare(t);
   return (
     <div className={cn("group border-b border-[var(--t-line)]/40 hover:bg-white/[0.02]", t.status !== "open" && "opacity-55")}>
       <div className="flex items-center gap-2 px-3 py-1.5">
@@ -415,6 +417,7 @@ function TodoRow({ t, sessions, now, patch }: { t: TodoItem } & Omit<ViewProps, 
             <Icon name="chat" size={11} />
           </button>
         )}
+        {share.button}
         <span className="shrink-0 font-mono text-[9.5px] text-[var(--t-dim)] tabular-nums w-12 text-right">{ago(t.updatedAt, now)}</span>
       </div>
       {open && <TodoEditor t={t} patch={patch} onClose={() => setOpen(false)} />}
@@ -425,6 +428,7 @@ function TodoRow({ t, sessions, now, patch }: { t: TodoItem } & Omit<ViewProps, 
 function TodoCard({ t, sessions, now, patch }: { t: TodoItem } & Omit<ViewProps, "items">) {
   const [open, setOpen] = useState(false);
   const s = t.sessionId ? sessions[t.sessionId] : undefined;
+  const share = useTodoShare(t);
   return (
     <div className={cn("rounded-md border border-[var(--t-line)] bg-[var(--t-bg1)] px-2.5 py-2", t.status !== "open" && "opacity-55")}>
       <div className="flex items-start gap-1.5">
@@ -443,6 +447,7 @@ function TodoCard({ t, sessions, now, patch }: { t: TodoItem } & Omit<ViewProps,
         <DeadlineChip t={t} now={now} />
         {t.labels.slice(0, 3).map((l) => <span key={l} className="font-mono text-[9px] px-1 rounded bg-[var(--t-bg2)] text-[var(--t-mute)]">{l}</span>)}
         <span className="ml-auto" />
+        {share.button}
         {s && <button onClick={() => openPanel("chat", { sessionId: s.id })} className="text-[var(--t-dim)] hover:text-[var(--t-fg)]" title={`filed by ${s.title}`}><Icon name="chat" size={10} /></button>}
       </div>
       {open && <TodoEditor t={t} patch={patch} onClose={() => setOpen(false)} />}
@@ -538,4 +543,38 @@ function TodoEditor({ t, patch, onClose }: { t: TodoItem; patch: ViewProps["patc
       </div>
     </div>
   );
+}
+
+
+/* todo sharing (issue #26): a row-level share button opening the feed's
+   session picker, view-sharing the todo and prompting the target session */
+function useTodoShare(t: TodoItem) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLButtonElement>(null);
+  const button = (
+    <>
+      <button
+        ref={ref}
+        onClick={() => setOpen((v) => !v)}
+        className="shrink-0 opacity-0 group-hover:opacity-70 hover:!opacity-100 text-[var(--t-dim)] hover:text-[var(--t-fg)]"
+        title="Share this todo to a session (view-only; edits still need approval)"
+        aria-label={`Share todo: ${t.title}`}
+      >
+        <Icon name="send" size={10} />
+      </button>
+      {open && ref.current && (
+        <SharePop
+          anchor={ref.current}
+          item={{ id: t.id, sharedWith: t.sharedWith ?? [] } as never}
+          onClose={() => setOpen(false)}
+          onShare={(sessionId, note) =>
+            store.be!.shareTodo(t.id, sessionId, note).then(
+              () => void store.refreshTodos(),
+            )
+          }
+        />
+      )}
+    </>
+  );
+  return { button };
 }
