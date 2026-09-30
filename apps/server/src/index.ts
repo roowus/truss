@@ -28,7 +28,7 @@ import {
   restoreSession,
   type EventFrame,
 } from "./sessions.js";
-import { attachTerminal, closeTerminal, createTerminal, listTerminals, renameTerminal } from "./terminal.js";
+import { attachTerminal, closeTerminal, createTerminal, listTerminals, setTerminalBroadcaster, renameTerminal } from "./terminal.js";
 import { createSkill, listSkills, setSkillDisabled, trashSkill } from "./skills.js";
 import {
   createPath as createWorkspacePath,
@@ -85,6 +85,7 @@ setBroadcaster((frame: EventFrame) => {
 
 /* feed/todo mutations ride the same bus as broadcast-only frames */
 setFeedBroadcaster((item) => broadcastRaw({ type: "feed.upsert", sessionId: item.sessionId ?? "", item }));
+setTerminalBroadcaster((ev) => broadcastRaw(ev));
 setTodoBroadcaster((todo) => broadcastRaw({ type: "todo.upsert", sessionId: todo.sessionId ?? "", todo }));
 startFeedAutopost();
 

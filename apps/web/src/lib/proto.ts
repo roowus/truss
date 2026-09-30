@@ -238,6 +238,8 @@ type At = string | number;
 
 export type ProtoEvent =
   | (Base & { type: "session.created"; harness: HarnessId; title: string; cwd: string; model?: string; project?: string; at: At })
+  | (Base & { type: "terminal.upsert"; terminal: { id: string; title: string; cwd: string; alive: boolean } })
+  | (Base & { type: "terminal.deleted"; id: string })
   | (Base & { type: "session.state"; state: SessionState; detail?: string })
   | (Base & { type: "session.updated"; title?: string; project?: string | null; archived?: boolean; model?: string | null; provider?: string | null; effort?: string | null })
   | (Base & { type: "session.deleted" })

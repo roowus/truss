@@ -141,6 +141,23 @@ export function openDailyDriver(sessionId: string) {
   openPanel("context", { sessionId });
 }
 
+/* a not-ready workspace must not kill a fresh shell (issue #38): keep it
+   (it's on the shells list) and open the tab when the workspace comes up */
+function openWhenReady(kind: "terminal", panelOpts: OpenPanelOptions, title: string) {
+  let tries = 0;
+  const t = window.setInterval(() => {
+    const panel = openPanel(kind, panelOpts);
+    if (panel) {
+      window.clearInterval(t);
+      return;
+    }
+    if (++tries > 40) {
+      window.clearInterval(t);
+      store.toast("info", "Shell is ready", `${title} is in the shells list — open it when the workspace finishes loading`);
+    }
+  }, 250);
+}
+
 export async function openAgentShell(sessionId: string, opts: { spaceId?: string; groupId?: string } = {}) {
   const s = store.state.sessions[sessionId];
   if (!s) return;
@@ -150,9 +167,9 @@ export async function openAgentShell(sessionId: string, opts: { spaceId?: string
     const t = await store.createTerminal({ cwd: s.cwd, title: `shell · ${s.title}` });
     terminalId = t.id;
     const panel = openPanel("terminal", { terminalId: t.id, sessionId, title: t.title ?? `shell · ${s.title}`, spaceId, groupId: opts.groupId });
-    if (!panel) await store.deleteTerminal(t.id);
+    if (!panel) openWhenReady("terminal", { terminalId: t.id, sessionId, title: t.title ?? `shell · ${s.title}`, spaceId, groupId: opts.groupId }, t.title ?? `shell · ${s.title}`);
   } catch (e: any) {
-    if (terminalId) await store.deleteTerminal(terminalId);
+    if (terminalId) await store.deleteTerminal(terminalId); // a FAILED spawn still cleans up — only not-ready keeps
     store.toast("error", "Couldn't start agent shell", e.message);
   }
 }
@@ -164,7 +181,7 @@ export async function openFreeShell(cwd?: string, opts: { spaceId?: string; grou
     const t = await store.createTerminal({ cwd, title: "shell" });
     terminalId = t.id;
     const panel = openPanel("terminal", { terminalId: t.id, title: t.title ?? "shell", spaceId, groupId: opts.groupId });
-    if (!panel) await store.deleteTerminal(t.id);
+    if (!panel) openWhenReady("terminal", { terminalId: t.id, title: t.title ?? "shell", spaceId, groupId: opts.groupId }, t.title ?? "shell");
   } catch (e: any) {
     if (terminalId) await store.deleteTerminal(terminalId);
     store.toast("error", "Couldn't start shell", e.message);

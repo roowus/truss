@@ -450,6 +450,21 @@ class Store {
     }
     const id = ev.sessionId;
     /* deleted on any device → gone here too, instantly (row + cached view) */
+    /* terminal lifecycle over the bus (issue #38): shell lists stay live
+       on every device, no reload */
+    if (ev.type === "terminal.upsert") {
+      const t = ev.terminal;
+      this.set((s) => {
+        const rest = s.terminals.filter((x) => x.id !== t.id);
+        return { terminals: [...rest, t] };
+      });
+      return;
+    }
+    if (ev.type === "terminal.deleted") {
+      this.set((s) => ({ terminals: s.terminals.filter((x) => x.id !== ev.id) }));
+      return;
+    }
+
     if (ev.type === "session.deleted") {
       this.refreshTrash();
       this.set((s) => {
