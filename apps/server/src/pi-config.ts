@@ -44,18 +44,45 @@ export async function syncPiModelsJson(): Promise<{ providers: number; models: n
       baseUrl: p.endpoint,
       api: "openai-completions",
       apiKey: "truss-key-proxy",
-      models: p.models.map((m) => ({
-        id: m.id,
-        name: m.id.split("/").pop() ?? m.id,
-        reasoning: m.reasoning ?? false,
-        contextWindow: m.context ?? 128_000,
-        maxTokens: Math.min(m.context ?? 128_000, 64_000),
-        input: m.vision ? ["text", "image"] : ["text"],
-      })),
+      models: p.models.map((m) => piModelEntry(m, pid)),
     };
     count += p.models.length;
   }
   mkdirSync(join(homedir(), ".pi", "agent"), { recursive: true });
   writeFileSync(PI_MODELS, JSON.stringify(cfg, null, 2) + "\n", { mode: 0o600 });
   return { providers: Object.keys(PROVIDER_IDS).filter((k) => cfg.providers[PROVIDER_IDS[k as keyof typeof PROVIDER_IDS]]).length, models: count };
+}
+
+/* ── model entry building (pure; issue #28) ── */
+
+/** providers whose reasoning models REFUSE "thinking: none" (zai's 1210).
+   pi's untouched default sends off → we floor off→low so an always-thinking
+   model never gets a disabled value. */
+export const THINKING_FLOOR: Record<string, string> = { "truss-zai": "low" };
+
+interface CatalogModelLike {
+  id: string;
+  name?: string;
+  reasoning?: boolean;
+  context?: number;
+  vision?: boolean;
+}
+
+/** one models.json entry. Floored reasoning models carry a thinkingLevelMap
+   whose every value is zai-legal (low/high/max — never none/disabled/off). */
+export function piModelEntry(m: CatalogModelLike, providerId: string) {
+  const entry: Record<string, unknown> = {
+    id: m.id,
+    name: m.name ?? m.id.split("/").pop() ?? m.id,
+    reasoning: m.reasoning ?? false,
+    contextWindow: m.context ?? 128_000,
+    maxTokens: Math.min(m.context ?? 128_000, 64_000),
+    input: m.vision ? ["text", "image"] : ["text"],
+  };
+  const floor = THINKING_FLOOR[providerId];
+  if (floor && m.reasoning) {
+    /* pi's levels: off/minimal/low/medium/high/max → zai-legal values */
+    entry.thinkingLevelMap = { off: floor, minimal: floor, low: "low", medium: "high", high: "high", max: "max" };
+  }
+  return entry;
 }
