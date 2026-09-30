@@ -40,7 +40,7 @@ import { saveUpload } from "./uploads.js";
 import { gitBranches, gitDiff, gitGraph, gitStatus, gitSwitch } from "./git.js";
 import { createTask, deleteTask, listTasks, runTask, updateTask, type TaskStatus } from "./tasks.js";
 import { createTodo, listTodos, resolveTodoAccess, setTodoBroadcaster, userUpdateTodo } from "./todos.js";
-import { listFeed, setFeedBroadcaster, setFeedState, shareFeedItem } from "./feed.js";
+import { listFeed, setFeedBroadcaster, setFeedState, shareFeedItem, shareFeedToSession, getFeedItem } from "./feed.js";
 import { startFeedAutopost } from "./feed-autopost.js";
 import { composePractices, getGlobalPractices, saveGlobalPractices } from "./practices.js";
 import { createHost, deleteHost, listHosts, rotateHostToken, setHostRevoked, verifyAgentToken } from "./hosts.js";
@@ -645,11 +645,9 @@ app.post("/api/feed/:id/share", async (req, reply) => {
   const { sessionId } = (req.body ?? {}) as { sessionId?: string };
   try {
     if (!sessionId) throw new Error("missing sessionId");
-    const item = shareFeedItem(id, sessionId);
-    /* share = both: the post lands in the target session's chat too */
-    const text = `**[shared from your feed]** ${item.title}${item.body ? `\n\n${item.body}` : ""}`;
-    await sendPrompt(sessionId, text);
-    return { item };
+    const { note } = (req.body ?? {}) as { note?: string };
+    await shareFeedToSession(id, sessionId, note);
+    return { item: getFeedItem(id) };
   } catch (e: any) {
     return reply.code(400).send({ error: e.message ?? String(e) });
   }
