@@ -22,6 +22,8 @@ import {
   sendPrompt,
   switchModel,
   setBroadcaster,
+  purgeSession,
+  restoreSession,
   type EventFrame,
 } from "./sessions.js";
 import { attachTerminal, closeTerminal, createTerminal, listTerminals } from "./terminal.js";
@@ -417,6 +419,27 @@ app.post("/api/projects/archive", async (req, reply) => {
   if (project == null) return reply.code(400).send({ error: "project required" });
   const n = setProjectArchived(project, archived !== false);
   return { ok: true, archived: archived !== false, sessions: n };
+});
+
+/* the 30-day trash (issue #5): list, restore, delete-forever */
+app.get("/api/trash", async () => ({ sessions: store.listDeletedSessions() }));
+app.post("/api/sessions/:id/restore", async (req, reply) => {
+  const { id } = req.params as { id: string };
+  try {
+    restoreSession(id);
+    return { ok: true };
+  } catch (err) {
+    return reply.code(404).send({ error: String(err instanceof Error ? err.message : err) });
+  }
+});
+app.post("/api/sessions/:id/purge", async (req, reply) => {
+  const { id } = req.params as { id: string };
+  try {
+    purgeSession(id);
+    return { ok: true };
+  } catch (err) {
+    return reply.code(404).send({ error: String(err instanceof Error ? err.message : err) });
+  }
 });
 
 app.delete("/api/sessions/:id", async (req) => {

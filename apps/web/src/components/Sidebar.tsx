@@ -121,6 +121,9 @@ export function Sidebar({ onNew }: { onNew: () => void }) {
           })
         )}
 
+        {/* recently deleted (30-day trash) — restore or delete forever */}
+        <TrashSection />
+
         {/* archived sessions collect here, collapsed by default */}
         {archived.length > 0 && (
           <div className="mt-2">
@@ -201,7 +204,7 @@ function Section({ title, action, children }: { title: string; action?: ReactNod
   );
 }
 
-function SessionRow({ s, now, archived }: { s: SessionMeta; now: number; archived?: boolean }) {
+function SessionRow({ s, now, archived, trashView }: { s: SessionMeta; now: number; archived?: boolean; trashView?: boolean }) {
   const focused = useApp((st) => st.focused === s.id);
   const pending = useApp((st) => st.views[s.id]?.pending.length ?? 0);
   const [confirm, setConfirm] = useState(false);
@@ -237,14 +240,52 @@ function SessionRow({ s, now, archived }: { s: SessionMeta; now: number; archive
             <IconBtn icon="archive" label="Archive (hide from sidebar; keeps history)" className="w-6 h-6" onClick={() => store.archiveSession(s.id, true)} />
           </>
         )}
-        {!dead && !archived && <IconBtn icon="power" label="Close (stop process, keep history)" className="w-6 h-6" onClick={() => store.closeSession(s.id)} />}
-        <IconBtn
-          icon="trash"
-          label={confirm ? "Click again to delete permanently" : "Delete session + history"}
-          className={cn("w-6 h-6", confirm && "!text-[var(--t-red)] bg-[color-mix(in_oklab,var(--t-red)_15%,transparent)]")}
-          onClick={() => (confirm ? store.deleteSession(s.id) : setConfirm(true))}
-        />
+        {!dead && !archived && !trashView && <IconBtn icon="power" label="Close (stop process, keep history)" className="w-6 h-6" onClick={() => store.closeSession(s.id)} />}
+        {trashView ? (
+          <>
+            <IconBtn icon="retry" label="Restore (back to the sidebar, history intact)" className="w-6 h-6" onClick={() => void store.restoreSession(s.id)} />
+            <IconBtn
+              icon="trash"
+              label={confirm ? "Click again: gone forever, no undo" : "Delete forever (no undo)"}
+              className={cn("w-6 h-6", confirm && "!text-[var(--t-red)] bg-[color-mix(in_oklab,var(--t-red)_15%,transparent)]")}
+              onClick={() => (confirm ? store.purgeSession(s.id) : setConfirm(true))}
+            />
+          </>
+        ) : (
+          <IconBtn
+            icon="trash"
+            label={confirm ? "Click again to move to trash" : "Move to trash (recoverable for 30 days)"}
+            className={cn("w-6 h-6", confirm && "!text-[var(--t-red)] bg-[color-mix(in_oklab,var(--t-red)_15%,transparent)]")}
+            onClick={() => (confirm ? store.deleteSession(s.id) : setConfirm(true))}
+          />
+        )}
       </span>
+    </div>
+  );
+}
+
+
+/* ---------------- recently deleted (30-day trash) ---------------- */
+function TrashSection() {
+  const trash = useApp((s) => s.trash);
+  const [open, setOpen] = useState(false);
+  const now = useNow(30_000, open);
+  useEffect(() => {
+    void store.refreshTrash();
+  }, []);
+  if (trash.length === 0) return null;
+  return (
+    <div className="mt-2">
+      <button
+        className="w-full flex items-center gap-1.5 px-2 h-7 text-[10.5px] font-medium uppercase tracking-[0.08em] text-[var(--t-dim)] hover:text-[var(--t-mute)]"
+        onClick={() => setOpen((o) => !o)}
+      >
+        <Icon name="chev" size={9} className={cn("transition-transform", open && "rotate-90")} />
+        <Icon name="trash" size={10} />
+        <span>recently deleted</span>
+        <span className="ml-auto tabular-nums">{trash.length}</span>
+      </button>
+      {open && trash.map((s) => <SessionRow key={s.id} s={s} now={now} trashView />)}
     </div>
   );
 }

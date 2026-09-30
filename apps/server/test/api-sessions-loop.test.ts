@@ -244,13 +244,34 @@ test("archive hides from the default list; hard delete removes row + events", as
   row = list.body.sessions.find((s: { id: string }) => s.id === id);
   assert.equal(row.archived, 0);
 
-  /* hard delete cascades the event log */
+  /* delete is a 30-day trash move (issue #5): row kept, log kept, off the main list */
   const del = await api(`/api/sessions/${id}?hard=1`, { method: "DELETE" });
   assert.equal(del.status, 200);
   const meta = await api(`/api/sessions/${id}`);
-  assert.equal(meta.status, 404);
+  assert.equal(meta.status, 200, "trashed sessions keep their row");
+  assert.ok(meta.body.session.deleted_at, "trash stamp set");
+
+  const trash = await api("/api/trash");
+  assert.ok(trash.body.sessions.some((t: Ev) => t.id === id), "listed in the trash");
+
+  /* restore round-trips it */
+  const res = await api(`/api/sessions/${id}/restore`, { method: "POST" });
+  assert.equal(res.status, 200);
+  const back = await api(`/api/sessions/${id}`);
+  assert.equal(back.body.session.deleted_at, null, "stamp cleared");
+
+  /* and purge is the only true delete */
+  await api(`/api/sessions/${id}?hard=1`, { method: "DELETE" });
+  const purge = await api(`/api/sessions/${id}/purge`, { method: "POST" });
+  assert.equal(purge.status, 200);
+  const gone = await api(`/api/sessions/${id}`);
+  assert.equal(gone.status, 404, "purged: row gone for good");
   const ev = await api(`/api/sessions/${id}/events`);
-  assert.equal(ev.status, 404, "events gone with the session");
+  assert.equal(ev.status, 404, "events gone with the purge");
+
+  /* ghosts */
+  assert.equal((await api(`/api/sessions/ghost/purge`, { method: "POST" })).status, 404);
+  assert.equal((await api(`/api/sessions/ghost/restore`, { method: "POST" })).status, 404);
 });
 
 test("unknown sessions reject cleanly everywhere", async () => {

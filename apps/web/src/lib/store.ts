@@ -82,6 +82,8 @@ export interface AppState {
   feed: Record<string, FeedItem>;
   feedLoaded: boolean;
   toasts: Toast[];
+  /** the 30-day trash (recently deleted) — restored or purged from the sidebar */
+  trash: SessionMeta[];
   focused?: string;
   bootError?: string;
 }
@@ -229,6 +231,7 @@ class Store {
     feed: {},
     feedLoaded: false,
     toasts: [],
+    trash: [],
   };
   private subs = new Set<() => void>();
   private raf = 0;
@@ -301,7 +304,7 @@ class Store {
     await this.refreshSessions();
     await this.refreshTerminals();
     await this.refreshAgents();
-    await Promise.all([this.refreshTodos(), this.refreshFeed(), this.refreshHosts()]);
+    await Promise.all([this.refreshTodos(), this.refreshFeed(), this.refreshHosts(), this.refreshTrash()]);
     for (const id of Object.keys(this.state.views)) {
       if (this.state.sessions[id]) void this.rehydrate(id);
     }
@@ -327,6 +330,32 @@ class Store {
   }
 
   /* ---------- sessions ---------- */
+  async refreshTrash() {
+    try {
+      const { sessions } = await this.be.trash();
+      this.set({ trash: sessions });
+    } catch {
+      /* older server without the trash route */
+    }
+  }
+  async restoreSession(id: string) {
+    try {
+      await this.be.restoreSession(id);
+      await Promise.all([this.refreshSessions(), this.refreshTrash()]);
+      this.toast("ok", "Restored", "the chat is back with its full history");
+    } catch (e: any) {
+      this.toast("error", "Restore failed", e.message);
+    }
+  }
+  async purgeSession(id: string) {
+    try {
+      await this.be.purgeSession(id);
+      await this.refreshTrash();
+    } catch (e: any) {
+      this.toast("error", "Delete forever failed", e.message);
+    }
+  }
+
   async refreshSessions() {
     try {
       const { sessions } = await this.be.listSessions();
@@ -412,6 +441,7 @@ class Store {
     const id = ev.sessionId;
     /* deleted on any device → gone here too, instantly (row + cached view) */
     if (ev.type === "session.deleted") {
+      this.refreshTrash();
       this.set((s) => {
         const sessions = { ...s.sessions };
         const views = { ...s.views };
@@ -427,6 +457,7 @@ class Store {
     /* metadata changes (archive/retitle/regroup) patch the row in place */
     if (ev.type === "session.updated") {
       const meta = this.state.sessions[id];
+      if (!meta) this.refreshSessionsSoon(); // a restore re-lists it here
       if (meta) {
         this.set((s) => ({
           sessions: {
