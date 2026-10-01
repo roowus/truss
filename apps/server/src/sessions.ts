@@ -125,7 +125,9 @@ async function boundedSpawn(
   let spawnRej: (e: Error) => void = () => {};
   const budgetPromise = new Promise<never>((_, rej) => (spawnRej = rej));
   const budgetTimer: ReturnType<typeof setTimeout> = setTimeout(() => {
-    spawnRej(new Error(`${adapter.id} didn't answer spawn within ${Math.round(budget / 1000)}s — the harness may be wedged`));
+    /* plain copy, no em dash: this message is sunk as the session row's error
+       detail and shown to the user in the web UI (TRUSS.md) */
+    spawnRej(new Error(`${adapter.id} didn't answer spawn within ${Math.round(budget / 1000)}s; the harness may be wedged`));
   }, budget);
   budgetTimer.unref?.();
 

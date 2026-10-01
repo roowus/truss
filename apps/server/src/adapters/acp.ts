@@ -60,6 +60,12 @@ export class AcpClient {
   private idc = 0;
   private pending = new Map<string, { res: (v: unknown) => void; rej: (e: Error) => void }>();
   private sessionHandlers = new Map<string, SessionHandler>();
+  /* registrations refused because a handler already held the key. The refused
+     spawn is the retry that is going live right now; the handler holding the
+     key is the abandoned spawn whose dispose is about to free it. Recording
+     the claimant lets offSession hand the key straight to it instead of
+     leaving it empty (issue #12). */
+  private sessionClaims = new Map<string, SessionHandler>();
   private ready: Promise<void> | null = null;
   private exitListenersAttached = false;
 
@@ -110,6 +116,7 @@ export class AcpClient {
         /* the server took its sessions with it — these handlers are stale,
            and leaving them would refuse the re-registration a resume needs */
         this.sessionHandlers.clear();
+        this.sessionClaims.clear();
         this.proc = null;
         this.ready = null;
       });
@@ -219,12 +226,33 @@ export class AcpClient {
        handler would steal the session's frames, and the abandoned spawn's
        dispose would then close the live session out from under it (issue
        #12). */
-    if (this.sessionHandlers.has(dshSessionId)) return;
+    if (this.sessionHandlers.has(dshSessionId)) {
+      /* refused — but the retry is live the moment its spawn returns, so
+         remember it: the owner's dispose is what frees this key, and freeing
+         must hand the key on rather than leave the retry with no handler */
+      this.sessionClaims.set(dshSessionId, fn);
+      return;
+    }
+    this.sessionClaims.delete(dshSessionId);
     this.sessionHandlers.set(dshSessionId, fn);
   }
 
-  offSession(dshSessionId: string) {
-    this.sessionHandlers.delete(dshSessionId);
+  /** fn is done with this session. As the owner it frees the key, handing it
+     to a claimant a refused registration left waiting; as a refused claimant
+     it only drops its own claim, so a closing queue is never handed the key
+     later. Without the hand-off, the abandonment race could free the key
+     right after a retry's registration was refused and leave that live retry
+     with no handler — every frame for the session silently dropped (issue
+     #12). */
+  offSession(dshSessionId: string, fn: SessionHandler) {
+    if (this.sessionHandlers.get(dshSessionId) === fn) {
+      this.sessionHandlers.delete(dshSessionId);
+      const claim = this.sessionClaims.get(dshSessionId);
+      this.sessionClaims.delete(dshSessionId);
+      if (claim) this.sessionHandlers.set(dshSessionId, claim);
+      return;
+    }
+    if (this.sessionClaims.get(dshSessionId) === fn) this.sessionClaims.delete(dshSessionId);
   }
 
   /** is fn still the handler registered for this session? Sessions multiplex
