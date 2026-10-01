@@ -11,6 +11,7 @@ import {
   ago,
   daysLeftInTrash,
   TRASH_RETENTION_DAYS,
+  until,
   fmtSize,
   shortPath,
   argSummary,
@@ -107,6 +108,19 @@ test("daysLeftInTrash: the purge countdown a trash row shows (issue #5 asks for 
   assert.equal(daysLeftInTrash(now - 29 * day - 3_600_000, now), 1, "23h left still reads 1 — the last day never rounds to 0 early");
   assert.equal(daysLeftInTrash(now - 30 * day, now), 0, "at the window it is purged");
   assert.equal(daysLeftInTrash(now - 45 * day, now), 0, "long past the window clamps at 0");
+});
+
+test("until: countdown twin of ago — future reads as time LEFT, past clamps to now", () => {
+  const now = 1_700_000_000_000;
+  /* the pairing-code bug: expiresAt is 10 minutes AHEAD, and ago() clamped
+     that to "now" — the caption always read "expires now" */
+  assert.equal(until(now + 10 * 60_000, now), "10m");
+  assert.equal(until(now + 30_000, now), "30s");
+  assert.equal(until(now + 4_400, now), "now");
+  assert.equal(until(now + 2 * 3_600_000, now), "2h");
+  assert.equal(until(now + 2 * 86_400_000, now), "2d");
+  assert.equal(until(now, now), "now");
+  assert.equal(until(now - 60_000, now), "now"); // past timestamps clamp via Math.max(0, ...)
 });
 
 test("fmtSize: B rounding, KB decimals, MB/GB/TB boundaries", () => {
