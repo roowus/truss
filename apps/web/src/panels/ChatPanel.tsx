@@ -5,7 +5,7 @@ import { argSummary, fmtMs, harnessStyle, shortPath, baseHarness } from "@/lib/f
 import { deviceLabel } from "@/lib/device";
 import { buildModelOptions, modelValue, splitModelValue } from "@/lib/models";
 import { planHeaderFit } from "@/lib/headerFit";
-import { CHAT_WIDTH_DEFAULT, commitChatWidth, dragChatWidth, readChatWidthPref, resolveChatWidth, writeChatWidthPref } from "@/lib/chatWidth";
+import { CHAT_WIDTH_DEFAULT, commitChatWidth, dragDisplayWidth, readChatWidthPref, resolveChatWidth, writeChatWidthPref } from "@/lib/chatWidth";
 import { openPanel, openAgentShell, renameSessionPanels } from "@/lib/workspace";
 import { Btn, Empty, HarnessMark, Icon, IconBtn, Select, Spinner, StateDot, STATE_META } from "@/components/ui";
 import { Markdown } from "./Markdown";
@@ -615,10 +615,11 @@ function ChatWidthProvider({ timeline, composer, perms }: { timeline: ReactNode;
        window; without it an off-window release sticks the drag and leaks the
        listeners (the buttons===0 self-heal in move is the fallback) */
     try { (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); } catch { /* capture unsupported */ }
-    /* drag from the STORED pref when one exists, never the display-clamped
-       width — otherwise a drag in a narrow panel rebases and overwrites a
-       wider stored pref (issue #6: display-clamp ≠ stored pref) */
-    dragRef.current = { originX: e.clientX, base: pref ?? width, side, startPref: pref };
+    /* drag from the DISPLAYED width — never the stored pref, which the clamp
+       can hide (a wide-monitor pref under a narrow window): drags from the
+       pref commit with zero visual change and erode the stored value. A drag
+       the clamp refuses is a no-op, so the pref still can't be clobbered. */
+    dragRef.current = { originX: e.clientX, base: width, side, startPref: pref };
     setDragging(true);
     const finish = (commitX: number | null) => {
       const d = dragRef.current;
@@ -632,17 +633,23 @@ function ChatWidthProvider({ timeline, composer, perms }: { timeline: ReactNode;
         setPref(d.startPref);
         return;
       }
-      const finalW = commitChatWidth(d.base, d.originX, commitX, d.side);
-      if (finalW !== null) { // null = no travel — a press-and-release persists nothing
+      const finalW = commitChatWidth(d.base, columnW, d.originX, commitX, d.side);
+      if (finalW !== null) {
         setPref(finalW);
         if (typeof localStorage !== "undefined") writeChatWidthPref(localStorage, finalW);
+      } else {
+        // null = the drag showed nothing (no travel, or the clamp refused it) —
+        // persist nothing and put the drag-start state back
+        setPref(d.startPref);
       }
     };
     const move = (ev: PointerEvent) => {
       const d = dragRef.current;
       if (!d) return;
       if (ev.buttons === 0) { finish(ev.clientX); return; } // pointerup missed — released outside the window
-      setPref(Math.round(dragChatWidth(d.base, d.originX, ev.clientX, d.side)));
+      /* null = the clamp refuses the drag here — hold the drag-start state, so
+         the column never moves against the drag */
+      setPref(dragDisplayWidth(d.base, columnW, d.originX, ev.clientX, d.side) ?? d.startPref);
     };
     const up = (ev: PointerEvent) => finish(ev.clientX);
     const cancel = () => finish(null);
