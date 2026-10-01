@@ -120,17 +120,31 @@ export class AcpClient {
            retry has already spawned a healthy replacement; flushing for the
            dead one would reject the retry's initialize and get that new child
            killed in turn */
-        if (this.proc !== proc) return;
-        /* every rejected entry clears its own timer in the wrapper below */
-        for (const p of this.pending.values()) p.rej(new Error("acp server exited"));
-        this.pending.clear();
-        /* the server took its sessions with it — these handlers are stale,
-           and leaving them would refuse the re-registration a resume needs */
-        this.sessionHandlers.clear();
-        this.sessionClaims.clear();
-        this.proc = null;
-        this.ready = null;
+        this.flushFor(proc, new Error("acp server exited"));
       });
+
+      /* Node emits 'error' on the ChildProcess when the binary cannot be
+         spawned at all: a wrong TRUSS_HERMES_BIN, or dsh missing from PATH.
+         An EventEmitter 'error' with no listener throws, and that throw is
+         the truss server's uncaughtException — the whole server dies instead
+         of landing the error row the failed spawn was about to produce, and
+         ensure()'s retry contract turns into a crash loop. A spawn that never
+         started has no exit event, so this handler is what flushes the boot's
+         pending initialize. pi.ts and claude.ts attach one on their own
+         children; the shared client is the seam every ACP harness goes
+         through. */
+      proc.on("error", (err) => {
+        this.flushFor(proc, err);
+      });
+
+      /* a write can outrun the child's death: the boot-failure kill and the
+         spawn-phase recycle both leave this.proc set for a beat after the
+         reader is gone, and call()/respond() write without a guard. EPIPE on
+         a stream with no 'error' listener is the same unhandled throw as a
+         missing binary. The failed write is a request whose answer never
+         comes, so its own budget already rejects it — this listener only has
+         to keep the server up. */
+      proc.stdin?.on("error", () => {});
 
       /* never orphan the multiplexed server when the truss server goes down */
       const shutdown = () => {
@@ -169,6 +183,25 @@ export class AcpClient {
       this.ready = null;
     });
     return this.ready;
+  }
+
+  /** Flush everything this child still owed and forget it. Runs for both the
+     exit event and the ChildProcess 'error' event, and only for the CURRENT
+     process: after a failed boot the half-started child is killed and its
+     exit can land after a retry has already spawned a healthy replacement;
+     flushing for the dead one would reject the retry's initialize and get
+     that new child killed in turn. */
+  private flushFor(proc: ChildProcess, err: Error) {
+    if (this.proc !== proc) return;
+    /* every rejected entry clears its own timer in the wrapper below */
+    for (const p of this.pending.values()) p.rej(err);
+    this.pending.clear();
+    /* the server took its sessions with it — these handlers are stale, and
+       leaving them would refuse the re-registration a resume needs */
+    this.sessionHandlers.clear();
+    this.sessionClaims.clear();
+    this.proc = null;
+    this.ready = null;
   }
 
   private dispatch(rec: Frame) {
@@ -225,6 +258,15 @@ export class AcpClient {
                 } catch {
                   /* already gone */
                 }
+                /* forget the process here rather than at its exit event: the
+                   SIGKILL and the exit event are not atomic, and an ensure()
+                   arriving between them would be handed this dying boot and
+                   write its first request into a pipe with no reader — a
+                   spawn a retry would have carried, failed. The exit handler
+                   skips it (this.proc no longer matches) and has nothing left
+                   to flush: both guards above were already empty. */
+                this.proc = null;
+                this.ready = null;
               }
             }, budget)
           : null;

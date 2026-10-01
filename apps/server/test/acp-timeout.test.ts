@@ -167,10 +167,15 @@ test("a timed-out boot's child is dead — the failed boot must not leave a harn
   const { client, kill } = await makeClient("slow-init", { requestTimeoutMs: 150 });
   process.env.TRUSS_TEST_BOOT_DELAY = "900";
   try {
-    const first = await client.ensure().then(() => "resolved", (e: Error) => `rejected: ${e.message}`);
-    assert.match(first, /^rejected: .*timed ?out/i, `the slow boot times out — got: ${first}`);
+    /* the child is on the client from the moment ensure() is called (spawn
+       runs before the boot's first await). It has to be picked up here: the
+       recycle forgets the process the instant the budget fires, so it is no
+       longer reachable through the client afterwards. */
+    const booting = client.ensure();
     const ghost = (client as any).proc;
-    assert.ok(ghost, "the timed-out boot leaves its child where the test can see it");
+    assert.ok(ghost, "the boot leaves its child where the test can see it");
+    const first = await booting.then(() => "resolved", (e: Error) => `rejected: ${e.message}`);
+    assert.match(first, /^rejected: .*timed ?out/i, `the slow boot times out — got: ${first}`);
     await tick(100);
     assert.ok(
       ghost.exitCode !== null || ghost.signalCode !== null,
@@ -722,6 +727,139 @@ test("a timed-out model-switch respawn flips the row to error — a stale 'idle'
   } finally {
     sessions.unregisterAdapter("fake-switch-flip" as never);
     cleanup();
+  }
+});
+
+/* ── the child's own 'error' event ────────────────────────────────────────
+
+   Node emits 'error' on the ChildProcess when the binary cannot be spawned
+   at all: a wrong TRUSS_HERMES_BIN, or dsh missing from PATH. An
+   EventEmitter 'error' with no listener THROWS, and that throw is the truss
+   server's uncaughtException — the whole server dies instead of landing the
+   error row the failed spawn was about to produce, and ensure()'s retry
+   contract becomes a crash loop. The same is true of a write that outruns
+   the child's death: this PR is what SIGKILLs children by design, so
+   call()'s unguarded write can land in a pipe whose reader just went away,
+   and EPIPE on a stream with no 'error' listener is the same unhandled
+   throw. pi.ts and claude.ts both attach a child 'error' handler; the shared
+   ACP client is the one adapter seam every ACP harness goes through. Every
+   test in this section would have crashed the runner before the fix —
+   reaching its assertions IS the regression pin. */
+
+test("a binary that cannot spawn rejects the boot and leaves the server running", async () => {
+  const { AcpClient } = await import("../src/adapters/acp.js");
+  const client = new AcpClient(
+    { command: join(tmpdir(), "truss-no-such-harness-binary"), args: [] },
+    { requestTimeoutMs: 2000 },
+  );
+  try {
+    const outcome = await client.ensure().then(() => "resolved", (e: Error) => `rejected: ${e.message}`);
+    assert.match(
+      outcome,
+      /^rejected/,
+      `an unspawnable binary must reject the boot (the caller lands the error row) — got: ${outcome}`,
+    );
+    assert.equal((client as any).proc, null, "a boot that never started leaves no process cached");
+    /* and the client stays retryable: the settled failure must not be handed
+       back forever, or one wrong TRUSS_HERMES_BIN poisons the client until
+       truss restarts */
+    (client as any).launch.command = NODE;
+    (client as any).launch.args = ["-e", ECHO_SERVER];
+    const retry = await client.ensure().then(() => "resolved", (e: Error) => `rejected: ${e.message}`);
+    assert.equal(retry, "resolved", `a retry after an unspawnable binary must boot for real — got: ${retry}`);
+  } finally {
+    (client as any).proc?.kill("SIGKILL");
+  }
+});
+
+test("the child and its stdin carry 'error' listeners — an EPIPE or a failed spawn must not be an unhandled throw", async () => {
+  /* structural on purpose: whether a write actually EPIPEs depends on the
+     kernel tearing the pipe down before it lands, so the survival test below
+     can pass on a run where the race never fired. The listener is the fix. */
+  const { AcpClient } = await import("../src/adapters/acp.js");
+  const { client, kill } = await makeClient("echo", { requestTimeoutMs: 2000 });
+  try {
+    await client.ensure();
+    const child = (client as any).proc;
+    assert.ok(child, "the boot left a child to inspect");
+    assert.ok(child.listenerCount("error") > 0, "the ChildProcess itself must have an 'error' listener");
+    assert.ok(child.stdin.listenerCount("error") > 0, "the child's stdin must have an 'error' listener");
+  } finally {
+    kill();
+  }
+});
+
+test("a write racing the child's death surfaces as a rejection — it must not take the server down", async () => {
+  const { client, kill } = await makeClient("echo", { requestTimeoutMs: 2000 });
+  try {
+    await client.ensure();
+    const child = (client as any).proc;
+    child.kill("SIGKILL");
+    /* this.proc is still set until the exit handler runs, so this call writes
+       into a pipe whose reader just died. Whatever the pipe does with it, the
+       write must surface through the call's own rejection — reaching this
+       assertion is the pin. */
+    const outcome = await client.call("session/new", { cwd: "/tmp", mcpServers: [] }).then(
+      () => "resolved",
+      (e: Error) => `rejected: ${e.message}`,
+    );
+    assert.match(
+      outcome,
+      /^rejected/,
+      `a write into a dying pipe must reject the call, not crash the server — got: ${outcome}`,
+    );
+    await tick(100);
+    assert.ok(
+      child.exitCode !== null || child.signalCode !== null,
+      `the killed child is really dead — exitCode=${child.exitCode}, signal=${child.signalCode}`,
+    );
+  } finally {
+    kill();
+  }
+});
+
+test("a spawn arriving in the recycle window is not handed the dying process", async () => {
+  /* the recycle SIGKILLs the child, but this.ready stayed resolved until the
+     exit event ran, so an ensure() landing in that gap returned the dying
+     boot and wrote its first request into a pipe with no reader — a spawn a
+     retry would have carried came back as "acp server exited" and flipped
+     the row to error. The window is one event-loop turn wide: right after
+     the timed-out call rejects we are still inside it, because the exit
+     event needs a loop turn of its own. */
+  const { client, kill } = await makeClient("init-only", { requestTimeoutMs: 200 });
+  try {
+    await client.ensure();
+    const wedged = (client as any).proc;
+    await assert.rejects(
+      () => client.call("session/new", { cwd: "/tmp", mcpServers: [] }),
+      /timed ?out/,
+      "the wedged call times out and recycles",
+    );
+    assert.equal(
+      (client as any).proc,
+      null,
+      "the recycle must forget the dying process here, not wait for its exit event",
+    );
+    /* a call in the same window is refused outright instead of being written
+       into the pipe of a process that is already gone */
+    const refused = await client.call("session/new", { cwd: "/tmp", mcpServers: [] }).then(
+      () => "resolved",
+      (e: Error) => `rejected: ${e.message}`,
+    );
+    assert.match(
+      refused,
+      /^rejected: acp server not running/,
+      `a call in the recycle window must be refused, not written into the dead pipe — got: ${refused}`,
+    );
+    /* and the spawn that does arrive in the window really boots */
+    (client as any).launch.args = ["-e", ECHO_SERVER];
+    await client.ensure();
+    const fresh = (client as any).proc;
+    assert.ok(fresh && fresh !== wedged, "a spawn in the recycle window gets a fresh process, not the dying one");
+    kill();
+    wedged.kill("SIGKILL");
+  } finally {
+    kill();
   }
 });
 
