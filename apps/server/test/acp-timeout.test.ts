@@ -56,8 +56,9 @@ const ECHO_SERVER = `let b="";process.stdin.setEncoding("utf8");process.stdin.on
 /* answer initialize after TRUSS_TEST_BOOT_DELAY ms (the child inherits the
    test's env at spawn, so each boot picks its own delay): the boot that times
    out is killed while still alive, so its exit event lands near a retry's
-   own boot */
-const SLOW_INIT_SERVER = `let b="";const d=+(process.env.TRUSS_TEST_BOOT_DELAY||400);process.stdin.setEncoding("utf8");process.stdin.on("data",c=>{b+=c;let i;while((i=b.indexOf("\\n"))>=0){const l=b.slice(0,i).trim();b=b.slice(i+1);if(!l)continue;let r;try{r=JSON.parse(l)}catch{continue}if(r.id!=null&&r.method==="initialize"){setTimeout(()=>{process.stdout.write(JSON.stringify({jsonrpc:"2.0",id:r.id,result:{protocolVersion:1}})+"\\n")},d)}}});`;
+   own boot. With TRUSS_TEST_PARTIAL set it also writes a newline-less half
+   frame at boot — a killed boot that had already flushed part of an answer. */
+const SLOW_INIT_SERVER = `let b="";if(process.env.TRUSS_TEST_PARTIAL){process.stdout.write('{"jsonrpc":"2.0","id":"ghost","result":{"protocolVersion":1}}')}const d=+(process.env.TRUSS_TEST_BOOT_DELAY||400);process.stdin.setEncoding("utf8");process.stdin.on("data",c=>{b+=c;let i;while((i=b.indexOf("\\n"))>=0){const l=b.slice(0,i).trim();b=b.slice(i+1);if(!l)continue;let r;try{r=JSON.parse(l)}catch{continue}if(r.id!=null&&r.method==="initialize"){setTimeout(()=>{process.stdout.write(JSON.stringify({jsonrpc:"2.0",id:r.id,result:{protocolVersion:1}})+"\\n")},d)}}});`;
 /* answer ONLY initialize and a late session/prompt; every other method pends —
    isolates the turn call's opt-out from the budget control calls still have */
 const SLOW_PROMPT_SERVER = `let b="";process.stdin.setEncoding("utf8");process.stdin.on("data",c=>{b+=c;let i;while((i=b.indexOf("\\n"))>=0){const l=b.slice(0,i).trim();b=b.slice(i+1);if(!l)continue;let r;try{r=JSON.parse(l)}catch{continue}if(r.id!=null&&r.method==="initialize"){process.stdout.write(JSON.stringify({jsonrpc:"2.0",id:r.id,result:{protocolVersion:1}})+"\\n")}else if(r.id!=null&&r.method==="session/prompt"){setTimeout(()=>{process.stdout.write(JSON.stringify({jsonrpc:"2.0",id:r.id,result:{ok:true}})+"\\n")},600)}}});`;
@@ -137,14 +138,16 @@ test("ensure() times out its own initialize, then lets the caller RETRY (no pois
 });
 
 test("a retry after a boot timeout succeeds — the killed boot's exit must not touch the new process", async () => {
-  /* the first boot answers initialize at 400ms, past the 150ms budget: it
+  /* the first boot answers initialize at 900ms, past the 150ms budget: it
      times out and is SIGKILLed while still alive, so its exit event lands
      just after the retry has spawned and written its own initialize. The
      retry must boot on the healthy second process — not be rejected by the
-     dead boot's exit handler and get its child killed in turn. */
+     dead boot's exit handler and get its child killed in turn. The answer is
+     seconds past the budget on purpose: the ordering is real timers, and a
+     loaded runner must not be able to invert it. */
   const { client, kill } = await makeClient("slow-init", { requestTimeoutMs: 150 });
   try {
-    process.env.TRUSS_TEST_BOOT_DELAY = "400";
+    process.env.TRUSS_TEST_BOOT_DELAY = "900";
     const first = await client.ensure().then(() => "resolved", (e: Error) => `rejected: ${e.message}`);
     assert.match(first, /^rejected: .*timed ?out/i, `the slow first boot times out — got: ${first}`);
     process.env.TRUSS_TEST_BOOT_DELAY = "10";
@@ -156,14 +159,122 @@ test("a retry after a boot timeout succeeds — the killed boot's exit must not 
   }
 });
 
+test("a timed-out boot's child is dead — the failed boot must not leave a harness process behind", async () => {
+  /* the kill in ensure()'s failure path is behavior, not hygiene: without it
+     every timed-out boot leaks a process that holds its pipes (and, on a
+     real harness, a python interpreter) until truss exits. Deleting the
+     SIGKILL must fail HERE, not just slow the runner down. */
+  const { client, kill } = await makeClient("slow-init", { requestTimeoutMs: 150 });
+  process.env.TRUSS_TEST_BOOT_DELAY = "900";
+  try {
+    const first = await client.ensure().then(() => "resolved", (e: Error) => `rejected: ${e.message}`);
+    assert.match(first, /^rejected: .*timed ?out/i, `the slow boot times out — got: ${first}`);
+    const ghost = (client as any).proc;
+    assert.ok(ghost, "the timed-out boot leaves its child where the test can see it");
+    await tick(100);
+    assert.ok(
+      ghost.exitCode !== null || ghost.signalCode !== null,
+      `the timed-out boot's child must be killed, not left running — exitCode=${ghost.exitCode}, signal=${ghost.signalCode}`,
+    );
+  } finally {
+    delete process.env.TRUSS_TEST_BOOT_DELAY;
+    kill();
+  }
+});
+
+test("a retry after a killed boot reads its own first frame — the ghost's partial frame must not prefix it", async () => {
+  /* the first boot flushes half a frame (no newline) and is killed with it
+     still sitting in the client's read buffer. The retry's initialize answer
+     then lands behind that tail: without a buffer reset the two parse as one
+     unparseable line, the answer is dropped silently, and the retry burns
+     its own budget against a healthy process. */
+  const { client, kill } = await makeClient("slow-init", { requestTimeoutMs: 150 });
+  try {
+    process.env.TRUSS_TEST_PARTIAL = "1";
+    process.env.TRUSS_TEST_BOOT_DELAY = "900";
+    const first = await client.ensure().then(() => "resolved", (e: Error) => `rejected: ${e.message}`);
+    assert.match(first, /^rejected: .*timed ?out/i, `the partial-frame boot times out and is killed — got: ${first}`);
+    delete process.env.TRUSS_TEST_PARTIAL;
+    process.env.TRUSS_TEST_BOOT_DELAY = "10";
+    const second = await client.ensure().then(() => "resolved", (e: Error) => `rejected: ${e.message}`);
+    assert.equal(second, "resolved", `the retry must read the new child's own initialize answer — got: ${second}`);
+  } finally {
+    delete process.env.TRUSS_TEST_PARTIAL;
+    delete process.env.TRUSS_TEST_BOOT_DELAY;
+    kill();
+  }
+});
+
+test("a wedged spawn-phase call recycles the process — the next ensure() boots fresh instead of reusing it", async () => {
+  /* the server answers initialize and then never answers anything else: the
+     exact shape of a harness that wedges attaching its MCP servers. The
+     client must not keep that process cached as ready — every later
+     create/resume would pay the whole budget against it again. With a live
+     session's handler or another call on the process, the same timeout must
+     leave it alone: the process is shared. */
+  const { client, kill } = await makeClient("init-only", { requestTimeoutMs: 200 });
+  try {
+    await client.ensure();
+    const wedged = (client as any).proc;
+    const control = await client.call("session/new", { cwd: "/tmp", mcpServers: [] }).then(
+      () => "resolved",
+      (e: Error) => `rejected: ${e.message}`,
+    );
+    assert.match(control, /^rejected: .*timed ?out/i, `the wedged call times out — got: ${control}`);
+    await tick(100);
+    assert.ok(
+      wedged.exitCode !== null || wedged.signalCode !== null,
+      `the wedged process must be recycled, not left cached and dead-weight — exitCode=${wedged.exitCode}, signal=${wedged.signalCode}`,
+    );
+    /* the exit handler cleared the cached boot, so the next ensure() really
+       boots — point it at a healthy server to prove the new child is a new
+       child (the client's launch object is the seam) */
+    (client as any).launch.args = ["-e", ECHO_SERVER];
+    await client.ensure();
+    const fresh = (client as any).proc;
+    assert.ok(fresh && fresh !== wedged, "a later ensure() must boot a new process, not return the wedged one");
+    const answered = await client.call("session/new", { cwd: "/tmp", mcpServers: [] }).then(
+      () => "resolved",
+      (e: Error) => `rejected: ${e.message}`,
+    );
+    assert.equal(answered, "resolved", "the fresh process answers");
+  } finally {
+    kill();
+  }
+});
+
+test("a spawn-phase timeout does not recycle a process a live session is using", async () => {
+  /* the recycle is only safe when nothing else is on the process: a session
+     that is live and whose control call wedged must survive the timeout. */
+  const { client, kill } = await makeClient("init-only", { requestTimeoutMs: 200 });
+  try {
+    await client.ensure();
+    const live = (client as any).proc;
+    (client as any).onSession("hs-shared", () => {});
+    await client.call("session/new", { cwd: "/tmp", mcpServers: [] }).catch(() => undefined);
+    await tick(100);
+    assert.equal(
+      live.exitCode === null && live.signalCode === null,
+      true,
+      "a shared process must survive one session's wedged call",
+    );
+    assert.equal((client as any).proc, live, "the client keeps serving the live session");
+  } finally {
+    kill();
+  }
+});
+
 test("the turn call opts out of the budget — session/prompt answered past it still completes", async () => {
   /* one client, 300ms budget: a control call that never answers rejects at
      the budget, but the turn call (0 = unbudgeted) settles when the harness
      settles — at 600ms here, past the budget. Budgeting the turn is what
-     made every turn over a minute fail and lose its output. */
+     made every turn over a minute fail and lose its output. The frame
+     handler below is what a live session registers at spawn; with a session
+     on the process, a wedged control call must not recycle it. */
   const { client, kill } = await makeClient("slow-prompt", { requestTimeoutMs: 300 });
   try {
     await client.ensure();
+    (client as any).onSession("hs-1", () => {});
     const control = await client.call("session/new", { cwd: "/tmp", mcpServers: [] }).then(
       () => "resolved",
       (e: Error) => `rejected: ${e.message}`,
@@ -475,6 +586,75 @@ test("resumeSession is bounded too: a wedged spawn returns false instead of hang
     assert.equal(outcome, "returned false", `a wedged resume must give up fast — got: ${outcome}`);
   } finally {
     sessions.unregisterAdapter("fake-resume" as never);
+    cleanup();
+  }
+});
+
+test("two resumes racing inside the spawn window share one spawn — no second spawn on the same ref", async () => {
+  /* sendPrompt's auto-resume is reachable from the HTTP route, the websocket
+     and the MCP tool, so two prompts can land while the first resume is still
+     spawning. Two spawns on one stored ref race for the harness session key:
+     the first to register owns it, the second is refused — and the refused
+     one is the handle goLive leaves live, so its permission cards silently
+     no-op and nothing can ever dispose the key holder. One resume in flight
+     per session kills the race at the source. */
+  const { db, cleanup } = await freshServer("resume-dedupe");
+  const sessions = await import("../src/sessions.js");
+  let spawns = 0;
+  const adapter: HarnessAdapter = {
+    ...spawnNeverAdapter("fake-dedupe"),
+    /* a slow spawn: both callers are in flight together, exactly the window
+       two prompts into a dead session land in */
+    spawn: (opts: SessionOpts) => {
+      spawns++;
+      return new Promise<AdapterHandle>((res) =>
+        setTimeout(() => res({ sessionId: opts.sessionId, harnessRef: "hr-dedupe" }), 120),
+      );
+    },
+  };
+  sessions.registerAdapter("fake-dedupe" as never, adapter);
+  try {
+    db.store.createSession({ id: "dedupe-1", harness: "fake-dedupe" as never, title: "t", cwd: "/tmp" });
+    db.store.setHarnessRef("dedupe-1", "hr-dedupe");
+    const [a, b] = await Promise.all([
+      sessions.resumeSession("dedupe-1", { spawnTimeoutMs: 4000 }),
+      sessions.resumeSession("dedupe-1", { spawnTimeoutMs: 4000 }),
+    ]);
+    assert.equal(a, true, "the first resume goes live on the stored ref");
+    assert.equal(b, true, "the second prompt rides the same in-flight resume");
+    assert.equal(spawns, 1, `one spawn per session id while a resume is in flight — got ${spawns}`);
+    assert.ok(sessions.isLive("dedupe-1"), "the session is live for the caller that waited");
+  } finally {
+    sessions.unregisterAdapter("fake-dedupe" as never);
+    sessions.closeSession("dedupe-1");
+    cleanup();
+  }
+});
+
+test("a resume can start again once the previous one finished — the in-flight guard must not stick", async () => {
+  const { db, cleanup } = await freshServer("resume-dedupe-release");
+  const sessions = await import("../src/sessions.js");
+  let spawns = 0;
+  const adapter: HarnessAdapter = {
+    ...spawnNeverAdapter("fake-dedupe-release"),
+    spawn: (opts: SessionOpts) => {
+      spawns++;
+      return Promise.resolve({ sessionId: opts.sessionId, harnessRef: "hr-dedupe" });
+    },
+  };
+  sessions.registerAdapter("fake-dedupe-release" as never, adapter);
+  try {
+    db.store.createSession({ id: "dedupe-2", harness: "fake-dedupe-release" as never, title: "t", cwd: "/tmp" });
+    db.store.setHarnessRef("dedupe-2", "hr-dedupe");
+    assert.equal(await sessions.resumeSession("dedupe-2"), true, "first resume goes live");
+    /* a later resume after the session went dead again must not be handed the
+       settled promise — the guard covers the spawn window, nothing longer */
+    sessions.closeSession("dedupe-2");
+    assert.equal(await sessions.resumeSession("dedupe-2"), true, "the next resume runs for real");
+    assert.equal(spawns, 2, "each settled resume releases the slot for the next");
+  } finally {
+    sessions.unregisterAdapter("fake-dedupe-release" as never);
+    sessions.closeSession("dedupe-2");
     cleanup();
   }
 });

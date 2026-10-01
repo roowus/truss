@@ -243,12 +243,34 @@ function goLive(id: string, adapter: HarnessAdapter, handle: AdapterHandle) {
   })();
 }
 
+/** one resume in flight per session. sendPrompt's auto-resume is reachable
+   from the HTTP route, the websocket and the MCP tool at once, so two prompts
+   into a dead session can both enter the spawn window — and two spawns on the
+   same stored ref race for the harness session key: the first to register
+   owns it, the second is refused, and the refused one is the handle goLive
+   leaves live (its permission cards would silently no-op, and nothing could
+   ever dispose the key holder). Sharing the in-flight attempt leaves one
+   spawn, so there is no second registration to refuse. */
+const resuming = new Map<string, Promise<boolean>>();
+
 /**
  * Resume a previously-closed session whose harness persisted its own session
  * (pi session file / ACP resume / claude --resume). Returns false if the
- * harness can't resume — the caller surfaces the error.
+ * harness can't resume — the caller surfaces the error. Concurrent calls for
+ * the same session share the in-flight attempt (the first call's
+ * spawnTimeoutMs applies); a call that starts after one settled runs fresh.
  */
-export async function resumeSession(id: string, opts: { spawnTimeoutMs?: number } = {}): Promise<boolean> {
+export function resumeSession(id: string, opts: { spawnTimeoutMs?: number } = {}): Promise<boolean> {
+  const inFlight = resuming.get(id);
+  if (inFlight) return inFlight;
+  const attempt = resumeSessionOnce(id, opts).finally(() => {
+    if (resuming.get(id) === attempt) resuming.delete(id);
+  });
+  resuming.set(id, attempt);
+  return attempt;
+}
+
+async function resumeSessionOnce(id: string, opts: { spawnTimeoutMs?: number }): Promise<boolean> {
   const row = store.getSession(id);
   if (!row?.harness_ref) return false;
   const adapter = adapters.get(row.harness);
