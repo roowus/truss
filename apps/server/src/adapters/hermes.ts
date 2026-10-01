@@ -6,6 +6,7 @@ import {
   AcpClient,
   beginAcpTurn,
   busyNote,
+  disposeAcpSession,
   handleAcpUpdate,
   makeSessionState,
   settleAcpTurn,
@@ -184,25 +185,7 @@ export const hermesAdapter: HarnessAdapter = {
   },
 
   dispose(handle: AdapterHandle) {
-    const h = handle as AcpSessionState;
-    /* sessions multiplex on one shared client keyed by the harness session
-       id, and resume/respawn reuse the stored ref — a spawn that outlived
-       the spawn budget can land after a retry has gone live on the same key,
-       and its late teardown must not close the live session out from under
-       it (issue #12). The other ordering is the sharper one: when the
-       abandoned spawn is the FIRST to register it owns the key and
-       ownsSession alone would let the close through — so a handle the spawn
-       budget gave up on never closes the harness session it resumed. The
-       retry is bringing that same session back, and the next resume
-       reclaims it. */
-    const owned = Boolean(h.onFrame && client.ownsSession(h.acpSessionId, h.onFrame));
-    /* offSession even when the key was never ours: a registration that was
-       refused leaves a claim behind, and a handle going away must not leave
-       the client ready to hand the key to a queue that is about to close */
-    if (h.onFrame) client.offSession(h.acpSessionId, h.onFrame);
-    if (owned && !(h.abandoned && h.resumed)) {
-      void client.call("session/close", { sessionId: h.acpSessionId }).catch(() => undefined);
-    }
-    h.queue.close();
+    /* the ownership guard both ACP adapters share — see disposeAcpSession */
+    disposeAcpSession(client, handle as AcpSessionState);
   },
 } as HarnessAdapter & { resolve(handle: AdapterHandle, requestId: string, choice: string): void };

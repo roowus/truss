@@ -89,12 +89,14 @@ test("a resume that outlives the spawn budget must not tear down the live sessio
     db.store.createSession({ id: "race-1", harness: "hermes", title: "t", cwd: "/tmp" });
     db.store.setHarnessRef("race-1", "hs-race");
 
-    process.env.TRUSS_TEST_RESUME_DELAY = "400";
-    process.env.TRUSS_TEST_PUSH_USAGE_AT = "800";
+    process.env.TRUSS_TEST_RESUME_DELAY = "1200";
+    process.env.TRUSS_TEST_PUSH_USAGE_AT = "2000";
     process.env.TRUSS_TEST_ACP_LOG = METHOD_LOG;
 
     /* spawn 1 blows the 200ms budget while its resume is still in flight
-       (the fake answers it at 400ms) */
+       (the fake answers it at 1200ms — the budget timer's 1000ms of slack is
+       deliberate: these preconditions are real timers, and a loaded runner
+       must not be able to invert the ordering the test asserts) */
     const first = await sessions.resumeSession("race-1", { spawnTimeoutMs: 200 });
     assert.equal(first, false, "the slow resume gives up at the budget");
 
@@ -146,12 +148,14 @@ test("a resume that outlives the spawn budget must not tear down the live sessio
    dispose must drop the frame handler and close the queue but stay off the
    wire: the harness session it resumed is exactly what the retry needs.
 
-   The fake answers the FIRST session/resume after 300ms (spawn 1 blows the
-   200ms budget and lands at ~300ms) and the second after 700ms (the retry,
-   started at ~200ms, registers at ~900ms) — so the abandoned spawn owns the
-   key when its dispose runs and the retry re-registers after it. onSession
-   is wrapped so the test can see the registration order and prove the
-   dangerous ordering really happened, and a usage frame pushed after the
+   The fake answers the FIRST session/resume after 1500ms (spawn 1 blows the
+   200ms budget and lands at ~1500ms) and the second after 3000ms (the retry,
+   started at ~200ms, registers at ~3200ms) — so the abandoned spawn owns the
+   key when its dispose runs and the retry re-registers after it. The slack
+   against the 200ms budget is seconds, not milliseconds: these preconditions
+   are real timers, and ordering a loaded runner must not be able to invert.
+   onSession is wrapped so the test can see the registration order and prove
+   the dangerous ordering really happened, and a usage frame pushed after the
    retry's resume proves the retried session still receives frames. */
 
 const ORDER_FAKE = `
@@ -213,7 +217,7 @@ test("an abandoned dispose that registered FIRST must not session/close the harn
   (hermes.client as any).launch.command = ORDER_FAKE_BIN;
   (hermes.client as any).proc?.kill("SIGKILL");
   await tick(100);
-  process.env.TRUSS_TEST_RESUME_DELAYS = "300,700";
+  process.env.TRUSS_TEST_RESUME_DELAYS = "1500,3000";
   process.env.TRUSS_TEST_ACP_LOG = ORDER_LOG;
   const registrations: unknown[] = [];
   const realOnSession = (hermes.client as any).onSession.bind(hermes.client);
@@ -353,7 +357,7 @@ test("a retry refused while the abandoned spawn owns the key gets the key handed
   (hermes.client as any).launch.command = B1_FAKE_BIN;
   (hermes.client as any).proc?.kill("SIGKILL");
   await tick(100);
-  process.env.TRUSS_TEST_FLUSH_AT = "600";
+  process.env.TRUSS_TEST_FLUSH_AT = "1500";
   process.env.TRUSS_TEST_ACP_LOG = B1_LOG;
   /* record every registration and whether it was refused, so the test proves
      the dangerous ordering really happened instead of passing by luck */
@@ -369,8 +373,9 @@ test("a retry refused while the abandoned spawn owns the key gets the key handed
     db.store.createSession({ id: "claim-1", harness: "hermes", title: "t", cwd: "/tmp" });
     db.store.setHarnessRef("claim-1", "hs-claim");
 
-    /* spawn 1 blows the 200ms budget; the fake holds its answer until 600ms,
-       by which time the retry's resume is pending right behind it */
+    /* spawn 1 blows the 200ms budget; the fake holds its answer until 1500ms,
+       by which time the retry's resume is pending right behind it (the wide
+       margin keeps the ordering stable on a loaded runner) */
     const first = await sessions.resumeSession("claim-1", { spawnTimeoutMs: 200 });
     assert.equal(first, false, "the slow resume gives up at the budget");
 
@@ -419,6 +424,55 @@ test("a retry refused while the abandoned spawn owns the key gets the key handed
        the fake doesn't hold the test process open */
     (hermes.client as any).proc?.kill("SIGKILL");
   }
+});
+
+/* the claim list behind the hand-off: a slot would forget the first refused
+   registration the moment a second one arrives, leaving that handle live with
+   no handler and no claim — deaf to every frame for the session. With one
+   owner and two refusals, freeing the key must walk the claims in order and
+   a claimant leaving must drop only itself. */
+test("two refused registrations on one key both keep their claim — neither leaves a live session deaf", async () => {
+  const acp = await import("../src/adapters/acp.js");
+  const client = new (acp as any).AcpClient({ command: "true", args: [] });
+  const owner = () => {};
+  const firstRefused = () => {};
+  const secondRefused = () => {};
+
+  client.onSession("hs-multi", owner);
+  client.onSession("hs-multi", firstRefused);
+  client.onSession("hs-multi", secondRefused);
+  assert.equal(client.ownsSession("hs-multi", firstRefused), false, "precondition: the first refusal was refused");
+  assert.equal(client.ownsSession("hs-multi", secondRefused), false, "precondition: the second refusal was refused");
+  assert.equal(
+    client.ownsSession("hs-multi", owner),
+    true,
+    "the owner keeps the key while both claimants wait",
+  );
+
+  /* a claimant going away drops only itself — the other keeps its turn */
+  client.offSession("hs-multi", firstRefused);
+  client.offSession("hs-multi", owner);
+  assert.equal(
+    client.ownsSession("hs-multi", secondRefused),
+    true,
+    "the surviving claimant is handed the key when the owner frees it",
+  );
+
+  /* and with the refusals still queued, freeing walks them in order */
+  const client2 = new (acp as any).AcpClient({ command: "true", args: [] });
+  const owner2 = () => {};
+  const refusedA = () => {};
+  const refusedB = () => {};
+  client2.onSession("hs-order", owner2);
+  client2.onSession("hs-order", refusedA);
+  client2.onSession("hs-order", refusedB);
+  client2.offSession("hs-order", owner2);
+  assert.equal(client2.ownsSession("hs-order", refusedA), true, "the earliest refusal is handed the key first");
+  assert.equal(client2.ownsSession("hs-order", refusedB), false, "the later refusal stays queued behind it");
+  client2.offSession("hs-order", refusedA);
+  assert.equal(client2.ownsSession("hs-order", refusedB), true, "the next claimant follows when that one leaves");
+  client2.offSession("hs-order", refusedB);
+  assert.equal((client2 as any).sessionHandlers.has("hs-order"), false, "the key is free once the last handler leaves");
 });
 
 /* the truth table behind that wire guard: an abandoned spawn stays off the

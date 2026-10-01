@@ -64,8 +64,12 @@ export class AcpClient {
      spawn is the retry that is going live right now; the handler holding the
      key is the abandoned spawn whose dispose is about to free it. Recording
      the claimant lets offSession hand the key straight to it instead of
-     leaving it empty (issue #12). */
-  private sessionClaims = new Map<string, SessionHandler>();
+     leaving it empty (issue #12). A list, not a slot: two refused
+     registrations on one key are possible (a retry landing while an
+     abandoned spawn still holds the key, then another), and a slot would
+     leave the first claimant live with no handler and no claim — deaf to
+     every frame for that session. */
+  private sessionClaims = new Map<string, SessionHandler[]>();
   private ready: Promise<void> | null = null;
   private exitListenersAttached = false;
 
@@ -83,6 +87,13 @@ export class AcpClient {
         cwd: this.launch.cwd,
       });
       this.proc = proc;
+      /* a fresh wire. The buffer survives the previous child otherwise: a
+         boot that was killed mid-frame leaves its newline-less tail here, and
+         the retry's first line would parse as that tail plus the new child's
+         own answer — dropped as unparseable, taking the retry's initialize
+         with it. Only one boot runs at a time (this.ready gates re-entry), so
+         nothing a live child still owes us can be here. */
+      this.buf = "";
 
       proc.stdout!.setEncoding("utf8");
       proc.stdout!.on("data", (chunk: string) => {
@@ -196,7 +207,25 @@ export class AcpClient {
       const timer =
         budget > 0
           ? setTimeout(() => {
-              if (this.pending.delete(id)) rej(new Error(`acp ${method} timed out after ${Math.round(budget / 1000)}s`));
+              if (!this.pending.delete(id)) return;
+              rej(new Error(`acp ${method} timed out after ${Math.round(budget / 1000)}s`));
+              /* A spawn-phase timeout means the process answered nothing while
+                 booting it, and this.ready still points at it: every later
+                 create/resume/model-switch would pay the full budget against
+                 the same wedged process until truss restarted. Recycle it so
+                 the next ensure() boots fresh — but only when nothing else is
+                 on this process. A registered session (its frame handler) or
+                 another call in flight means the process is shared, and
+                 killing it would take healthy sessions down with the wedged
+                 one. */
+              const spawnPhase = method === "initialize" || method === "session/new" || method === "session/resume";
+              if (spawnPhase && this.sessionHandlers.size === 0 && this.pending.size === 0) {
+                try {
+                  this.proc?.kill("SIGKILL");
+                } catch {
+                  /* already gone */
+                }
+              }
             }, budget)
           : null;
       /* timeouts are failure signaling, not a reason to hold the loop open */
@@ -230,7 +259,9 @@ export class AcpClient {
       /* refused — but the retry is live the moment its spawn returns, so
          remember it: the owner's dispose is what frees this key, and freeing
          must hand the key on rather than leave the retry with no handler */
-      this.sessionClaims.set(dshSessionId, fn);
+      const claims = this.sessionClaims.get(dshSessionId) ?? [];
+      claims.push(fn);
+      this.sessionClaims.set(dshSessionId, claims);
       return;
     }
     this.sessionClaims.delete(dshSessionId);
@@ -238,21 +269,29 @@ export class AcpClient {
   }
 
   /** fn is done with this session. As the owner it frees the key, handing it
-     to a claimant a refused registration left waiting; as a refused claimant
-     it only drops its own claim, so a closing queue is never handed the key
-     later. Without the hand-off, the abandonment race could free the key
-     right after a retry's registration was refused and leave that live retry
-     with no handler — every frame for the session silently dropped (issue
-     #12). */
+     to the earliest claimant a refused registration left waiting; as a
+     refused claimant it only drops its own claim, so a closing queue is
+     never handed the key later. Without the hand-off, the abandonment race
+     could free the key right after a retry's registration was refused and
+     leave that live retry with no handler — every frame for the session
+     silently dropped (issue #12). */
   offSession(dshSessionId: string, fn: SessionHandler) {
     if (this.sessionHandlers.get(dshSessionId) === fn) {
       this.sessionHandlers.delete(dshSessionId);
-      const claim = this.sessionClaims.get(dshSessionId);
-      this.sessionClaims.delete(dshSessionId);
-      if (claim) this.sessionHandlers.set(dshSessionId, claim);
+      const claims = this.sessionClaims.get(dshSessionId) ?? [];
+      const next = claims.shift();
+      if (next) this.sessionHandlers.set(dshSessionId, next);
+      /* only drop the entry once the queue is drained — deleting it here
+         would orphan the claimants still waiting behind the one handed the
+         key, and they would go deaf with no claim to be rescued by */
+      if (!claims.length) this.sessionClaims.delete(dshSessionId);
       return;
     }
-    if (this.sessionClaims.get(dshSessionId) === fn) this.sessionClaims.delete(dshSessionId);
+    const claims = this.sessionClaims.get(dshSessionId);
+    if (!claims) return;
+    const at = claims.indexOf(fn);
+    if (at !== -1) claims.splice(at, 1);
+    if (!claims.length) this.sessionClaims.delete(dshSessionId);
   }
 
   /** is fn still the handler registered for this session? Sessions multiplex
@@ -267,6 +306,33 @@ export class AcpClient {
 }
 
 /* ── per-session state + the standard event mapping ── */
+
+/**
+ * Teardown every ACP adapter's dispose shares — hermes and dsh both hand this
+ * their handle, so the ownership guard exists once and can't drift between
+ * the two copies.
+ *
+ * Sessions multiplex on one shared client keyed by the harness session id,
+ * and resume/respawn reuse the stored ref — a spawn that outlived the spawn
+ * budget can land after a retry has gone live on the same key, and its late
+ * teardown must not close the live session out from under it (issue #12).
+ * The other ordering is the sharper one: when the abandoned spawn is the
+ * FIRST to register it owns the key and ownsSession alone would let the close
+ * through — so a handle the spawn budget gave up on never closes the harness
+ * session it resumed. The retry is bringing that same session back, and the
+ * next resume reclaims it.
+ */
+export function disposeAcpSession(client: AcpClient, h: AcpSessionState) {
+  const owned = Boolean(h.onFrame && client.ownsSession(h.acpSessionId, h.onFrame));
+  /* offSession even when the key was never ours: a registration that was
+     refused leaves a claim behind, and a handle going away must not leave
+     the client ready to hand the key to a queue that is about to close */
+  if (h.onFrame) client.offSession(h.acpSessionId, h.onFrame);
+  if (owned && !(h.abandoned && h.resumed)) {
+    void client.call("session/close", { sessionId: h.acpSessionId }).catch(() => undefined);
+  }
+  h.queue.close();
+}
 
 export class AsyncQueue<T> {
   private buf: T[] = [];
