@@ -6,7 +6,7 @@ import { piAdapter } from "./adapters/pi.js";
 import { dshAdapter } from "./adapters/dsh.js";
 import { claudeAdapter } from "./adapters/claude.js";
 import { hermesAdapter } from "./adapters/hermes.js";
-import type { AdapterHandle, HarnessAdapter } from "./adapters/types.js";
+import type { AdapterHandle, HarnessAdapter, SessionOpts } from "./adapters/types.js";
 
 const adapters = new Map<HarnessId, HarnessAdapter>([
   [piAdapter.id, piAdapter],
@@ -104,14 +104,78 @@ function settleOrphanedPerms(sessionId: string) {
   }
 }
 
-export async function createSession(input: {
-  harness: HarnessId;
-  cwd: string;
-  model?: string;
-  provider?: string;
-  title?: string;
-  project?: string;
-}) {
+/** the spawn budget — a wedged harness (issue #12: hermes stalled 10m03s
+   attaching MCP) must fail fast and flip the row to error, never an eternal
+   "Booting…" spinner */
+export const SPAWN_TIMEOUT_MS = 90_000;
+
+/**
+ * Bound an adapter.spawn with the spawn budget. Every spawn goes through here
+ * — create, resume, and model-switch respawn alike: a wedged harness must fail
+ * fast at each of them. A spawn that outlives the budget can still land a live
+ * child, so the abandoned handle is disposed when it eventually settles; a
+ * spawn left dangling with no owner and no event pump leaks the harness
+ * process, one per retry.
+ */
+async function boundedSpawn(
+  adapter: HarnessAdapter,
+  opts: SessionOpts,
+  budget: number = SPAWN_TIMEOUT_MS,
+): Promise<AdapterHandle> {
+  let spawnRej: (e: Error) => void = () => {};
+  const budgetPromise = new Promise<never>((_, rej) => (spawnRej = rej));
+  const budgetTimer: ReturnType<typeof setTimeout> = setTimeout(() => {
+    /* plain copy, no em dash: this message is sunk as the session row's error
+       detail and shown to the user in the web UI (TRUSS.md) */
+    spawnRej(new Error(`${adapter.id} didn't answer spawn within ${Math.round(budget / 1000)}s; the harness may be wedged`));
+  }, budget);
+  budgetTimer.unref?.();
+
+  let spawning: Promise<AdapterHandle> | undefined;
+  try {
+    /* inside the try: an adapter that throws synchronously (registerAdapter
+       is the seam runtime harnesses plug into) must not escape before the
+       finally below disowns the budget timer — an armed timer would reject
+       budgetPromise with nobody awaiting it, and Node treats that as a
+       crash */
+    spawning = adapter.spawn(opts);
+    return await Promise.race([spawning, budgetPromise]);
+  } catch (err) {
+    if (spawning) {
+      void spawning.then(
+        (h) => {
+          try {
+            /* mark it first: the adapter's dispose frees the local side but
+               must keep its hands off the harness session — on a resume that
+               session is the one a concurrent retry is bringing back */
+            h.abandoned = true;
+            adapter.dispose(h);
+          } catch {
+            /* already gone */
+          }
+        },
+        () => {
+          /* the spawn failed on its own — nothing to clean up */
+        },
+      );
+    }
+    throw err;
+  } finally {
+    clearTimeout(budgetTimer);
+  }
+}
+
+export async function createSession(
+  input: {
+    harness: HarnessId;
+    cwd: string;
+    model?: string;
+    provider?: string;
+    title?: string;
+    project?: string;
+  },
+  opts: { spawnTimeoutMs?: number } = {},
+) {
   const adapter = adapters.get(input.harness);
   if (!adapter) throw new Error(`unknown harness: ${input.harness}`);
 
@@ -138,12 +202,26 @@ export async function createSession(input: {
     at: Date.now(),
   });
 
-  const handle = await adapter.spawn({
-    sessionId: id,
-    cwd: input.cwd,
-    model: input.model,
-    provider: input.provider,
-  });
+  let handle: AdapterHandle;
+  try {
+    handle = await boundedSpawn(
+      adapter,
+      {
+        sessionId: id,
+        cwd: input.cwd,
+        model: input.model,
+        provider: input.provider,
+      },
+      opts.spawnTimeoutMs ?? SPAWN_TIMEOUT_MS,
+    );
+  } catch (err) {
+    /* timeout OR plain rejection: mark the row error so the UI tells the
+       truth instead of spinning "spawning" forever — the event is the write,
+       the sink persists session.state rows itself */
+    const detail = err instanceof Error ? err.message : String(err);
+    sink({ type: "session.state", sessionId: id, state: "error", detail });
+    throw err;
+  }
   goLive(id, adapter, handle);
   /* harness refs persist lazily from the event pump (goLive) */
   return store.getSession(id)!;
@@ -165,24 +243,50 @@ function goLive(id: string, adapter: HarnessAdapter, handle: AdapterHandle) {
   })();
 }
 
+/** one resume in flight per session. sendPrompt's auto-resume is reachable
+   from the HTTP route, the websocket and the MCP tool at once, so two prompts
+   into a dead session can both enter the spawn window — and two spawns on the
+   same stored ref race for the harness session key: the first to register
+   owns it, the second is refused, and the refused one is the handle goLive
+   leaves live (its permission cards would silently no-op, and nothing could
+   ever dispose the key holder). Sharing the in-flight attempt leaves one
+   spawn, so there is no second registration to refuse. */
+const resuming = new Map<string, Promise<boolean>>();
+
 /**
  * Resume a previously-closed session whose harness persisted its own session
  * (pi session file / ACP resume / claude --resume). Returns false if the
- * harness can't resume — the caller surfaces the error.
+ * harness can't resume — the caller surfaces the error. Concurrent calls for
+ * the same session share the in-flight attempt (the first call's
+ * spawnTimeoutMs applies); a call that starts after one settled runs fresh.
  */
-export async function resumeSession(id: string): Promise<boolean> {
+export function resumeSession(id: string, opts: { spawnTimeoutMs?: number } = {}): Promise<boolean> {
+  const inFlight = resuming.get(id);
+  if (inFlight) return inFlight;
+  const attempt = resumeSessionOnce(id, opts).finally(() => {
+    if (resuming.get(id) === attempt) resuming.delete(id);
+  });
+  resuming.set(id, attempt);
+  return attempt;
+}
+
+async function resumeSessionOnce(id: string, opts: { spawnTimeoutMs?: number }): Promise<boolean> {
   const row = store.getSession(id);
   if (!row?.harness_ref) return false;
   const adapter = adapters.get(row.harness);
   if (!adapter) return false;
   try {
-    const handle = await adapter.spawn({
-      sessionId: id,
-      cwd: row.cwd,
-      model: row.model ?? undefined,
-      provider: row.provider ?? undefined,
-      resumeRef: row.harness_ref,
-    });
+    const handle = await boundedSpawn(
+      adapter,
+      {
+        sessionId: id,
+        cwd: row.cwd,
+        model: row.model ?? undefined,
+        provider: row.provider ?? undefined,
+        resumeRef: row.harness_ref,
+      },
+      opts.spawnTimeoutMs ?? SPAWN_TIMEOUT_MS,
+    );
     goLive(id, adapter, handle);
     if (handle.harnessRef && handle.harnessRef !== row.harness_ref) {
       store.setHarnessRef(id, handle.harnessRef);
@@ -258,6 +362,7 @@ export async function switchModel(
   sessionId: string,
   model: string,
   provider?: string,
+  opts: { spawnTimeoutMs?: number } = {},
 ): Promise<{ mode: "live" | "restart" | "stored" }> {
   const row = store.getSession(sessionId);
   if (!row) throw new Error(`no such session: ${sessionId}`);
@@ -277,13 +382,28 @@ export async function switchModel(
          hasn't persisted anything yet, so a fresh spawn loses nothing */
       s.adapter.dispose(s.handle);
       live.delete(sessionId);
-      const handle = await s.adapter.spawn({
-        sessionId,
-        cwd: row.cwd,
-        model,
-        provider,
-        resumeRef: row.harness_ref ?? undefined,
-      });
+      let handle: AdapterHandle;
+      try {
+        handle = await boundedSpawn(
+          s.adapter,
+          {
+            sessionId,
+            cwd: row.cwd,
+            model,
+            provider,
+            resumeRef: row.harness_ref ?? undefined,
+          },
+          opts.spawnTimeoutMs ?? SPAWN_TIMEOUT_MS,
+        );
+      } catch (err) {
+        /* the live handle is already gone — without this flip the row keeps
+           its pre-switch state ("idle" for any live session) while nothing
+           serves it, and sendPrompt's closed/error gate then refuses the
+           session on every later try. Mirrors createSession. */
+        const detail = err instanceof Error ? err.message : String(err);
+        sink({ type: "session.state", sessionId, state: "error", detail });
+        throw err;
+      }
       goLive(sessionId, s.adapter, handle);
       if (handle.harnessRef && handle.harnessRef !== row.harness_ref) {
         store.setHarnessRef(sessionId, handle.harnessRef);
