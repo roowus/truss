@@ -1,0 +1,41 @@
+# Per-PR preview environment — one worktree per PR, web dev server + server.
+# Usage: PR_NUMBER=43 tilt up (from this dir; the worktree lives at ./w/<pr>)
+# Ports: server = 5000 + pr, web dev = 6000 + pr (deterministic, matches the
+# caddy route pr-<N>.truss.rewis -> the web port).
+#
+# What tilt gives you here: one `tilt up` boots both processes with live
+# reload (tsx watch on the server, vite on the web), restarts on file change,
+# and a clean teardown (tilt down) when the PR merges.
+
+pr = os.environ.get('PR_NUMBER', '')
+if not pr:
+    fail('set PR_NUMBER, e.g. PR_NUMBER=43 tilt up')
+
+port_srv = 5000 + int(pr)
+port_web = 6000 + int(pr)
+wt = './w/' + pr
+
+local_resource(
+    'checkout',
+    cmd='./checkout.sh %s' % pr,
+    deps=[],
+    labels=['setup'],
+)
+
+local_resource(
+    'server',
+    serve_cmd='cd %s/apps/server && TRUSS_PORT=%d TRUSS_DATA_DIR=%s/apps/server/data-pr%s ./node_modules/.bin/tsx watch src/index.ts' % (wt, port_srv, wt, pr),
+    deps=[],
+    resource_deps=['checkout'],
+    labels=['app'],
+    links=['http://127.0.0.1:%d/health' % port_srv],
+)
+
+local_resource(
+    'web',
+    serve_cmd='cd %s/apps/web && TRUSS_SERVER_URL=http://127.0.0.1:%d TRUSS_WEB_PORT=%d ./node_modules/.bin/vite --host 127.0.0.1 --port %d --strictPort' % (wt, port_srv, port_web, port_web),
+    deps=[],
+    resource_deps=['checkout'],
+    labels=['app'],
+    links=['http://127.0.0.1:%d' % port_web],
+)
