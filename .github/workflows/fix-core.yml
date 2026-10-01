@@ -109,6 +109,8 @@ jobs:
           ANTHROPIC_AUTH_TOKEN: ${{ inputs.provider == 'zai' && secrets.ZAI_API_KEY || secrets.FIREWORKS_API_KEY }}
         with:
           github_token: ${{ github.token }}
+          # Self-dispatched loop rounds are initiated by github-actions[bot].
+          allowed_bots: github-actions
           anthropic_api_key: ${{ inputs.provider == 'zai' && secrets.ZAI_API_KEY || secrets.FIREWORKS_API_KEY }}
           prompt: &fix-prompt |
             You are the fixer for round ${{ inputs.round }} of the audit-fix loop on
@@ -213,6 +215,8 @@ jobs:
           ANTHROPIC_AUTH_TOKEN: ${{ secrets.FIREWORKS_API_KEY }}
         with:
           github_token: ${{ github.token }}
+          # Self-dispatched loop rounds are initiated by github-actions[bot].
+          allowed_bots: github-actions
           anthropic_api_key: ${{ secrets.FIREWORKS_API_KEY }}
           prompt: *fix-prompt
           claude_args: |

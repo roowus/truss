@@ -96,6 +96,8 @@ jobs:
           ANTHROPIC_AUTH_TOKEN: ${{ secrets.ZAI_API_KEY }}
         with:
           github_token: ${{ github.token }}
+          # Self-dispatched loop rounds are initiated by github-actions[bot].
+          allowed_bots: github-actions
           anthropic_api_key: ${{ secrets.ZAI_API_KEY }}
           prompt: &audit-prompt |
             You are auditing Pull Request #${{ inputs.pr_number }} in the
@@ -284,6 +286,8 @@ jobs:
           ANTHROPIC_AUTH_TOKEN: ${{ secrets.FIREWORKS_API_KEY }}
         with:
           github_token: ${{ github.token }}
+          # Self-dispatched loop rounds are initiated by github-actions[bot].
+          allowed_bots: github-actions
           anthropic_api_key: ${{ secrets.FIREWORKS_API_KEY }}
           prompt: *audit-prompt
           claude_args: |
