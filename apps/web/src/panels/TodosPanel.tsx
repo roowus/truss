@@ -158,10 +158,14 @@ export function TodosPanel(_props: IDockviewPanelProps) {
 
 /* ── shared bits ── */
 
+/* The facet dropdowns sit on the filter bar next to the search box, so they
+   take the compact 24px bar size like Group by, Sort and State (issue #11).
+   Facet is only used on that row; a dialog facet would want the form size. */
 function Facet({ label, value, values, onChange, short }: { label: string; value: string; values: string[]; onChange: (v: string) => void; short?: boolean }) {
   if (values.length === 0) return null;
   return (
     <Select
+      size="bar"
       width={short ? 130 : 112}
       ariaLabel={`Filter by ${label}`}
       value={value}
