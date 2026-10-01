@@ -22,12 +22,14 @@ kicks in two ways:
 
 1. Any agent step that fails on GLM (for example the key is out of credits)
    retries the same round once on Kimi.
-2. In the loop, if a round's critical/high findings are identical to the
-   previous round's (no progress — the same issues are not getting solved),
-   the fix stage switches to Kimi for that round.
+2. In the loop, if 3 consecutive rounds report identical critical/high
+   findings (no progress — the same issues are not getting solved), the fix
+   stage switches to Kimi until the streak breaks.
 
-The loop's 3-round cap is the hard "3 tries" bound: anything still churning
-after that is posted for a human.
+The loop cycles as a self-dispatching chain of one-round runs (state passes
+as dispatch inputs), capped at 10 rounds (`MAX_ROUNDS` in
+`pr-audit-loop.yml`). Anything still churning after that is posted for a
+human.
 
 ## `~run-audit`
 
@@ -39,12 +41,14 @@ JSON block that the loop below consumes.
 
 ## `~audit-loop`
 
-Comment `~audit-loop` on a PR. The `pr-audit-loop` workflow runs up to three
-rounds of: audit the head, validate each critical/important finding
+Comment `~audit-loop` on a PR. The `pr-audit-loop` workflow runs one round
+per workflow run — audit the head, validate each critical/important finding
 adversarially (valid, not worth it, refuted, out of scope), fix the valid
-ones with tests per `TRUSS.md`, push one commit per round, and re-audit. It
-stops when a round finds nothing major, and always posts a summary. Merging
-stays a human decision; `ci` runs on each pushed head as usual.
+ones with tests per `TRUSS.md`, push one commit — then re-dispatches itself
+for the next round until an audit finds nothing major (hard cap 10). The
+started note on the PR tracks progress and becomes the final summary.
+Merging stays a human decision; when the loop pushed commits, its final run
+approves the parked `ci` run on the head (or dispatches `ci` directly).
 
 ## Guardrails
 

@@ -1,29 +1,32 @@
 name: pr-audit-loop
 
-# Comment "~audit-loop" on a PR (repo owner only) to run the audit-fix loop:
-# audit the head → adversarially validate each major finding → fix the valid
-# ones with tests → push → re-audit, up to 3 rounds, until a round finds no
-# critical/high findings. Every round posts its audit report and fix wrap-up;
-# the loop always ends with a posted summary.
+# Comment "~audit-loop" on a PR (repo owner only) to start the audit-fix loop.
+# Each run performs ONE round — audit (audit-core.yml) → validate and fix
+# (fix-core.yml) → push — and then re-dispatches itself for the next round
+# until an audit finds no critical/high findings. Rounds are therefore not
+# hardcoded: the loop cycles for as many rounds as it needs, bounded by
+# MAX_ROUNDS below. (workflow_dispatch is the one event GITHUB_TOKEN may
+# trigger, which is what makes the self-chain possible.)
 #
-# This workflow only orchestrates: the audit lives in audit-core.yml and the
-# fixer in fix-core.yml, called directly as jobs (no comment re-triggers).
+# State passes from run to run as dispatch inputs: round number, the started
+# note's comment id, a hash of the last round's major findings, the no-
+# progress streak, and whether any round pushed commits.
 #
 # Models: primary is GLM via Z.AI. Fallback to Kimi via Fireworks happens two
 # ways:
 #   1. any agent job that fails on GLM (for example out of credits) retries
-#      the same round once on Kimi;
-#   2. if a round's critical/high findings are identical to the previous
-#      round's (no progress — the same issues are not getting solved), the
-#      fix stage switches to Kimi for that round.
-# 3 rounds is the hard cap: anything still churning then goes to a human.
+#      the same round once on Kimi (inside the core workflows);
+#   2. if 3 consecutive rounds report identical critical/high findings (the
+#      same issues are not getting solved), the fixer switches to Kimi until
+#      the streak breaks.
 #
 # Safety:
 # - Owner-comment trigger only; runs only on same-repo PR heads (the fixer
 #   installs dependencies and runs the PR's own code).
 # - Shares the truss-audit-<pr> concurrency group with pr-audit.yml, so at
-#   most one audit/loop run per PR at a time (cancel-in-progress: false — a
-#   second trigger queues instead of interrupting).
+#   most one audit/loop run per PR at a time. A queued self-dispatch starts
+#   the moment the dispatching run releases the group, and a duplicate
+#   comment trigger queues instead of interrupting.
 # - The fixer commits; a workflow-owned step pushes, refspec-pinned to the PR
 #   branch. The agent never edits .github/workflows/**.
 #
@@ -33,19 +36,48 @@ name: pr-audit-loop
 on:
   issue_comment:
     types: [created]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        required: true
+        type: string
+      round:
+        type: string
+        default: "1"
+      comment_id:
+        type: string
+        default: ""
+      last_majors:
+        description: sha256 of the previous round's major-finding titles
+        type: string
+        default: ""
+      stale:
+        description: consecutive rounds with identical majors
+        type: string
+        default: "0"
+      pushed:
+        description: "1 once any round pushed commits"
+        type: string
+        default: "0"
 
 concurrency:
-  group: truss-audit-${{ github.event.issue.number }}
+  group: truss-audit-${{ github.event.inputs.pr_number || github.event.issue.number }}
   cancel-in-progress: false
 
 permissions: {}
 
+env:
+  MAX_ROUNDS: 10
+
 jobs:
   check:
+    # Round 1 comes from an owner comment; later rounds from self-dispatch.
     if: >-
-      github.event.issue.pull_request &&
-      contains(github.event.comment.body, '~audit-loop') &&
-      github.event.comment.author_association == 'OWNER'
+      (github.event_name == 'issue_comment' &&
+        github.event.issue.pull_request &&
+        contains(github.event.comment.body, '~audit-loop') &&
+        github.event.comment.author_association == 'OWNER') ||
+      github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     permissions:
       pull-requests: write
@@ -58,9 +90,10 @@ jobs:
       comment_id: ${{ steps.gate.outputs.comment_id }}
     env:
       GH_TOKEN: ${{ github.token }}
-      PR_NUMBER: ${{ github.event.issue.number }}
+      PR_NUMBER: ${{ github.event.inputs.pr_number || github.event.issue.number }}
     steps:
       - name: Acknowledge trigger
+        if: github.event_name == 'issue_comment'
         continue-on-error: true
         run: >-
           gh api "repos/${{ github.repository }}/issues/comments/${{ github.event.comment.id }}/reactions"
@@ -75,22 +108,22 @@ jobs:
           echo "head_sha=$(jq -r .headRefOid "$RUNNER_TEMP/pr.json")" >> "$GITHUB_OUTPUT"
           echo "head_ref=$(jq -r .headRefName "$RUNNER_TEMP/pr.json")" >> "$GITHUB_OUTPUT"
           echo "base_ref=$(jq -r .baseRefName "$RUNNER_TEMP/pr.json")" >> "$GITHUB_OUTPUT"
+          echo "comment_id=${{ github.event.inputs.comment_id }}" >> "$GITHUB_OUTPUT"
           if [ "$(jq -r .isCrossRepository "$RUNNER_TEMP/pr.json")" = "true" ]; then
             gh pr comment "$PR_NUMBER" --repo "${{ github.repository }}" --body \
               "🔁 Audit-fix loop skipped: it only runs on same-repo PRs (the fix stage installs dependencies and runs the PR's own code)."
             echo "ok=false" >> "$GITHUB_OUTPUT"
-            echo "comment_id=" >> "$GITHUB_OUTPUT"
           else
             echo "ok=true" >> "$GITHUB_OUTPUT"
-            gh api "repos/${{ github.repository }}/issues/$PR_NUMBER/comments" \
-              -f body="🔁 Audit-fix loop running (up to 3 rounds) — this comment will be replaced by the summary when the loop ends. Each round's audit and wrap-up post as they land. ([run logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}))" \
-              --jq .id > "$RUNNER_TEMP/ack-id"
-            echo "comment_id=$(cat "$RUNNER_TEMP/ack-id")" >> "$GITHUB_OUTPUT"
+            if [ "${{ github.event_name }}" = "issue_comment" ]; then
+              gh api "repos/${{ github.repository }}/issues/$PR_NUMBER/comments" \
+                -f body="🔁 Audit-fix loop running — this comment becomes the summary when the loop ends. Each round's audit and wrap-up post as they land. ([run logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}))" \
+                --jq .id > "$RUNNER_TEMP/ack-id"
+              echo "comment_id=$(cat "$RUNNER_TEMP/ack-id")" >> "$GITHUB_OUTPUT"
+            fi
           fi
 
-  # ---------------- Round 1 ----------------
-
-  audit-r1:
+  audit:
     needs: check
     if: needs.check.outputs.ok == 'true'
     uses: ./.github/workflows/audit-core.yml
@@ -100,13 +133,44 @@ jobs:
       pull-requests: write
       issues: write
     with:
-      pr_number: ${{ github.event.issue.number }}
+      pr_number: ${{ github.event.inputs.pr_number || github.event.issue.number }}
       head_sha: ${{ needs.check.outputs.head_sha }}
-      round_label: "1"
+      round_label: ${{ github.event.inputs.round || '1' }}
 
-  fix-r1:
-    needs: [check, audit-r1]
-    if: needs.audit-r1.outputs.signal == 'continue'
+  # Compare this round's majors against the previous round's: identical 3
+  # times in a row means GLM is not making progress, so the fixer switches
+  # to Kimi until the streak breaks.
+  decide:
+    needs: [check, audit]
+    if: always() && needs.check.outputs.ok == 'true'
+    runs-on: ubuntu-latest
+    outputs:
+      stale: ${{ steps.d.outputs.stale }}
+      majors_hash: ${{ steps.d.outputs.majors_hash }}
+      provider: ${{ steps.d.outputs.provider }}
+    env:
+      MAJORS: ${{ needs.audit.outputs.majors }}
+      LAST: ${{ github.event.inputs.last_majors }}
+      STALE_IN: ${{ github.event.inputs.stale || '0' }}
+    steps:
+      - id: d
+        run: |
+          CUR=$(printf '%s' "$MAJORS" | sha256sum | cut -d' ' -f1)
+          STALE="$STALE_IN"
+          if [ -n "$MAJORS" ] && [ "$CUR" = "$LAST" ]; then
+            STALE=$((STALE + 1))
+          else
+            STALE=0
+          fi
+          PROVIDER=zai
+          [ "$STALE" -ge 3 ] && PROVIDER=fireworks
+          echo "stale=$STALE" >> "$GITHUB_OUTPUT"
+          echo "majors_hash=$CUR" >> "$GITHUB_OUTPUT"
+          echo "provider=$PROVIDER" >> "$GITHUB_OUTPUT"
+
+  fix:
+    needs: [check, audit, decide]
+    if: needs.audit.outputs.signal == 'continue'
     uses: ./.github/workflows/fix-core.yml
     secrets: inherit
     permissions:
@@ -114,81 +178,16 @@ jobs:
       pull-requests: write
       issues: write
     with:
-      pr_number: ${{ github.event.issue.number }}
-      round: "1"
+      pr_number: ${{ github.event.inputs.pr_number || github.event.issue.number }}
+      round: ${{ github.event.inputs.round || '1' }}
       base_ref: ${{ needs.check.outputs.base_ref }}
       head_ref: ${{ needs.check.outputs.head_ref }}
-      provider: zai
+      provider: ${{ needs.decide.outputs.provider }}
 
-  # ---------------- Round 2 ----------------
-
-  audit-r2:
-    needs: [check, fix-r1]
-    if: needs.fix-r1.outputs.signal == 'continue'
-    uses: ./.github/workflows/audit-core.yml
-    secrets: inherit
-    permissions:
-      contents: read
-      pull-requests: write
-      issues: write
-    with:
-      pr_number: ${{ github.event.issue.number }}
-      head_sha: ${{ needs.fix-r1.outputs.head }}
-      round_label: "2"
-
-  fix-r2:
-    needs: [check, audit-r1, audit-r2]
-    if: needs.audit-r2.outputs.signal == 'continue'
-    uses: ./.github/workflows/fix-core.yml
-    secrets: inherit
-    permissions:
-      contents: write
-      pull-requests: write
-      issues: write
-    with:
-      pr_number: ${{ github.event.issue.number }}
-      round: "2"
-      base_ref: ${{ needs.check.outputs.base_ref }}
-      head_ref: ${{ needs.check.outputs.head_ref }}
-      # No progress on GLM (round 2 majors identical to round 1) → Kimi.
-      provider: ${{ needs.audit-r1.outputs.majors != '' && needs.audit-r1.outputs.majors == needs.audit-r2.outputs.majors && 'fireworks' || 'zai' }}
-
-  # ---------------- Round 3 (cap) ----------------
-
-  audit-r3:
-    needs: [check, fix-r2]
-    if: needs.fix-r2.outputs.signal == 'continue'
-    uses: ./.github/workflows/audit-core.yml
-    secrets: inherit
-    permissions:
-      contents: read
-      pull-requests: write
-      issues: write
-    with:
-      pr_number: ${{ github.event.issue.number }}
-      head_sha: ${{ needs.fix-r2.outputs.head }}
-      round_label: "3"
-
-  fix-r3:
-    needs: [check, audit-r2, audit-r3]
-    if: needs.audit-r3.outputs.signal == 'continue'
-    uses: ./.github/workflows/fix-core.yml
-    secrets: inherit
-    permissions:
-      contents: write
-      pull-requests: write
-      issues: write
-    with:
-      pr_number: ${{ github.event.issue.number }}
-      round: "3"
-      base_ref: ${{ needs.check.outputs.base_ref }}
-      head_ref: ${{ needs.check.outputs.head_ref }}
-      provider: ${{ needs.audit-r2.outputs.majors != '' && needs.audit-r2.outputs.majors == needs.audit-r3.outputs.majors && 'fireworks' || 'zai' }}
-
-  # ---------------- Summary ----------------
-
-  summary:
-    needs: [check, audit-r1, fix-r1, audit-r2, fix-r2, audit-r3, fix-r3]
+  # Either dispatch the next round or write the final summary (and get CI
+  # running on the pushed head).
+  next:
+    needs: [check, audit, decide, fix]
     if: always() && needs.check.outputs.ok == 'true'
     runs-on: ubuntu-latest
     permissions:
@@ -196,81 +195,75 @@ jobs:
       actions: write
     env:
       GH_TOKEN: ${{ github.token }}
-      PR_NUMBER: ${{ github.event.issue.number }}
-      HEAD_REF: ${{ needs.check.outputs.head_ref }}
+      PR_NUMBER: ${{ github.event.inputs.pr_number || github.event.issue.number }}
+      ROUND: ${{ github.event.inputs.round || '1' }}
       CID: ${{ needs.check.outputs.comment_id }}
-      A1_VERDICT: ${{ needs.audit-r1.outputs.verdict }}
-      A1_SIG: ${{ needs.audit-r1.outputs.signal }}
-      A1_C: ${{ needs.audit-r1.outputs.critical }}
-      A1_H: ${{ needs.audit-r1.outputs.high }}
-      A2_VERDICT: ${{ needs.audit-r2.outputs.verdict }}
-      A2_SIG: ${{ needs.audit-r2.outputs.signal }}
-      A2_C: ${{ needs.audit-r2.outputs.critical }}
-      A2_H: ${{ needs.audit-r2.outputs.high }}
-      A3_VERDICT: ${{ needs.audit-r3.outputs.verdict }}
-      A3_SIG: ${{ needs.audit-r3.outputs.signal }}
-      A3_C: ${{ needs.audit-r3.outputs.critical }}
-      A3_H: ${{ needs.audit-r3.outputs.high }}
-      F1_SIG: ${{ needs.fix-r1.outputs.signal }}
-      F1_F: ${{ needs.fix-r1.outputs.fixed }}
-      F1_REF: ${{ needs.fix-r1.outputs.refuted }}
-      F1_DEC: ${{ needs.fix-r1.outputs.declined }}
-      F2_SIG: ${{ needs.fix-r2.outputs.signal }}
-      F2_F: ${{ needs.fix-r2.outputs.fixed }}
-      F2_REF: ${{ needs.fix-r2.outputs.refuted }}
-      F2_DEC: ${{ needs.fix-r2.outputs.declined }}
-      F3_SIG: ${{ needs.fix-r3.outputs.signal }}
-      F3_F: ${{ needs.fix-r3.outputs.fixed }}
-      F3_REF: ${{ needs.fix-r3.outputs.refuted }}
-      F3_DEC: ${{ needs.fix-r3.outputs.declined }}
+      HEAD_REF: ${{ needs.check.outputs.head_ref }}
+      A_VERDICT: ${{ needs.audit.outputs.verdict }}
+      A_SIG: ${{ needs.audit.outputs.signal }}
+      A_C: ${{ needs.audit.outputs.critical }}
+      A_H: ${{ needs.audit.outputs.high }}
+      F_SIG: ${{ needs.fix.outputs.signal }}
+      F_F: ${{ needs.fix.outputs.fixed }}
+      F_REF: ${{ needs.fix.outputs.refuted }}
+      F_DEC: ${{ needs.fix.outputs.declined }}
+      STALE: ${{ needs.decide.outputs.stale }}
+      MAJORS_HASH: ${{ needs.decide.outputs.majors_hash }}
+      PROVIDER: ${{ needs.decide.outputs.provider }}
+      PUSHED_BEFORE: ${{ github.event.inputs.pushed || '0' }}
     steps:
-      - name: Post loop summary
+      - name: Continue or conclude the loop
         run: |
+          PUSHED="$PUSHED_BEFORE"
+          [ "$F_SIG" = "continue" ] && PUSHED=1
+
+          post_or_patch() {
+            if [ -n "$CID" ]; then
+              python3 -c 'import json, sys; print(json.dumps({"body": open(sys.argv[1]).read()}))' "$1" \
+                | gh api -X PATCH "repos/${{ github.repository }}/issues/comments/$CID" --input - > /dev/null
+            else
+              gh pr comment "$PR_NUMBER" --repo "${{ github.repository }}" --body-file "$1"
+            fi
+          }
+
+          if [ "$A_SIG" = "continue" ] && [ "$F_SIG" = "continue" ] && [ "$ROUND" -lt "$MAX_ROUNDS" ]; then
+            # Cycle: dispatch the next round and update the started note.
+            gh workflow run pr-audit-loop.yml --repo "${{ github.repository }}" \
+              -f pr_number="$PR_NUMBER" -f round=$((ROUND + 1)) -f comment_id="$CID" \
+              -f last_majors="$MAJORS_HASH" -f stale="$STALE" -f pushed="$PUSHED"
+            {
+              echo "🔁 Audit-fix loop: round $ROUND pushed fixes (fixed $F_F, refuted $F_REF, declined $F_DEC) — round $((ROUND + 1)) queued. This comment becomes the summary when the loop ends."
+              [ "$PROVIDER" = "fireworks" ] && echo "The fixer is running on Kimi: the last 3 rounds reported identical majors."
+              echo
+              echo "([run logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}))"
+            } > "$RUNNER_TEMP/progress.md"
+            post_or_patch "$RUNNER_TEMP/progress.md"
+            exit 0
+          fi
+
+          # Terminal state: build the final summary.
           {
             echo "## 🔁 Audit-fix loop — summary"
             echo
-            echo "| Round | Audit verdict | C/H findings | Fixed | Refuted | Declined | Outcome |"
-            echo "|---|---|---|---|---|---|---|"
-            for r in 1 2 3; do
-              verdict_var="A${r}_VERDICT"; c_var="A${r}_C"; h_var="A${r}_H"
-              sig_var="F${r}_SIG"; f_var="F${r}_F"; ref_var="F${r}_REF"; dec_var="F${r}_DEC"
-              pv="${!verdict_var}"; pc="${!c_var}"; ph="${!h_var}"
-              fs="${!sig_var}"; ff="${!f_var}"; fr="${!ref_var}"; fd="${!dec_var}"
-              [ -z "$pv" ] && continue
-              echo "| $r | ${pv:-—} | ${pc:-0}/${ph:-0} | ${ff:-—} | ${fr:-—} | ${fd:-—} | ${fs:-${pv:+converged}} |"
-            done
+            echo "Rounds run: $ROUND (cap $MAX_ROUNDS) · last audit: ${A_VERDICT:-—} (${A_C:-0} critical / ${A_H:-0} high) · last fix round: ${F_SIG:-—} (fixed ${F_F:-—}, refuted ${F_REF:-—}, declined ${F_DEC:-—})"
             echo
-            if [ -z "$A1_VERDICT" ]; then
-              echo "**Aborted:** the round 1 audit never produced a report (GLM failed and so did the Kimi fallback, or neither wrote output). Check the Z.AI and Fireworks keys, then re-comment the trigger to retry."
-            elif [ "$A1_SIG" = "error" ]; then
-              echo "**Aborted:** the round 1 report was unparseable. See the run logs."
-            elif [ "$F1_SIG" = "abort" ] || [ "$F2_SIG" = "abort" ] || [ "$F3_SIG" = "abort" ]; then
-              echo "**Aborted:** a fix round could not complete. See that round's wrap-up comment and the run logs."
-            elif [ "$A2_SIG" = "error" ] || [ "$A3_SIG" = "error" ]; then
-              echo "**Aborted:** a later audit report was unparseable. See the run logs."
-            elif [ "$F1_SIG" = "continue" ] && [ -z "$A2_VERDICT" ]; then
-              echo "**Aborted:** the round 2 audit failed. See the run logs; re-comment the trigger to retry."
-            elif [ "$F2_SIG" = "continue" ] && [ -z "$A3_VERDICT" ]; then
-              echo "**Aborted:** the round 3 audit failed. See the run logs; re-comment the trigger to retry."
-            elif [ "$A1_SIG" = "continue" ] && [ -z "$F1_SIG" ]; then
-              echo "**Aborted:** the fix round 1 job failed before producing a result. See the run logs."
-            elif [ "$A2_SIG" = "continue" ] && [ -z "$F2_SIG" ]; then
-              echo "**Aborted:** the fix round 2 job failed before producing a result. See the run logs."
-            elif [ "$A3_SIG" = "continue" ] && [ -z "$F3_SIG" ]; then
-              echo "**Aborted:** the fix round 3 job failed before producing a result. See the run logs."
-            elif [ "$F3_SIG" = "continue" ]; then
-              echo "**Round cap (3) hit** with fixes still landing. Anything still churning after 3 rounds needs a human look before more loops."
-            elif [ -n "$F3_SIG" ]; then
-              echo "**Converged after 3 rounds.** The last audit's remaining majors were dispositioned in the round 3 wrap-up."
-            elif [ -n "$F2_SIG" ]; then
-              echo "**Converged after 2 rounds.**"
-            elif [ -n "$F1_SIG" ]; then
-              echo "**Converged after 1 round of fixes.**"
+            if [ -z "$A_VERDICT" ]; then
+              echo "**Aborted:** this round's audit never produced a report (GLM failed and so did the Kimi fallback). Check the keys, then re-comment the trigger to retry."
+            elif [ "$A_SIG" = "error" ]; then
+              echo "**Aborted:** this round's audit report was unparseable. See the run logs."
+            elif [ "$A_SIG" = "continue" ] && [ -z "$F_SIG" ]; then
+              echo "**Aborted:** the fix job failed before producing a result. See the run logs."
+            elif [ "$F_SIG" = "abort" ]; then
+              echo "**Aborted:** the fix round could not complete. See its wrap-up comment and the run logs."
+            elif [ "$F_SIG" = "continue" ]; then
+              echo "**Round cap ($MAX_ROUNDS) hit** with fixes still landing. Anything still churning needs a human look before more loops."
+            elif [ "$F_SIG" = "converged" ]; then
+              echo "**Converged after $ROUND round(s).** The last audit's majors were dispositioned in this round's wrap-up."
             else
-              echo "**Converged at the first audit** — no critical/important findings. Minor findings, if any, are listed in the audit above."
+              echo "**Converged at round $ROUND** — the audit found no critical/important findings. Minor findings, if any, are listed in the audit above."
             fi
             echo
-            if [ "$F1_SIG" = "continue" ] || [ "$F2_SIG" = "continue" ] || [ "$F3_SIG" = "continue" ]; then
+            if [ "$PUSHED" = "1" ]; then
               # Bot pushes park pull_request CI as action_required (bot
               # approval gate). Approve those runs; if none are parked, fall
               # back to dispatching ci on the head branch directly.
@@ -296,9 +289,4 @@ jobs:
             echo
             echo "_Posted by \`${{ github.workflow }}\` · [run logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})_"
           } > "$RUNNER_TEMP/summary.md"
-          if [ -n "$CID" ]; then
-            python3 -c 'import json, sys; print(json.dumps({"body": open(sys.argv[1]).read()}))' "$RUNNER_TEMP/summary.md" \
-              | gh api -X PATCH "repos/${{ github.repository }}/issues/comments/$CID" --input - > /dev/null
-          else
-            gh pr comment "$PR_NUMBER" --repo "${{ github.repository }}" --body-file "$RUNNER_TEMP/summary.md"
-          fi
+          post_or_patch "$RUNNER_TEMP/summary.md"
