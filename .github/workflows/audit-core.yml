@@ -234,7 +234,10 @@ jobs:
             using the Write tool — an audit not written to that exact file is
             discarded; a later step posts it verbatim as a PR comment. Format:
             findings grouped by severity, then the three assessments, then the
-            machine-readable block last. No stats/token footer.
+            machine-readable block last. No stats/token footer. If a permission
+            error stops you from writing the file, output the ENTIRE audit, in
+            the same format including the machine-readable block, as your final
+            message — a later step recovers it from the execution log.
 
             MACHINE-READABLE BLOCK — the same audit as data, for the automation
             that reads it instead of parsing your Markdown. The two must agree:
@@ -273,6 +276,7 @@ jobs:
       # Same audit, retried once on Kimi if the GLM run failed (for example the
       # Z.AI key is out of credits).
       - name: Run audit (Kimi fallback)
+        id: run-fb
         if: steps.run.outcome == 'failure'
         uses: anthropics/claude-code-action@v1
         env:
@@ -294,7 +298,34 @@ jobs:
         env:
           REVIEW: ${{ runner.temp }}/review-out/round-${{ inputs.round_label || 'solo' }}.md
           MAJORS: ${{ runner.temp }}/review-out/majors-${{ inputs.round_label || 'solo' }}.txt
+          EXEC_GLM: ${{ steps.run.outputs.execution_file }}
+          EXEC_KIMI: ${{ steps.run-fb.outputs.execution_file }}
         run: |
+          # If the agent answered without writing the file (a permission
+          # denial storm once ate a whole audit), recover the review from its
+          # final message in the execution log.
+          if [ ! -s "$REVIEW" ]; then
+            for EF in "$EXEC_KIMI" "$EXEC_GLM"; do
+              [ -n "$EF" ] && [ -f "$EF" ] || continue
+              python3 - "$EF" "$REVIEW" <<'EOF' && break
+          import json, sys
+          try:
+              events = json.load(open(sys.argv[1]))
+          except Exception:
+              sys.exit(1)
+          texts = []
+          for ev in events if isinstance(events, list) else []:
+              if ev.get("type") == "assistant":
+                  for part in ev.get("message", {}).get("content", []):
+                      if isinstance(part, dict) and part.get("type") == "text":
+                          texts.append(part["text"])
+          if texts and "```json" in texts[-1]:
+              open(sys.argv[2], "w").write(texts[-1])
+          else:
+              sys.exit(1)
+          EOF
+            done
+          fi
           python3 - "$REVIEW" "$MAJORS" <<'EOF' > "$RUNNER_TEMP/parsed.txt"
           import json, re, sys, os
           text = open(sys.argv[1]).read() if os.path.exists(sys.argv[1]) else ""
@@ -337,6 +368,17 @@ jobs:
           path: ${{ runner.temp }}/review-out/round-${{ inputs.round_label || 'solo' }}.md
           if-no-files-found: warn
           retention-days: 1
+
+      - name: Upload execution log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: audit-exec-${{ inputs.round_label || 'solo' }}
+          path: |
+            ${{ steps.run.outputs.execution_file }}
+            ${{ steps.run-fb.outputs.execution_file }}
+          if-no-files-found: ignore
+          retention-days: 7
 
       - name: Post or edit report comment
         if: always()
