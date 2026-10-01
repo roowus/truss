@@ -192,6 +192,10 @@ jobs:
             EFFICIENCY CONTRACT: if the report has no critical/high findings this
             round is a no-op — verify that against the report text (not the whole
             codebase), write the converged result and wrap-up, and end.
+
+            If a permission error stops you from writing either deliverable
+            file, output the result JSON and then the wrap-up as your final
+            message instead — never end the turn with nothing written.
           claude_args: |
             --model ${{ inputs.provider == 'zai' && env.GLM_MODEL || env.KIMI_MODEL }}
             --max-turns 100
@@ -201,6 +205,7 @@ jobs:
       # Same fix round, retried once on Kimi if the GLM run failed. (When the
       # caller already picked Kimi for stagnation, a failure is final.)
       - name: Fix round ${{ inputs.round }} (Kimi fallback)
+        id: run-fb
         if: steps.run.outcome == 'failure' && inputs.provider == 'zai'
         uses: anthropics/claude-code-action@v1
         env:
@@ -215,6 +220,17 @@ jobs:
             --max-turns 100
             --add-dir ${{ runner.temp }}/review-out
             --allowed-tools "Bash(git -C pr-work:*),Bash(pnpm:*),Bash(env -u:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh issue view:*),Read,Write,Edit,Glob,Grep"
+
+      - name: Upload execution log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fix-exec-${{ inputs.round }}
+          path: |
+            ${{ steps.run.outputs.execution_file }}
+            ${{ steps.run-fb.outputs.execution_file }}
+          if-no-files-found: ignore
+          retention-days: 7
 
       - name: Finish round ${{ inputs.round }}
         id: finish
