@@ -41,7 +41,9 @@ function trussMcp(trussSessionId: string) {
 
 const HERMES_BIN = process.env.TRUSS_HERMES_BIN ?? join(homedir(), ".hermes", "venv", "bin", "hermes-acp");
 
-const client = new AcpClient({
+/** the shared hermes ACP client — exported so tests can pin how this adapter
+    calls it (the turn call's budget wiring) */
+export const client = new AcpClient({
   command: HERMES_BIN,
   args: [],
 });
@@ -124,7 +126,8 @@ export const hermesAdapter: HarnessAdapter = {
 
     const h = makeSessionState(opts.sessionId, res.sessionId, model);
     h.harnessRef = res.sessionId;
-    client.onSession(res.sessionId, (rec) => handleServerMessage(h, rec));
+    h.onFrame = (rec) => handleServerMessage(h, rec);
+    client.onSession(res.sessionId, h.onFrame);
     h.queue.push({ type: "session.state", sessionId: opts.sessionId, state: "idle" });
     return h;
   },
@@ -181,8 +184,15 @@ export const hermesAdapter: HarnessAdapter = {
 
   dispose(handle: AdapterHandle) {
     const h = handle as AcpSessionState;
-    client.offSession(h.acpSessionId);
-    void client.call("session/close", { sessionId: h.acpSessionId }).catch(() => undefined);
+    /* sessions multiplex on one shared client keyed by the harness session
+       id, and resume/respawn reuse the stored ref — a spawn that outlived
+       the spawn budget can land after a retry has gone live on the same key,
+       and its late teardown must not close the live session out from under
+       it (issue #12) */
+    if (h.onFrame && client.ownsSession(h.acpSessionId, h.onFrame)) {
+      client.offSession(h.acpSessionId);
+      void client.call("session/close", { sessionId: h.acpSessionId }).catch(() => undefined);
+    }
     h.queue.close();
   },
 } as HarnessAdapter & { resolve(handle: AdapterHandle, requestId: string, choice: string): void };
