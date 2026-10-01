@@ -138,6 +138,210 @@ test("a resume that outlives the spawn budget must not tear down the live sessio
   }
 });
 
+/* the OPPOSITE ordering (audit round 3, finding B1): the abandoned spawn is
+   the FIRST to register, so it owns the key and ownsSession alone would let
+   its teardown through — and that teardown sends session/close. The retry
+   then registers into the freed key and goes live on a session the harness
+   was told to release, so its first turn fails harness-side. An abandoned
+   dispose must drop the frame handler and close the queue but stay off the
+   wire: the harness session it resumed is exactly what the retry needs.
+
+   The fake answers the FIRST session/resume after 300ms (spawn 1 blows the
+   200ms budget and lands at ~300ms) and the second after 700ms (the retry,
+   started at ~200ms, registers at ~900ms) — so the abandoned spawn owns the
+   key when its dispose runs and the retry re-registers after it. onSession
+   is wrapped so the test can see the registration order and prove the
+   dangerous ordering really happened, and a usage frame pushed after the
+   retry's resume proves the retried session still receives frames. */
+
+const ORDER_FAKE = `
+const fs = require("fs");
+const log = process.env.TRUSS_TEST_ACP_LOG;
+let b = "";
+let resumes = 0;
+const delays = (process.env.TRUSS_TEST_RESUME_DELAYS || "0,0").split(",").map(Number);
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (c) => {
+  b += c;
+  let i;
+  while ((i = b.indexOf("\\n")) >= 0) {
+    const l = b.slice(0, i).trim();
+    b = b.slice(i + 1);
+    if (!l) continue;
+    let r;
+    try { r = JSON.parse(l) } catch { continue }
+    if (r.method && log) fs.appendFileSync(log, r.method + "\\n");
+    if (r.id == null || !r.method) continue;
+    const answer = (res) =>
+      process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: r.id, result: res }) + "\\n");
+    if (r.method === "initialize") { answer({ protocolVersion: 1 }); continue }
+    if (r.method === "session/resume") {
+      resumes++;
+      const sid = r.params && r.params.sessionId;
+      setTimeout(() => {
+        answer({ ok: true });
+        if (resumes === 2) {
+          setTimeout(() => {
+            process.stdout.write(JSON.stringify({
+              jsonrpc: "2.0",
+              method: "session/update",
+              params: { sessionId: sid, update: { sessionUpdate: "usage_update", used: 9, size: 100 } },
+            }) + "\\n");
+          }, 50);
+        }
+      }, delays[resumes - 1] || 0);
+      continue;
+    }
+    answer({ ok: true });
+  }
+});
+`;
+
+const ORDER_FAKE_DIR = mkdtempSync(join(tmpdir(), "truss-fake-hermes-order-"));
+const ORDER_FAKE_BIN = join(ORDER_FAKE_DIR, "hermes-acp");
+const ORDER_LOG = join(ORDER_FAKE_DIR, "methods.log");
+writeFileSync(ORDER_FAKE_BIN, "#!/usr/bin/env node\n" + ORDER_FAKE + "\n", { mode: 0o755 });
+
+test("an abandoned dispose that registered FIRST must not session/close the harness session a retry is resuming", async () => {
+  const { db, cleanup } = await freshServer("late-dispose-order");
+  const sessions = await import("../src/sessions.js");
+  const hermes = await import("../src/adapters/hermes.js");
+  /* the client is a module singleton bound to the binary path the file pinned
+     at load — point it at this test's own fake before it boots. The earlier
+     test killed its proc; make sure that exit has been processed so ensure()
+     boots this fake fresh instead of writing to the dead pipe. */
+  (hermes.client as any).launch.command = ORDER_FAKE_BIN;
+  (hermes.client as any).proc?.kill("SIGKILL");
+  await tick(100);
+  process.env.TRUSS_TEST_RESUME_DELAYS = "300,700";
+  process.env.TRUSS_TEST_ACP_LOG = ORDER_LOG;
+  const registrations: unknown[] = [];
+  const realOnSession = (hermes.client as any).onSession.bind(hermes.client);
+  (hermes.client as any).onSession = (key: string, fn: unknown) => {
+    registrations.push(fn);
+    return realOnSession(key, fn);
+  };
+  try {
+    /* a closed session with a stored harness ref — resume reuses it as the
+       harness session id, so both spawns land on the same shared key */
+    db.store.createSession({ id: "ord-1", harness: "hermes", title: "t", cwd: "/tmp" });
+    db.store.setHarnessRef("ord-1", "hs-ord");
+
+    /* spawn 1 gives up at the 200ms budget while its resume is in flight */
+    const first = await sessions.resumeSession("ord-1", { spawnTimeoutMs: 200 });
+    assert.equal(first, false, "the slow resume gives up at the budget");
+
+    /* the retry — sendPrompt's auto-resume does the same thing; the fake
+       answers it long after the abandoned spawn has registered */
+    const second = await sessions.resumeSession("ord-1", { spawnTimeoutMs: 5000 });
+    assert.equal(second, true, "the retry goes live on the stored ref");
+
+    assert.equal(registrations.length, 2, "both spawns registered on the shared key");
+    assert.equal(
+      (hermes.client as any).sessionHandlers.get("hs-ord"),
+      registrations[1],
+      "the abandoned spawn registered first and was dropped — the retry owns the key",
+    );
+
+    let usage: { used?: number } | undefined;
+    for (let waited = 0; waited < 4000 && !usage; waited += 100) {
+      await tick(100);
+      usage = db.store
+        .listEvents("ord-1")
+        .map((f) => f.ev)
+        .find((e) => e.type === "ctx.usage") as { used?: number } | undefined;
+    }
+    assert.ok(usage, "the retried session must still receive frames after the abandoned spawn lands");
+    const methods = readFileSync(ORDER_LOG, "utf8").split("\n").filter(Boolean);
+    assert.equal(methods.filter((m) => m === "session/resume").length, 2, "both resumes reached the harness");
+    assert.ok(
+      !methods.includes("session/close"),
+      `the abandoned dispose must not release the harness session the retry is resuming — got: ${methods.join(", ")}`,
+    );
+  } finally {
+    delete (hermes.client as any).onSession;
+    delete process.env.TRUSS_TEST_RESUME_DELAYS;
+    delete process.env.TRUSS_TEST_ACP_LOG;
+    sessions.closeSession("ord-1");
+    cleanup();
+    try {
+      rmSync(ORDER_FAKE_DIR, { recursive: true, force: true });
+    } catch {
+      /* the fake may still be exiting; tmp dirs get reaped anyway */
+    }
+    /* the client is a module singleton and its proc is private — kill it so
+       the fake doesn't hold the test process open */
+    (hermes.client as any).proc?.kill("SIGKILL");
+  }
+});
+
+/* the truth table behind that wire guard: an abandoned spawn stays off the
+   wire only where the harness session is shared with a retry. A live resumed
+   session closed by its owner is still released, and so is the abandoned
+   spawn of a fresh session (nobody else uses that id) — the fix must not
+   over-suppress the close. */
+test("an abandoned dispose skips session/close for a resumed session only", async () => {
+  const acp = await import("../src/adapters/acp.js");
+  const hermes = await import("../src/adapters/hermes.js");
+  const dsh = await import("../src/adapters/dsh.js");
+  const cases = [
+    ["hermes", hermes.hermesAdapter, hermes.client],
+    ["dsh", dsh.dshAdapter, dsh.client],
+  ] as const;
+  for (const [name, adapter, client] of cases) {
+    const methods: string[] = [];
+    (client as any).call = (method: string) => {
+      methods.push(method);
+      return Promise.resolve({});
+    };
+    try {
+      /* a live resumed handle disposed by its owner: the harness is told */
+      const owned = acp.makeSessionState(`t-owned2-${name}`, `acp-owned2-${name}`, "m");
+      owned.resumed = true;
+      owned.onFrame = () => {};
+      (client as any).onSession(`acp-owned2-${name}`, owned.onFrame);
+      adapter.dispose(owned);
+      assert.ok(
+        methods.includes("session/close"),
+        `${name}: an owner's dispose still tells the harness to release the session`,
+      );
+
+      /* the abandoned spawn of a fresh session: its id is its own */
+      methods.length = 0;
+      const fresh = acp.makeSessionState(`t-fresh-${name}`, `acp-fresh-${name}`, "m");
+      fresh.onFrame = () => {};
+      (client as any).onSession(`acp-fresh-${name}`, fresh.onFrame);
+      fresh.abandoned = true;
+      adapter.dispose(fresh);
+      assert.ok(
+        methods.includes("session/close"),
+        `${name}: an abandoned fresh spawn still releases its own harness session`,
+      );
+
+      /* the abandoned spawn of a resumed session: the retry is resuming this
+         exact id — drop the handler, never touch the wire */
+      methods.length = 0;
+      const resumed = acp.makeSessionState(`t-abs-${name}`, `acp-abs-${name}`, "m");
+      resumed.resumed = true;
+      resumed.onFrame = () => {};
+      (client as any).onSession(`acp-abs-${name}`, resumed.onFrame);
+      resumed.abandoned = true;
+      adapter.dispose(resumed);
+      assert.ok(
+        !methods.includes("session/close"),
+        `${name}: an abandoned resume must not close the session a retry is resuming`,
+      );
+      assert.equal(
+        (client as any).ownsSession(`acp-abs-${name}`, resumed.onFrame),
+        false,
+        `${name}: the abandoned frame handler is dropped all the same`,
+      );
+    } finally {
+      delete (client as any).call;
+    }
+  }
+});
+
 /* the other side of the same guard: the race test above pins the skip side
    (no session/close for a session this handle doesn't own). If ownsSession
    broke the other way — or the close call was dropped — every test here

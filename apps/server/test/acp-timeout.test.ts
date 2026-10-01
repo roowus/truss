@@ -460,27 +460,34 @@ test("a timed-out model-switch respawn flips the row to error — a stale 'idle'
   const { db, cleanup } = await freshServer("switch-flip");
   const sessions = await import("../src/sessions.js");
   let spawns = 0;
-  /* like the real ACP adapters, the spawn carries its own frames and flips
-     the row idle itself — exactly the state the failed respawn must not
-     leave standing */
+  const sent: string[] = [];
+  /* like the real ACP adapters, the spawn carries its own frames, flips the
+     row idle itself, and persists a harness ref — exactly the state the
+     failed respawn must not leave standing, and the ref the resume gate
+     needs once the row reads error */
   interface FakeHandle extends AdapterHandle {
     frames: AsyncIterable<ProtoEvent>;
   }
   const adapter: HarnessAdapter = {
     ...spawnNeverAdapter("fake-switch-flip"),
     events: (h: AdapterHandle) => (h as FakeHandle).frames,
+    send: (_h: AdapterHandle, text: string) => {
+      sent.push(text);
+    },
     spawn: (opts: SessionOpts) => {
       spawns++;
-      if (spawns === 1) {
-        const handle = {
-          sessionId: opts.sessionId,
-          frames: (async function* () {
-            yield { type: "session.state", sessionId: opts.sessionId, state: "idle" };
-          })(),
-        };
-        return Promise.resolve(handle as AdapterHandle);
-      }
-      return new Promise<AdapterHandle>(() => {}); // the wedged respawn
+      /* 2 is the respawn that blows the budget, 3 the auto-resume it leaves
+         the row error for, 4 the retry that recovers the session */
+      if (spawns === 2) return new Promise<AdapterHandle>(() => {});
+      if (spawns === 3) return Promise.reject(new Error("wedged again"));
+      const handle = {
+        sessionId: opts.sessionId,
+        harnessRef: "hr-flip",
+        frames: (async function* () {
+          yield { type: "session.state", sessionId: opts.sessionId, state: "idle" };
+        })(),
+      };
+      return Promise.resolve(handle as AdapterHandle);
     },
   };
   sessions.registerAdapter("fake-switch-flip" as never, adapter);
@@ -493,9 +500,17 @@ test("a timed-out model-switch respawn flips the row to error — a stale 'idle'
       "error",
       `the row must stop reading idle once the harness session is gone — got: ${row!.state}`,
     );
-    /* the flip is what re-opens sendPrompt's resume gate; the wedge was
-       "session is idle — harness process not running" on every later try */
+    /* the flip is what opens sendPrompt's resume gate: the row now reads
+       error and still carries the first spawn's harness ref, so the next
+       prompt really attempts the auto-resume (spawn 3) instead of being
+       refused with the old permanent "session is idle" */
     await assert.rejects(() => sessions.sendPrompt(s.id, "hello"), /session is error/);
+    assert.equal(spawns, 3, "the gate opened: sendPrompt attempted the auto-resume");
+    assert.deepEqual(sent, [], "a failed auto-resume must not deliver the prompt");
+    /* and the truthful row pays off: the next prompt resumes the session */
+    await sessions.sendPrompt(s.id, "hello again");
+    assert.equal(spawns, 4, "the second try resumes the session");
+    assert.equal(sent.length, 1, "the prompt is delivered once the session is back");
   } finally {
     sessions.unregisterAdapter("fake-switch-flip" as never);
     cleanup();
