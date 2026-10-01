@@ -276,6 +276,8 @@ test("archive hides from the default list; hard delete removes row + events", as
   const ghostDel = await api(`/api/sessions/ghost?hard=1`, { method: "DELETE" });
   assert.equal(ghostDel.status, 404);
   assert.ok(String(ghostDel.body.error).includes("no such session"));
+  /* plain DELETE only closes and stays idempotent, ghost or not */
+  assert.equal((await api(`/api/sessions/ghost`, { method: "DELETE" })).status, 200);
 });
 
 test("bulk delete over HTTP: counts, skips stale ids, trash-not-destroy (issue #4)", async () => {
@@ -293,6 +295,17 @@ test("bulk delete over HTTP: counts, skips stale ids, trash-not-destroy (issue #
 
   const bad = await api("/api/sessions/bulk-delete", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({}) });
   assert.equal(bad.status, 400, "ids[] required");
+
+  /* malformed entries (a client bug sending objects/numbers) are dropped,
+     not handed to the sqlite binding to TypeError into a 500 */
+  const c = await mk("bulk junk");
+  const junk = await api("/api/sessions/bulk-delete", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ ids: [c, 42, {}, null] }),
+  });
+  assert.equal(junk.status, 200, "junk entries don't 500 the batch");
+  assert.equal(junk.body.deleted, 1, "only the real id counted");
 
   const r = await api("/api/sessions/bulk-delete", {
     method: "POST",

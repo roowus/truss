@@ -444,9 +444,11 @@ app.post("/api/sessions/:id/purge", async (req, reply) => {
 });
 
 app.post("/api/sessions/bulk-delete", async (req, reply) => {
-  const { ids } = (req.body ?? {}) as { ids?: string[] };
+  const { ids } = (req.body ?? {}) as { ids?: unknown };
   if (!Array.isArray(ids)) return reply.code(400).send({ error: "ids[] required" });
-  return { deleted: deleteSessions(ids) };
+  /* non-string entries are malformed, not stale — drop them before they hit
+     the sqlite binding (which would TypeError into a 500) */
+  return { deleted: deleteSessions(ids.filter((x): x is string => typeof x === "string")) };
 });
 
 app.delete("/api/sessions/:id", async (req, reply) => {
@@ -459,10 +461,10 @@ app.delete("/api/sessions/:id", async (req, reply) => {
   try {
     if (hard === "1") deleteSession(id);
     else closeSession(id);
+    return { ok: true };
   } catch (err) {
     return reply.code(404).send({ error: String(err instanceof Error ? err.message : err) });
   }
-  return { ok: true };
 });
 
 /* ── terminals (M2) ── */
