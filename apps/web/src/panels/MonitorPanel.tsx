@@ -4,7 +4,7 @@ import { useApp, useNow } from "@/lib/store";
 import { ago } from "@/lib/format";
 import { Btn, Empty, Icon, Spinner } from "@/components/ui";
 import { Spark } from "./Inspectors";
-import { fmtSize } from "@/lib/format";
+import { fmtSize, procCell } from "@/lib/format";
 import type { HostMetrics, MonitorData } from "@/lib/proto";
 import { cn } from "@/utils/cn";
 
@@ -224,12 +224,12 @@ function MonitorBody({ m, hist }: { m: HostMetrics; hist: { t: number; cpu: numb
           <div key={p.pid} className="grid grid-cols-[56px_minmax(0,1fr)_56px_56px_64px] sm:grid-cols-[56px_minmax(0,1fr)_64px_56px_56px_64px_40px] md:grid-cols-[56px_minmax(0,1fr)_72px_56px_56px_56px_64px_64px_40px] gap-2 px-3 py-1 border-b border-[var(--t-line)]/40 last:border-b-0 font-mono text-[11px]">
             <span className="text-[var(--t-dim)] tabular-nums">{p.pid}</span>
             <span className="truncate text-[var(--t-fg2)]" title={p.cmd}>{p.cmd}</span>
-            <span className="text-right text-[var(--t-dim)] truncate hidden md:block">{p.user}</span>
+            <span className="text-right text-[var(--t-dim)] truncate hidden md:block">{procCell(p.user)}</span>
             <span className="text-right tabular-nums" style={{ color: GAUGE_C(p.cpu) }}>{p.cpu}</span>
-            <span className="text-right text-[var(--t-mute)] tabular-nums hidden sm:block">{p.memPct}</span>
-            <span className="text-right text-[var(--t-mute)] tabular-nums hidden md:block">{p.threads}</span>
+            <span className="text-right text-[var(--t-mute)] tabular-nums hidden sm:block">{procCell(p.memPct)}</span>
+            <span className="text-right text-[var(--t-mute)] tabular-nums hidden md:block">{procCell(p.threads)}</span>
             <span className="text-right text-[var(--t-mute)] tabular-nums">{p.rssMb} MB</span>
-            <span className="text-right text-[var(--t-dim)] tabular-nums hidden sm:block">{fmtUptime(p.ageSec)}</span>
+            <span className="text-right text-[var(--t-dim)] tabular-nums hidden sm:block">{p.ageSec != null ? fmtUptime(p.ageSec) : "—"}</span>
             <span className="text-right text-[var(--t-dim)]">{p.state}</span>
           </div>
         ))}

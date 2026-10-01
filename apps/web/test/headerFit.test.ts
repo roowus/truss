@@ -2,8 +2,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 /* SPEC-TESTS for the clipped chat header — https://github.com/roowus/truss/issues/3
-   ("Chat header: right-side controls get cut off"). These FAIL on purpose
-   today: they pin the contract a fix must satisfy.
+   ("Chat header: right-side controls get cut off"). These pin the contract
+   the issue demanded; the fix landed with them, so they pass.
 
    The bug: ChatHeader (apps/web/src/panels/ChatPanel.tsx:88-119) is a single
    no-wrap flex row whose only flexible item is the title. The right cluster —

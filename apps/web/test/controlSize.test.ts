@@ -3,8 +3,8 @@ import assert from "node:assert/strict";
 
 /* SPEC-TESTS for filter-bar control alignment — https://github.com/roowus/truss/issues/11
    ("In the todo and feed tabs the dropdowns should be the same height as the
-   search bar next to them"). These FAIL on purpose today: they pin the
-   contract a fix must satisfy.
+   search bar next to them"). These pin the contract the issue demanded;
+   the fix landed with them, so they pass.
 
    The bug, measured in the source:
    - the filter-bar search box is `h-6` = 24px (Tailwind 4px scale) —

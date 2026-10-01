@@ -3,8 +3,8 @@ import assert from "node:assert/strict";
 
 /* SPEC-TESTS for a richer Monitor process table — https://github.com/roowus/truss/issues/10
    ("The monitor table should have more data — reference: monitor.rewis on
-   this device"). These FAIL on purpose today: they pin the contract a fix
-   must satisfy.
+   this device"). These pin the contract the issue demanded; the fix landed
+   with them, so they pass.
 
    The reference (fetched from https://monitor.rewis/api/stats on this device)
    shows per process: pid · user · st · cpu% · mem% · rss · thr · age ·
