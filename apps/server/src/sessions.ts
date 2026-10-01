@@ -354,17 +354,28 @@ export async function switchModel(
          hasn't persisted anything yet, so a fresh spawn loses nothing */
       s.adapter.dispose(s.handle);
       live.delete(sessionId);
-      const handle = await boundedSpawn(
-        s.adapter,
-        {
-          sessionId,
-          cwd: row.cwd,
-          model,
-          provider,
-          resumeRef: row.harness_ref ?? undefined,
-        },
-        opts.spawnTimeoutMs ?? SPAWN_TIMEOUT_MS,
-      );
+      let handle: AdapterHandle;
+      try {
+        handle = await boundedSpawn(
+          s.adapter,
+          {
+            sessionId,
+            cwd: row.cwd,
+            model,
+            provider,
+            resumeRef: row.harness_ref ?? undefined,
+          },
+          opts.spawnTimeoutMs ?? SPAWN_TIMEOUT_MS,
+        );
+      } catch (err) {
+        /* the live handle is already gone — without this flip the row keeps
+           its pre-switch state ("idle" for any live session) while nothing
+           serves it, and sendPrompt's closed/error gate then refuses the
+           session on every later try. Mirrors createSession. */
+        const detail = err instanceof Error ? err.message : String(err);
+        sink({ type: "session.state", sessionId, state: "error", detail });
+        throw err;
+      }
       goLive(sessionId, s.adapter, handle);
       if (handle.harnessRef && handle.harnessRef !== row.harness_ref) {
         store.setHarnessRef(sessionId, handle.harnessRef);

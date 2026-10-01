@@ -451,6 +451,57 @@ test("resumeSession is bounded too: a wedged spawn returns false instead of hang
   }
 });
 
+test("a timed-out model-switch respawn flips the row to error — a stale 'idle' refuses every later prompt", async () => {
+  /* switchModel drops the live handle BEFORE respawning, so unlike
+     createSession the failure used to leave the row reading whatever it had
+     before the switch — "idle" for any live session — while nothing served
+     it. sendPrompt's closed/error gate then refused the session on every
+     later try: the wedge moved from "spawning forever" to "idle forever". */
+  const { db, cleanup } = await freshServer("switch-flip");
+  const sessions = await import("../src/sessions.js");
+  let spawns = 0;
+  /* like the real ACP adapters, the spawn carries its own frames and flips
+     the row idle itself — exactly the state the failed respawn must not
+     leave standing */
+  interface FakeHandle extends AdapterHandle {
+    frames: AsyncIterable<ProtoEvent>;
+  }
+  const adapter: HarnessAdapter = {
+    ...spawnNeverAdapter("fake-switch-flip"),
+    events: (h: AdapterHandle) => (h as FakeHandle).frames,
+    spawn: (opts: SessionOpts) => {
+      spawns++;
+      if (spawns === 1) {
+        const handle = {
+          sessionId: opts.sessionId,
+          frames: (async function* () {
+            yield { type: "session.state", sessionId: opts.sessionId, state: "idle" };
+          })(),
+        };
+        return Promise.resolve(handle as AdapterHandle);
+      }
+      return new Promise<AdapterHandle>(() => {}); // the wedged respawn
+    },
+  };
+  sessions.registerAdapter("fake-switch-flip" as never, adapter);
+  try {
+    const s = await sessions.createSession({ harness: "fake-switch-flip" as never, cwd: "/tmp" });
+    await assert.rejects(() => sessions.switchModel(s.id, "m2", "p2", { spawnTimeoutMs: 300 }));
+    const row = db.store.listSessions().find((r) => r.id === s.id);
+    assert.equal(
+      row!.state,
+      "error",
+      `the row must stop reading idle once the harness session is gone — got: ${row!.state}`,
+    );
+    /* the flip is what re-opens sendPrompt's resume gate; the wedge was
+       "session is idle — harness process not running" on every later try */
+    await assert.rejects(() => sessions.sendPrompt(s.id, "hello"), /session is error/);
+  } finally {
+    sessions.unregisterAdapter("fake-switch-flip" as never);
+    cleanup();
+  }
+});
+
 test("switchModel's respawn is bounded too: a wedged restart rejects instead of hanging forever", async () => {
   const { cleanup } = await freshServer("switch-budget");
   const sessions = await import("../src/sessions.js");
