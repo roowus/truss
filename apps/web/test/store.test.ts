@@ -244,3 +244,45 @@ test("session.updated patches model/provider in place (model switch reflects imm
   assert.equal(store.state.sessions["ms-1"].model, "m2", "unrelated updates keep the model");
   delete store.state.sessions["ms-1"];
 });
+
+test("session.updated for an unknown session refreshes the trash list too (restore drops the ghost for every client)", async () => {
+  /* restoreSession broadcasts session.updated; only the restoring client
+     refreshes its own trash list, so other clients kept the restored session
+     as a ghost in "recently deleted" until reload */
+  const s = store as unknown as {
+    onFrame: (f: { seq: number; ev: unknown }) => void;
+    refreshTrash: () => Promise<void>;
+    refreshSessionsSoon: () => void;
+  };
+  let trashRefreshes = 0;
+  let sessionRefreshes = 0;
+  const origTrash = s.refreshTrash;
+  const origSoon = s.refreshSessionsSoon;
+  s.refreshTrash = async () => {
+    trashRefreshes++;
+  };
+  s.refreshSessionsSoon = () => {
+    sessionRefreshes++;
+  };
+  try {
+    s.onFrame({ seq: 20, ev: { type: "session.updated", sessionId: "restored-1" } as never });
+    assert.equal(sessionRefreshes, 1, "an unknown meta still re-lists sessions");
+    assert.equal(trashRefreshes, 1, "and the trash list refreshes so the restored ghost disappears");
+    /* a plain metadata patch on a known session must NOT hit the trash route */
+    store.set((st) => ({
+      sessions: {
+        ...st.sessions,
+        "ms-1": {
+          id: "ms-1", harness: "pi", title: "t", cwd: "/tmp", model: "m1", provider: "p1",
+          state: "idle", created_at: 0, updated_at: 0, live: true,
+        } as never,
+      },
+    }));
+    s.onFrame({ seq: 21, ev: { type: "session.updated", sessionId: "ms-1", title: "x" } as never });
+    assert.equal(trashRefreshes, 1, "known-meta updates leave the trash list alone");
+    delete store.state.sessions["ms-1"];
+  } finally {
+    s.refreshTrash = origTrash;
+    s.refreshSessionsSoon = origSoon;
+  }
+});
