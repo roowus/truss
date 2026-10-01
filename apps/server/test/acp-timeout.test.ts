@@ -271,6 +271,34 @@ test("createSession bounds the spawn: a wedged adapter rejects with a timeout, s
   }
 });
 
+test("the spawn-budget message is user-facing copy: it names the phase and carries no em dash", async () => {
+  /* the message is sunk as the session row's error detail and shown verbatim
+     in the web UI — TRUSS.md bans em dashes in user-facing copy */
+  const { cleanup } = await freshServer("spawn-budget-copy");
+  const sessions = await import("../src/sessions.js");
+  sessions.registerAdapter("fake-wedged-copy" as never, spawnNeverAdapter("fake-wedged-copy"));
+  try {
+    const message = await new Promise<string>((resolve) => {
+      (sessions.createSession as any)({ harness: "fake-wedged-copy", cwd: "/tmp" }, { spawnTimeoutMs: 150 }).then(
+        () => resolve("resolved"),
+        (e: Error) => resolve(e.message),
+      );
+    });
+    assert.match(
+      message,
+      /didn't answer spawn within \d+s/,
+      `the message must say which phase gave up — got: ${message}`,
+    );
+    assert.ok(
+      !message.includes("—"),
+      `copy the user reads must not carry an em dash (TRUSS.md) — got: ${message}`,
+    );
+  } finally {
+    sessions.unregisterAdapter("fake-wedged-copy" as never);
+    cleanup();
+  }
+});
+
 test("a rejected spawn marks the session error instead of leaving it 'spawning' forever", async () => {
   const { db, cleanup } = await freshServer("spawn-fail");
   const sessions = await import("../src/sessions.js");

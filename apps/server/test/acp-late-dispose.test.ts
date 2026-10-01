@@ -275,6 +275,152 @@ test("an abandoned dispose that registered FIRST must not session/close the harn
   }
 });
 
+/* the third interleaving, bracketed by the two orderings above but not
+   covered by them: the abandoned spawn registers FIRST, the retry's
+   registration is REFUSED while that owner still holds the key, and the
+   owner's dispose frees the key one microtask later. Freeing must hand the
+   key to the refused claimant — before that hand-off the retry went live
+   with no handler and every frame for the session was silently dropped
+   (chunks, tool calls, usage, permission prompts).
+
+   The fake holds both resume answers and writes them in ONE stdout write:
+   the recovery shape for a wedged harness is that it unblocks and answers
+   its pending queue oldest first, so both answers land in one stdin chunk
+   and the registration, the refusal and the freeing dispose all sit in one
+   microtask drain. A usage frame pushed just after proves the retried
+   session is still wired. */
+const B1_FAKE = `
+const fs = require("fs");
+const log = process.env.TRUSS_TEST_ACP_LOG;
+let b = "";
+let resumes = 0;
+let pending = [];
+let flushArmed = false;
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (c) => {
+  b += c;
+  let i;
+  while ((i = b.indexOf("\\n")) >= 0) {
+    const l = b.slice(0, i).trim();
+    b = b.slice(i + 1);
+    if (!l) continue;
+    let r;
+    try { r = JSON.parse(l) } catch { continue }
+    if (r.method && log) fs.appendFileSync(log, r.method + "\\n");
+    if (r.id == null || !r.method) continue;
+    const answer = (res) =>
+      process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: r.id, result: res }) + "\\n");
+    if (r.method === "initialize") { answer({ protocolVersion: 1 }); continue }
+    if (r.method === "session/resume") {
+      resumes++;
+      const sid = r.params && r.params.sessionId;
+      pending.push(JSON.stringify({ jsonrpc: "2.0", id: r.id, result: { ok: true } }) + "\\n");
+      if (resumes === 1 && !flushArmed) {
+        flushArmed = true;
+        setTimeout(() => {
+          /* both answers in one write: the client parses both from a single
+             stdin chunk, so neither registration can land in a separate turn */
+          process.stdout.write(pending.join(""));
+          pending = [];
+          setTimeout(() => {
+            process.stdout.write(JSON.stringify({
+              jsonrpc: "2.0",
+              method: "session/update",
+              params: { sessionId: sid, update: { sessionUpdate: "usage_update", used: 11, size: 100 } },
+            }) + "\\n");
+          }, 50);
+        }, +(process.env.TRUSS_TEST_FLUSH_AT || 0));
+      }
+      continue;
+    }
+    answer({ ok: true });
+  }
+});
+`;
+
+const B1_FAKE_DIR = mkdtempSync(join(tmpdir(), "truss-fake-hermes-claim-"));
+const B1_FAKE_BIN = join(B1_FAKE_DIR, "hermes-acp");
+const B1_LOG = join(B1_FAKE_DIR, "methods.log");
+writeFileSync(B1_FAKE_BIN, "#!/usr/bin/env node\n" + B1_FAKE + "\n", { mode: 0o755 });
+
+test("a retry refused while the abandoned spawn owns the key gets the key handed over when that dispose frees it", async () => {
+  const { db, cleanup } = await freshServer("late-dispose-claim");
+  const sessions = await import("../src/sessions.js");
+  const hermes = await import("../src/adapters/hermes.js");
+  /* the client is a module singleton bound to the binary path the file pinned
+     at load — point it at this test's own fake before it boots, and let the
+     previous test's dead proc be reaped so ensure() starts this one fresh */
+  (hermes.client as any).launch.command = B1_FAKE_BIN;
+  (hermes.client as any).proc?.kill("SIGKILL");
+  await tick(100);
+  process.env.TRUSS_TEST_FLUSH_AT = "600";
+  process.env.TRUSS_TEST_ACP_LOG = B1_LOG;
+  /* record every registration and whether it was refused, so the test proves
+     the dangerous ordering really happened instead of passing by luck */
+  const registrations: { fn: unknown; refused: boolean }[] = [];
+  const realOnSession = (hermes.client as any).onSession.bind(hermes.client);
+  (hermes.client as any).onSession = (key: string, fn: unknown) => {
+    registrations.push({ fn, refused: (hermes.client as any).sessionHandlers.has(key) });
+    return realOnSession(key, fn);
+  };
+  try {
+    /* a closed session with a stored harness ref — resume reuses it as the
+       harness session id, so both spawns land on the same shared key */
+    db.store.createSession({ id: "claim-1", harness: "hermes", title: "t", cwd: "/tmp" });
+    db.store.setHarnessRef("claim-1", "hs-claim");
+
+    /* spawn 1 blows the 200ms budget; the fake holds its answer until 600ms,
+       by which time the retry's resume is pending right behind it */
+    const first = await sessions.resumeSession("claim-1", { spawnTimeoutMs: 200 });
+    assert.equal(first, false, "the slow resume gives up at the budget");
+
+    /* the retry goes live while the abandoned spawn still holds the key */
+    const second = await sessions.resumeSession("claim-1", { spawnTimeoutMs: 5000 });
+    assert.equal(second, true, "the retry goes live on the stored ref");
+
+    assert.equal(registrations.length, 2, "both spawns registered on the shared key");
+    assert.equal(
+      registrations[1].refused,
+      true,
+      "precondition: the retry registered while the abandoned spawn still owned the key",
+    );
+    assert.equal(
+      (hermes.client as any).sessionHandlers.get("hs-claim"),
+      registrations[1].fn,
+      "the freeing dispose must hand the key to the refused claimant, not leave it empty",
+    );
+
+    let usage: { used?: number } | undefined;
+    for (let waited = 0; waited < 4000 && !usage; waited += 100) {
+      await tick(100);
+      usage = db.store
+        .listEvents("claim-1")
+        .map((f) => f.ev)
+        .find((e) => e.type === "ctx.usage") as { used?: number } | undefined;
+    }
+    assert.ok(usage, "the retried session must still receive frames after a refused registration");
+    const methods = readFileSync(B1_LOG, "utf8").split("\n").filter(Boolean);
+    assert.ok(
+      !methods.includes("session/close"),
+      `the abandoned dispose must stay off the wire — got: ${methods.join(", ")}`,
+    );
+  } finally {
+    delete (hermes.client as any).onSession;
+    delete process.env.TRUSS_TEST_FLUSH_AT;
+    delete process.env.TRUSS_TEST_ACP_LOG;
+    sessions.closeSession("claim-1");
+    cleanup();
+    try {
+      rmSync(B1_FAKE_DIR, { recursive: true, force: true });
+    } catch {
+      /* the fake may still be exiting; tmp dirs get reaped anyway */
+    }
+    /* the client is a module singleton and its proc is private — kill it so
+       the fake doesn't hold the test process open */
+    (hermes.client as any).proc?.kill("SIGKILL");
+  }
+});
+
 /* the truth table behind that wire guard: an abandoned spawn stays off the
    wire only where the harness session is shared with a retry. A live resumed
    session closed by its owner is still released, and so is the abandoned

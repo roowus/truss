@@ -195,11 +195,13 @@ export const hermesAdapter: HarnessAdapter = {
        budget gave up on never closes the harness session it resumed. The
        retry is bringing that same session back, and the next resume
        reclaims it. */
-    if (h.onFrame && client.ownsSession(h.acpSessionId, h.onFrame)) {
-      client.offSession(h.acpSessionId);
-      if (!(h.abandoned && h.resumed)) {
-        void client.call("session/close", { sessionId: h.acpSessionId }).catch(() => undefined);
-      }
+    const owned = Boolean(h.onFrame && client.ownsSession(h.acpSessionId, h.onFrame));
+    /* offSession even when the key was never ours: a registration that was
+       refused leaves a claim behind, and a handle going away must not leave
+       the client ready to hand the key to a queue that is about to close */
+    if (h.onFrame) client.offSession(h.acpSessionId, h.onFrame);
+    if (owned && !(h.abandoned && h.resumed)) {
+      void client.call("session/close", { sessionId: h.acpSessionId }).catch(() => undefined);
     }
     h.queue.close();
   },
