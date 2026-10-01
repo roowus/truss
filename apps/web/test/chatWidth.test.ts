@@ -42,6 +42,7 @@ interface ChatWidthModule {
   CHAT_WIDTH_DEFAULT: number;
   resolveChatWidth(columnWidth: number, pref: number | null): number;
   dragChatWidth(base: number, originX: number, currentX: number, side: "left" | "right"): number;
+  commitChatWidth(base: number, originX: number, currentX: number, side: "left" | "right"): number | null;
   readChatWidthPref(storage: StorageLike): number | null;
   writeChatWidthPref(storage: StorageLike, width: number): void;
 }
@@ -102,10 +103,12 @@ test("readChatWidthPref: missing/corrupt values resolve to 'no preference', neve
   assert.ok(mod, "chatWidth module must exist (see constants test)");
 
   assert.equal(mod.readChatWidthPref(memStorage()), null, "unset");
+  /* the storage key is namespaced (truss.chat.width), renamed key+tests
+     together per issue #6's "change them only together" rule */
   for (const bad of ["abc", "", "-5", "0", "NaN", "Infinity", "12px", "{}"]) {
-    assert.equal(mod.readChatWidthPref(memStorage({ k: bad })), null, `corrupt ${JSON.stringify(bad)} → null`);
+    assert.equal(mod.readChatWidthPref(memStorage({ "truss.chat.width": bad })), null, `corrupt ${JSON.stringify(bad)} → null`);
   }
-  assert.equal(mod.readChatWidthPref(memStorage({ k: "813" })), 813, "valid positive px reads back");
+  assert.equal(mod.readChatWidthPref(memStorage({ "truss.chat.width": "813" })), 813, "valid positive px reads back");
 });
 
 test("writeChatWidthPref round-trips through readChatWidthPref", async () => {
@@ -114,6 +117,30 @@ test("writeChatWidthPref round-trips through readChatWidthPref", async () => {
   const s = memStorage();
   mod.writeChatWidthPref(s, 688);
   assert.equal(mod.readChatWidthPref(s), 688, "drag commit persists and restores");
+});
+
+/* audit round-1 regression pins (PR #55, B1): the drag-commit decision.
+   The component passes the STORED pref as base — never the display-clamped
+   width — and persists nothing when there was no travel. Scenario from the
+   audit: pref 1200 stored on a wide monitor, chat opened in a 900px panel
+   (display clamps to 724); a press-and-release must not rewrite 1200. */
+test("commitChatWidth: zero travel returns null — a press-and-release persists nothing", async () => {
+  const mod = await load();
+  assert.ok(mod, "chatWidth module must exist (see constants test)");
+
+  assert.equal(mod.commitChatWidth(1200, 1000, 1000, "right"), null, "no travel → no write, the clamped display value never reaches storage");
+  assert.equal(mod.commitChatWidth(760, 500, 500, "left"), null, "mirrored on the left handle");
+  assert.equal(mod.commitChatWidth(760, 1000, 1000.2, "right"), null, "sub-pixel travel rounds back to the base → still no write");
+});
+
+test("commitChatWidth: based on the stored pref, so a drag while display-clamped keeps the wide-monitor intent", async () => {
+  const mod = await load();
+  assert.ok(mod, "chatWidth module must exist (see constants test)");
+
+  assert.equal(mod.commitChatWidth(1200, 1000, 1010, "right"), 1220, "outward drag widens from the stored 1200, not the clamped 724 display");
+  assert.equal(mod.commitChatWidth(1200, 1000, 990, "right"), 1180, "a deliberate narrowing is honored, not clobbered to the clamp");
+  assert.equal(mod.commitChatWidth(760, 1000, 1030, "right"), 820, "no-pref drag from the default still works");
+  assert.equal(mod.commitChatWidth(760, 500, 460, "left"), 840, "left handle mirrors");
 });
 
 /* note: the storage key is the module's own business — tests pass a storage

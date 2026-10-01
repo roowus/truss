@@ -5,7 +5,7 @@ import { argSummary, fmtMs, harnessStyle, shortPath, baseHarness } from "@/lib/f
 import { deviceLabel } from "@/lib/device";
 import { buildModelOptions, modelValue, splitModelValue } from "@/lib/models";
 import { planHeaderFit } from "@/lib/headerFit";
-import { CHAT_WIDTH_DEFAULT, dragChatWidth, readChatWidthPref, resolveChatWidth, writeChatWidthPref } from "@/lib/chatWidth";
+import { CHAT_WIDTH_DEFAULT, commitChatWidth, dragChatWidth, readChatWidthPref, resolveChatWidth, writeChatWidthPref } from "@/lib/chatWidth";
 import { openPanel, openAgentShell, renameSessionPanels } from "@/lib/workspace";
 import { Btn, Empty, HarnessMark, Icon, IconBtn, Select, Spinner, StateDot, STATE_META } from "@/components/ui";
 import { Markdown } from "./Markdown";
@@ -220,13 +220,17 @@ function Timeline({ id, view }: { id: string; view: SessionView }) {
     for (let i = view.items.length - 1; i >= 0; i--) if (view.items[i].kind === "msg") return view.items[i].id;
   }, [view.items]);
 
+  /* the shared chat column width (issue #6) — hooks stay top-level, never
+     inside the JSX ternary below */
+  const columnW = useContext(ChatColumnCtx);
+
   return (
     <div className="relative flex-1 min-h-0">
       <div ref={ref} onScroll={onScroll} className="absolute inset-0 overflow-y-auto t-scroll">
         {view.items.length === 0 ? (
           <EmptyChat id={id} />
         ) : (
-          <div className="mx-auto px-4 py-5 space-y-4" style={{ maxWidth: useContext(ChatColumnCtx) }}>
+          <div className="mx-auto px-4 py-5 space-y-4" style={{ maxWidth: columnW }}>
             {view.items.map((it) =>
               it.kind === "msg" ? (
                 <MessageView key={it.id} m={view.msgs[it.id]} harness={meta.harness} live={it.id === lastMsgId && meta.state === "running"} />
@@ -589,10 +593,12 @@ function ChatWidthProvider({ timeline, composer, perms }: { timeline: ReactNode;
   const wrapRef = useRef<HTMLDivElement>(null);
   const [columnW, setColumnW] = useState(0);
   const [pref, setPref] = useState<number | null>(() => (typeof localStorage !== "undefined" ? readChatWidthPref(localStorage) : null));
-  const dragRef = useRef<{ originX: number; base: number; side: "left" | "right" } | null>(null);
+  const dragRef = useRef<{ originX: number; base: number; side: "left" | "right"; startPref: number | null } | null>(null);
   const [dragging, setDragging] = useState(false);
 
-  useEffect(() => {
+  /* layout effect: the initial measure lands before first paint, so a stored
+     pref doesn't flash CHAT_WIDTH_MIN for a frame (columnW starts at 0) */
+  useLayoutEffect(() => {
     const el = wrapRef.current;
     if (!el) return;
     const ro = new ResizeObserver(() => setColumnW(el.clientWidth));
@@ -605,27 +611,44 @@ function ChatWidthProvider({ timeline, composer, perms }: { timeline: ReactNode;
 
   const onPointerDown = (side: "left" | "right") => (e: React.PointerEvent) => {
     e.preventDefault();
-    dragRef.current = { originX: e.clientX, base: width, side };
+    /* capture keeps pointerup/cancel flowing even when the pointer leaves the
+       window; without it an off-window release sticks the drag and leaks the
+       listeners (the buttons===0 self-heal in move is the fallback) */
+    try { (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); } catch { /* capture unsupported */ }
+    /* drag from the STORED pref when one exists, never the display-clamped
+       width — otherwise a drag in a narrow panel rebases and overwrites a
+       wider stored pref (issue #6: display-clamp ≠ stored pref) */
+    dragRef.current = { originX: e.clientX, base: pref ?? width, side, startPref: pref };
     setDragging(true);
-    const move = (ev: PointerEvent) => {
-      const d = dragRef.current;
-      if (!d) return;
-      setPref(Math.round(dragChatWidth(d.base, d.originX, ev.clientX, d.side)));
-    };
-    const up = (ev: PointerEvent) => {
+    const finish = (commitX: number | null) => {
       const d = dragRef.current;
       dragRef.current = null;
       setDragging(false);
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", up);
-      if (d) {
-        const finalW = Math.round(dragChatWidth(d.base, d.originX, ev.clientX, d.side));
+      window.removeEventListener("pointercancel", cancel);
+      if (!d) return;
+      if (commitX === null) { // pointercancel: restore the drag-start state, persist nothing
+        setPref(d.startPref);
+        return;
+      }
+      const finalW = commitChatWidth(d.base, d.originX, commitX, d.side);
+      if (finalW !== null) { // null = no travel — a press-and-release persists nothing
         setPref(finalW);
         if (typeof localStorage !== "undefined") writeChatWidthPref(localStorage, finalW);
       }
     };
+    const move = (ev: PointerEvent) => {
+      const d = dragRef.current;
+      if (!d) return;
+      if (ev.buttons === 0) { finish(ev.clientX); return; } // pointerup missed — released outside the window
+      setPref(Math.round(dragChatWidth(d.base, d.originX, ev.clientX, d.side)));
+    };
+    const up = (ev: PointerEvent) => finish(ev.clientX);
+    const cancel = () => finish(null);
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
+    window.addEventListener("pointercancel", cancel);
   };
 
   const handleCls = (side: "left" | "right") =>
@@ -647,7 +670,7 @@ function ChatWidthProvider({ timeline, composer, perms }: { timeline: ReactNode;
       </div>
       {/* edge drag handles */}
       {(["left", "right"] as const).map((side) => (
-        <div key={side} className={handleCls(side)} onPointerDown={onPointerDown(side)} title="Drag to resize the chat column" aria-label={`Resize chat column (${side} edge)`} role="separator" aria-orientation="vertical">
+        <div key={side} className={handleCls(side)} style={{ touchAction: "none" /* touch: drag resizes instead of scrolling */ }} onPointerDown={onPointerDown(side)} title="Drag to resize the chat column" aria-label={`Resize chat column (${side} edge)`} role="separator" aria-orientation="vertical">
           <span className={cn(gripCls, side === "left" ? "left-0.5" : "right-0.5")} />
         </div>
       ))}

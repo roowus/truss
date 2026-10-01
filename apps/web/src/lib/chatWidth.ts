@@ -10,7 +10,9 @@ export const CHAT_WIDTH_MIN = 360;
    covers its own handle leaves no way to drag back (DSH: 88px/side) */
 export const CHAT_WIDTH_EDGE_BUDGET = 176;
 
-const KEY = "k"; // pinned by the spec tests (chatWidth.test.ts) — the storage boundary key
+/* namespaced like truss.demo.layout — a bare key is collision-prone on a
+   shared origin; renamed together with the spec tests per issue #6 */
+const KEY = "truss.chat.width";
 
 /**
  * The column's display width: no preference → today's 760 (the CSS max-width
@@ -26,6 +28,18 @@ export function resolveChatWidth(columnWidth: number, pref: number | null): numb
 export function dragChatWidth(base: number, originX: number, currentX: number, side: "left" | "right"): number {
   const travel = side === "right" ? currentX - originX : originX - currentX;
   return base + travel * 2;
+}
+
+/**
+ * The drag-commit decision on pointer-up (issue #6: display-clamp ≠ stored
+ * pref). `base` must be the STORED pref when one exists — never the
+ * display-clamped width — so a drag in a narrow panel can't overwrite a
+ * wider stored pref; zero travel returns null → persist nothing, so a
+ * press-and-release doesn't clobber the pref with the clamped value.
+ */
+export function commitChatWidth(base: number, originX: number, currentX: number, side: "left" | "right"): number | null {
+  const w = Math.round(dragChatWidth(base, originX, currentX, side));
+  return w === base ? null : w;
 }
 
 /** storage boundary: missing/corrupt → "no preference", never crash, never NaN */
