@@ -6,6 +6,7 @@ on:
   push:
     branches: [main, beta]
   pull_request:
+  # (manual dispatch used by the PR audit driver for bot-pushed heads)
   workflow_dispatch:
 
 jobs:
