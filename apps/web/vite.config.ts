@@ -21,6 +21,9 @@ export default defineConfig({
      (pr-preview/Tiltfile) run a server on a per-PR port. */
   server: {
     port: Number(process.env.TRUSS_WEB_PORT ?? 4041),
+    /* PR previews serve vite behind pr-<N>.truss.rewis — allow the suffix
+       (vite 6 blocks unknown Host headers by default) */
+    allowedHosts: [".truss.rewis"],
     proxy: (() => {
       const srv = process.env.TRUSS_SERVER_URL ?? "http://127.0.0.1:4040";
       return {
