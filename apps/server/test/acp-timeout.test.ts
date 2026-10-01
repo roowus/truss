@@ -200,6 +200,32 @@ test("happy path unchanged: a responsive server initializes and answers promptly
   }
 });
 
+test("after the harness process dies, a session can register its frame handler again", async () => {
+  /* onSession is first-live-wins so a late-landing timed-out spawn can't
+     steal a live session's frames — but the dead process's handlers must go
+     with it, or every resume after a crash would register nothing and go
+     deaf. */
+  const { client, kill } = await makeClient("echo", { requestTimeoutMs: 5_000 });
+  try {
+    await client.ensure();
+    const first = () => {};
+    (client as any).onSession("hs-1", first);
+    assert.equal((client as any).ownsSession("hs-1", first), true, "the first registration owns the session");
+
+    kill(); // the current process exits for real — its handlers are stale
+    await tick(50);
+    const second = () => {};
+    (client as any).onSession("hs-1", second);
+    assert.equal(
+      (client as any).ownsSession("hs-1", second),
+      true,
+      "a resume after the harness died must be able to re-register — the stale owner is gone",
+    );
+  } finally {
+    kill();
+  }
+});
+
 /* ── sessions layer: the spawn itself must have a budget and a failure state ── */
 
 function spawnNeverAdapter(id: string): HarnessAdapter {
@@ -305,6 +331,38 @@ test("a hermes turn settles through send() against a fake ACP server", async () 
   }
 });
 
+test("both adapters wire the turn opt-out: send() issues session/prompt with 0 (unbudgeted)", async () => {
+  /* the client-level override is pinned above, but the wiring lives in the
+     adapters — drop the 0 from either one and this fails, where the fake's
+     300ms answer against the 60s default budget would have stayed green */
+  const acp = await import("../src/adapters/acp.js");
+  const hermes = await import("../src/adapters/hermes.js");
+  const dsh = await import("../src/adapters/dsh.js");
+  const cases = [
+    ["hermes", hermes.hermesAdapter, hermes.client],
+    ["dsh", dsh.dshAdapter, dsh.client],
+  ] as const;
+  for (const [name, adapter, client] of cases) {
+    const budgets: unknown[] = [];
+    (client as any).call = (method: string, _params: unknown, timeoutMs?: number) => {
+      if (method === "session/prompt") budgets.push(timeoutMs);
+      return Promise.resolve({}); // settle the turn without a server
+    };
+    try {
+      const h = acp.makeSessionState(`t-wire-${name}`, `acp-wire-${name}`, "m");
+      adapter.send(h, "hello");
+      await tick(20);
+      assert.deepEqual(
+        budgets,
+        [0],
+        `${name} must pass the turn call unbudgeted — budgeting the turn is the exact regression this PR fixes`,
+      );
+    } finally {
+      delete (client as any).call;
+    }
+  }
+});
+
 /* ── every spawn path is bounded, and a budget timeout orphans nothing ── */
 
 test("the spawn budget doesn't orphan a harness that lands late — the abandoned handle is disposed", async () => {
@@ -330,6 +388,43 @@ test("the spawn budget doesn't orphan a harness that lands late — the abandone
     assert.equal(disposed, 1, "the late handle is disposed instead of leaking the harness process");
   } finally {
     sessions.unregisterAdapter("fake-late" as never);
+    cleanup();
+  }
+});
+
+test("a spawn that throws synchronously fails cleanly — it must not leave the budget timer rejecting nothing", async () => {
+  /* registerAdapter is the seam runtime harnesses plug into, so an adapter
+     can throw before returning a promise. The old shape armed the budget
+     timer outside the try: the throw skipped the finally, and when the timer
+     fired it rejected a promise nobody awaits — fatal under Node's default
+     unhandled-rejection mode, minutes after the actual failure. */
+  const { cleanup } = await freshServer("spawn-sync-throw");
+  const sessions = await import("../src/sessions.js");
+  const syncThrow: HarnessAdapter = {
+    ...spawnNeverAdapter("fake-sync"),
+    spawn(): Promise<AdapterHandle> {
+      throw new Error("spawn blew up before returning a promise");
+    },
+  };
+  sessions.registerAdapter("fake-sync" as never, syncThrow);
+  const unhandled: unknown[] = [];
+  const onUnhandled = (err: unknown) => unhandled.push(err);
+  process.on("unhandledRejection", onUnhandled);
+  try {
+    await assert.rejects(
+      () => sessions.createSession({ harness: "fake-sync" as never, cwd: "/tmp" }, { spawnTimeoutMs: 50 }),
+      /blew up/,
+      "the sync throw must surface as the spawn's own rejection",
+    );
+    await tick(150); // past the 50ms budget — an armed timer would have fired by now
+    assert.equal(
+      unhandled.length,
+      0,
+      `the budget timer must be disowned with the spawn — got unhandled rejections: ${unhandled.map(String).join("; ")}`,
+    );
+  } finally {
+    process.off("unhandledRejection", onUnhandled);
+    sessions.unregisterAdapter("fake-sync" as never);
     cleanup();
   }
 });

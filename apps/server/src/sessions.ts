@@ -129,22 +129,30 @@ async function boundedSpawn(
   }, budget);
   budgetTimer.unref?.();
 
-  const spawning = adapter.spawn(opts);
+  let spawning: Promise<AdapterHandle> | undefined;
   try {
+    /* inside the try: an adapter that throws synchronously (registerAdapter
+       is the seam runtime harnesses plug into) must not escape before the
+       finally below disowns the budget timer — an armed timer would reject
+       budgetPromise with nobody awaiting it, and Node treats that as a
+       crash */
+    spawning = adapter.spawn(opts);
     return await Promise.race([spawning, budgetPromise]);
   } catch (err) {
-    void spawning.then(
-      (h) => {
-        try {
-          adapter.dispose(h);
-        } catch {
-          /* already gone */
-        }
-      },
-      () => {
-        /* the spawn failed on its own — nothing to clean up */
-      },
-    );
+    if (spawning) {
+      void spawning.then(
+        (h) => {
+          try {
+            adapter.dispose(h);
+          } catch {
+            /* already gone */
+          }
+        },
+        () => {
+          /* the spawn failed on its own — nothing to clean up */
+        },
+      );
+    }
     throw err;
   } finally {
     clearTimeout(budgetTimer);

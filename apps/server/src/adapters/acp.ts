@@ -107,6 +107,9 @@ export class AcpClient {
         /* every rejected entry clears its own timer in the wrapper below */
         for (const p of this.pending.values()) p.rej(new Error("acp server exited"));
         this.pending.clear();
+        /* the server took its sessions with it — these handlers are stale,
+           and leaving them would refuse the re-registration a resume needs */
+        this.sessionHandlers.clear();
         this.proc = null;
         this.ready = null;
       });
@@ -209,11 +212,29 @@ export class AcpClient {
   }
 
   onSession(dshSessionId: string, fn: SessionHandler) {
+    /* first live registration wins: sessions multiplex on this one client
+       keyed by the harness session id, and resume/respawn reuse the stored
+       ref — so a spawn that outlived the spawn budget lands after a retry
+       has already gone live on the same id. Re-registering over the live
+       handler would steal the session's frames, and the abandoned spawn's
+       dispose would then close the live session out from under it (issue
+       #12). */
+    if (this.sessionHandlers.has(dshSessionId)) return;
     this.sessionHandlers.set(dshSessionId, fn);
   }
 
   offSession(dshSessionId: string) {
     this.sessionHandlers.delete(dshSessionId);
+  }
+
+  /** is fn still the handler registered for this session? Sessions multiplex
+     on one client keyed by the harness session id, and resume/respawn reuse
+     the stored ref — so a spawn that outlived the spawn budget can settle
+     after a retry has already gone live on the same key. Its late teardown
+     must stop here, or it deletes the live session's handler and every
+     frame for that session is silently dropped (issue #12). */
+  ownsSession(dshSessionId: string, fn: SessionHandler) {
+    return this.sessionHandlers.get(dshSessionId) === fn;
   }
 }
 
@@ -255,6 +276,9 @@ export interface AcpSessionState extends AdapterHandle {
   turnStartedAt: number;
   toolStartedAt: Map<string, number>;
   pendingPerms: Set<string>;
+  /** the handler this state registered on the shared client — dispose checks
+     it still owns the key before tearing the session down */
+  onFrame: SessionHandler | null;
 }
 
 export function makeSessionState(sessionId: string, acpSessionId: string, model: string): AcpSessionState {
@@ -269,6 +293,7 @@ export function makeSessionState(sessionId: string, acpSessionId: string, model:
     turnStartedAt: 0,
     toolStartedAt: new Map(),
     pendingPerms: new Set(),
+    onFrame: null,
   };
 }
 
