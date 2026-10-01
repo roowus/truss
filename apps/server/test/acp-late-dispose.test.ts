@@ -137,3 +137,42 @@ test("a resume that outlives the spawn budget must not tear down the live sessio
     (hermes.client as any).proc?.kill("SIGKILL");
   }
 });
+
+/* the other side of the same guard: the race test above pins the skip side
+   (no session/close for a session this handle doesn't own). If ownsSession
+   broke the other way — or the close call was dropped — every test here
+   would stay green while closing a live session stopped telling the harness
+   to release its session (audit round 2, finding B2). */
+test("disposing the handle that owns the session still closes it with the harness", async () => {
+  const acp = await import("../src/adapters/acp.js");
+  const hermes = await import("../src/adapters/hermes.js");
+  const dsh = await import("../src/adapters/dsh.js");
+  const cases = [
+    ["hermes", hermes.hermesAdapter, hermes.client],
+    ["dsh", dsh.dshAdapter, dsh.client],
+  ] as const;
+  for (const [name, adapter, client] of cases) {
+    const methods: string[] = [];
+    (client as any).call = (method: string) => {
+      methods.push(method);
+      return Promise.resolve({});
+    };
+    try {
+      const h = acp.makeSessionState(`t-owned-${name}`, `acp-owned-${name}`, "m");
+      h.onFrame = () => {};
+      (client as any).onSession(`acp-owned-${name}`, h.onFrame);
+      adapter.dispose(h);
+      assert.ok(
+        methods.includes("session/close"),
+        `${name} must still tell the harness to release a session it owns — got: ${methods.join(", ") || "nothing"}`,
+      );
+      assert.equal(
+        (client as any).ownsSession(`acp-owned-${name}`, h.onFrame),
+        false,
+        `${name} must release the frame handler along with the close`,
+      );
+    } finally {
+      delete (client as any).call;
+    }
+  }
+});
