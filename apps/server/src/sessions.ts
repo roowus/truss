@@ -143,6 +143,10 @@ async function boundedSpawn(
       void spawning.then(
         (h) => {
           try {
+            /* mark it first: the adapter's dispose frees the local side but
+               must keep its hands off the harness session — on a resume that
+               session is the one a concurrent retry is bringing back */
+            h.abandoned = true;
             adapter.dispose(h);
           } catch {
             /* already gone */

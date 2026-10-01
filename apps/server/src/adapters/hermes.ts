@@ -126,6 +126,7 @@ export const hermesAdapter: HarnessAdapter = {
 
     const h = makeSessionState(opts.sessionId, res.sessionId, model);
     h.harnessRef = res.sessionId;
+    h.resumed = Boolean(opts.resumeRef);
     h.onFrame = (rec) => handleServerMessage(h, rec);
     client.onSession(res.sessionId, h.onFrame);
     h.queue.push({ type: "session.state", sessionId: opts.sessionId, state: "idle" });
@@ -188,10 +189,17 @@ export const hermesAdapter: HarnessAdapter = {
        id, and resume/respawn reuse the stored ref — a spawn that outlived
        the spawn budget can land after a retry has gone live on the same key,
        and its late teardown must not close the live session out from under
-       it (issue #12) */
+       it (issue #12). The other ordering is the sharper one: when the
+       abandoned spawn is the FIRST to register it owns the key and
+       ownsSession alone would let the close through — so a handle the spawn
+       budget gave up on never closes the harness session it resumed. The
+       retry is bringing that same session back, and the next resume
+       reclaims it. */
     if (h.onFrame && client.ownsSession(h.acpSessionId, h.onFrame)) {
       client.offSession(h.acpSessionId);
-      void client.call("session/close", { sessionId: h.acpSessionId }).catch(() => undefined);
+      if (!(h.abandoned && h.resumed)) {
+        void client.call("session/close", { sessionId: h.acpSessionId }).catch(() => undefined);
+      }
     }
     h.queue.close();
   },

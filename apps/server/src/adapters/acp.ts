@@ -279,6 +279,9 @@ export interface AcpSessionState extends AdapterHandle {
   /** the handler this state registered on the shared client — dispose checks
      it still owns the key before tearing the session down */
   onFrame: SessionHandler | null;
+  /** the harness session came from the stored resume ref rather than a fresh
+     session/new, so it is shared with any retry that resumes the same ref */
+  resumed: boolean;
 }
 
 export function makeSessionState(sessionId: string, acpSessionId: string, model: string): AcpSessionState {
@@ -294,6 +297,7 @@ export function makeSessionState(sessionId: string, acpSessionId: string, model:
     toolStartedAt: new Map(),
     pendingPerms: new Set(),
     onFrame: null,
+    resumed: false,
   };
 }
 
