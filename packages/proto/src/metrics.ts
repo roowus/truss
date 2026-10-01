@@ -243,9 +243,11 @@ function passwdMap(): Map<number, string> {
   return _passwd;
 }
 
-function procSnap(): { map: Map<number, ProcSnap>; totalBusy: number; totalAll: number } {
+/* one sample of every live process. Only the map is wanted here: the CPU
+   rates come from the collector's own cpuTimes() sample, so a second
+   /proc/stat read inside procSnap would feed nothing. */
+function procSnap(): { map: Map<number, ProcSnap> } {
   const map = new Map<number, ProcSnap>();
-  const { total } = cpuTimes();
   const passwd = passwdMap();
   for (const d of readdirSync("/proc")) {
     if (!/^\d+$/.test(d)) continue;
@@ -270,7 +272,7 @@ function procSnap(): { map: Map<number, ProcSnap>; totalBusy: number; totalAll: 
       /* raced exit */
     }
   }
-  return { map, totalBusy: busyOf(total), totalAll: allOf(total) };
+  return { map };
 }
 
 /* rate sampling needs two points — the collector keeps the previous sample
