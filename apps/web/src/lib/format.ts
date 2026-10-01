@@ -43,6 +43,15 @@ export const TRASH_RETENTION_DAYS = 30;
 export function daysLeftInTrash(deletedAt: number, now = Date.now(), retentionDays = TRASH_RETENTION_DAYS) {
   return Math.max(0, Math.ceil((deletedAt + retentionDays * 86_400_000 - now) / 86_400_000));
 }
+/** countdown twin of ago(): future timestamps, past clamps to "now" */
+export function until(t: number, now = Date.now()) {
+  const s = Math.max(0, Math.round((t - now) / 1000));
+  if (s < 5) return "now";
+  if (s < 60) return `${s}s`;
+  if (s < 3600) return `${Math.floor(s / 60)}m`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h`;
+  return `${Math.floor(s / 86400)}d`;
+}
 export function fmtSize(n: number): string {
   const r = Math.round(n);
   if (r < 1024) return `${r} B`;

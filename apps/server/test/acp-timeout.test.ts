@@ -894,3 +894,35 @@ test("switchModel's respawn is bounded too: a wedged restart rejects instead of 
     cleanup();
   }
 });
+
+test("a spawn that resolves AFTER the budget is disposed, not orphaned (no leaked harness process)", async () => {
+  /* regression: the budget won the Promise.race, but the losing spawn promise
+     kept running — a harness answering at, say, 95s of a 90s budget was
+     dropped on the floor: never registered in `live`, never disposed, and a
+     user retry would double-spawn against the same cwd */
+  const { cleanup } = await freshServer("spawn-late");
+  const sessions = await import("../src/sessions.js");
+  let disposedWith: AdapterHandle | null = null;
+  const lateHandle: AdapterHandle = { sessionId: "late-1" };
+  const lateAdapter: HarnessAdapter = {
+    ...spawnNeverAdapter("fake-latespawn"),
+    spawn: () => new Promise((r) => setTimeout(() => r(lateHandle), 400)), // answers past the budget
+    dispose: (h) => {
+      disposedWith = h;
+    },
+  };
+  sessions.registerAdapter("fake-latespawn" as never, lateAdapter);
+  try {
+    await assert.rejects(
+      (sessions.createSession as any)({ harness: "fake-latespawn", cwd: "/tmp" }, { spawnTimeoutMs: 100 }),
+      /didn't answer spawn/,
+      "the budget still fails the session fast",
+    );
+    assert.equal(disposedWith, null, "nothing to dispose yet — spawn hasn't answered");
+    await new Promise((r) => setTimeout(r, 600)); // let the late spawn resolve
+    assert.equal(disposedWith, lateHandle, "the late handle was torn down instead of leaked");
+  } finally {
+    sessions.unregisterAdapter("fake-latespawn" as never);
+    cleanup();
+  }
+});
