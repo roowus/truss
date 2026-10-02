@@ -17,19 +17,24 @@ drives the loop.
 3. **Implementation** (`config/agent/work-session.md`): the work session
    fixes the issue in its own checkout, verifies the issue's suggested
    tests first, boots the per-PR preview (`pr-preview/`, tilt), and opens
-   the PR with the `audit` label and a `truss-session: <id>` marker in the
-   body.
+   the PR with the `audit` label and an `agent-session: <name>` marker in
+   the body.
 4. **Audit**: the `audit` label fires `pr-audit` when applied and on every
    push while it stays applied. Each run builds/lints/tests the head (a
    failing build is a Critical finding), audits with GLM, and posts the
    report as a PR comment. The preview at `https://pr-<N>.truss.rewis` is
    passed to the auditor as probeable context.
-5. **Fix loop**: `scripts/audit-watch.sh` on the developer's box polls
-   GitHub (no LLM tokens) and delivers fresh reports to the owning session.
-   The session validates findings adversarially, fixes the valid ones,
-   pushes — and the push re-fires the audit. When the session judges the
-   audit nitpicking or the work done, it removes the label FIRST (that is
-   the off switch), makes any final commit, and hands the preview URL to
+5. **Fix loop**: the work session is DSH-native — after each push it arms a
+   one-shot reminder (~12 min) to check for the fresh report, so an idle
+   session burns nothing and each check is one tiny turn.
+   `scripts/audit-watch.sh` (cron'd on the developer's box, no LLM tokens)
+   is the safety net: it spools fresh reports to
+   `~/.local/state/truss-audit-spool/` so a waking session reads a file
+   instead of calling the API. The session validates findings
+   adversarially, fixes the valid ones, pushes, and re-fires the audit with
+   a `~run-audit` comment (the reliable path on stacked PRs). When it judges
+   the audit nitpicking or the work done, it removes the label FIRST (that
+   is the off switch), makes any final commit, and hands the preview URL to
    the developer for manual testing.
 6. **Merge**: the developer tests at the preview, messages the session if
    anything is wrong, and clicks merge. Merging is never automated.
