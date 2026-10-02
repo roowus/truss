@@ -51,7 +51,11 @@ front of you (or it arrives as a message in this session). When a new
    reason; OUT-OF-SCOPE → real but pre-exists this PR.
 2. Fix the queued ones per TRUSS.md, one commit per round
    (`fix(<scope>): address audit round N findings`, body lists finding →
-   action), push. The label is still on, so the push re-fires the audit.
+   action), push. Then re-fire the audit yourself:
+   `gh pr comment <pr> --body "~run-audit"`. Do this even though the label
+   is on — the label's synchronize trigger only works when the PR's base is
+   main; for stacked PRs the comment is the reliable path. One comment per
+   push, never more.
 3. Reply in this session with the per-finding dispositions.
 
 **Convergence is your judgment call** — the diamond in the flowchart is you.
