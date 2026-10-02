@@ -8,6 +8,7 @@ import {
   fmtMs,
   fmtTokens,
   fmtCost,
+  fmtUptime,
   ago,
   daysLeftInTrash,
   TRASH_RETENTION_DAYS,
@@ -83,6 +84,17 @@ test("fmtCost: dash, zero, tiny, normal", () => {
   assert.equal(fmtCost(0.5), "$0.500"); // <1 gets 3 decimals
   assert.equal(fmtCost(1.5), "$1.50");
   assert.equal(fmtCost(25), "$25.00");
+});
+
+test("fmtUptime: dash for an absent age, then m / h+m / d+h", () => {
+  // a procs row can come from a node-agent still on an older bundle, which
+  // does not send ageSec — it must degrade to the placeholder, not "NaNm"
+  assert.equal(fmtUptime(undefined), "—");
+  assert.equal(fmtUptime(NaN), "—");
+  assert.equal(fmtUptime(0), "0m");
+  assert.equal(fmtUptime(59), "0m"); // sub-minute rounds down to a whole minute, as before
+  assert.equal(fmtUptime(11_100), "3h 5m");
+  assert.equal(fmtUptime(90_061), "1d 1h");
 });
 
 test("ago: now, s, m, h, d, future clamps to now", () => {

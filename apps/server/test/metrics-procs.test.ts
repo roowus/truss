@@ -71,6 +71,16 @@ test("parsePasswd: uid → login name", () => {
   assert.equal(byUid.get(999999), undefined, "unknown uid → caller falls back to the numeric id");
 });
 
+test("parsePasswd: a malformed uid field never becomes uid 0", () => {
+  /* Number("") is 0, so "svc:x::1000:…" would register svc for root's uid and
+     label every root-owned process "svc" in the user column */
+  const hostile = ["svc:x::1000:Svc:/srv:/bin/false", "root:x:0:0:root:/root:/bin/bash", "bin:x:1:1:bin:/bin:/usr/sbin/nologin"].join("\n");
+  const byUid: Map<number, string> = metrics.parsePasswd(hostile);
+  assert.equal(byUid.get(0), "root", "root keeps its own login");
+  assert.equal(byUid.get(1), "bin");
+  assert.equal(byUid.size, 2, "the malformed line registers nothing at all");
+});
+
 test("procAgeSec: uptime minus start ticks, hz-aware, floored at 0", () => {
   assert.equal(typeof metrics.procAgeSec, "function", "metrics.ts must export procAgeSec — see issue #10");
   assert.equal(metrics.procAgeSec(10_000, 200, 100), 100, "200s uptime, start at 100s → 100s old");

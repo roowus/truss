@@ -206,8 +206,9 @@ export function parsePasswd(text: string): Map<number, string> {
   for (const ln of text.split("\n")) {
     const parts = ln.split(":");
     if (parts.length < 3) continue;
-    const uid = Number(parts[2]);
-    if (Number.isInteger(uid)) out.set(uid, parts[0]);
+    /* a malformed uid field must not become uid 0 — Number("") is 0, so
+       "svc:x::1000:…" would label every root-owned process "svc" */
+    if (/^\d+$/.test(parts[2])) out.set(Number(parts[2]), parts[0]);
   }
   return out;
 }
@@ -242,9 +243,11 @@ function passwdMap(): Map<number, string> {
   return _passwd;
 }
 
-function procSnap(): { map: Map<number, ProcSnap>; totalBusy: number; totalAll: number } {
+/* one sample of every live process. Only the map is wanted here: the CPU
+   rates come from the collector's own cpuTimes() sample, so a second
+   /proc/stat read inside procSnap would feed nothing. */
+function procSnap(): { map: Map<number, ProcSnap> } {
   const map = new Map<number, ProcSnap>();
-  const { total } = cpuTimes();
   const passwd = passwdMap();
   for (const d of readdirSync("/proc")) {
     if (!/^\d+$/.test(d)) continue;
@@ -269,7 +272,7 @@ function procSnap(): { map: Map<number, ProcSnap>; totalBusy: number; totalAll: 
       /* raced exit */
     }
   }
-  return { map, totalBusy: busyOf(total), totalAll: allOf(total) };
+  return { map };
 }
 
 /* rate sampling needs two points — the collector keeps the previous sample
@@ -295,7 +298,8 @@ export async function collectMetrics(): Promise<HostMetrics> {
 
   const procsNow = procSnap();
   const ticksDelta = Math.max(1, allOf(cpu.total) - (prevProcs?.totalAll ?? allOf(cpu.total)));
-  const memTotal = meminfo().MemTotal ?? 0;
+  const mem = meminfo(); // read once — the proc loop's memPct and the mem block below share it
+  const memTotal = mem.MemTotal ?? 0;
   const uptimeNow = Number(read("/proc/uptime").split(" ")[0] ?? 0);
   const hz = clockTicks();
   const top: HostMetrics["procs"] = [];
@@ -316,7 +320,6 @@ export async function collectMetrics(): Promise<HostMetrics> {
   }
   top.sort((a, b) => b.cpu - a.cpu || b.rssMb - a.rssMb);
 
-  const mem = meminfo();
   const load = read("/proc/loadavg").split(" ").slice(0, 3).map(Number) as [number, number, number];
   const stat = read("/proc/stat");
   const procsTotal = Number(stat.match(/procs_running (\d+)/)?.[1] ?? 0);
@@ -338,7 +341,7 @@ export async function collectMetrics(): Promise<HostMetrics> {
       cpuModel: cpuModel(),
       cores: cpu.perCore.length,
     },
-    uptimeSec: Number(read("/proc/uptime").split(" ")[0] ?? 0),
+    uptimeSec: uptimeNow, // the read the proc loop already did, not a second one
     cpu: { usage, perCore, load, procs: procsNow.map.size, threads, running: procsTotal, blocked: procsBlocked },
     pressure: pressure(),
     mem: {

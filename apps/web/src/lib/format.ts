@@ -52,6 +52,18 @@ export function until(t: number, now = Date.now()) {
   if (s < 86400) return `${Math.floor(s / 3600)}h`;
   return `${Math.floor(s / 86400)}d`;
 }
+/* Host/process uptime, read as "Xd Xh" / "Xh Xm" / "Xm". Takes an optional
+   number because a procs row can come from a node-agent still on an older
+   bundle that does not send ageSec. */
+export function fmtUptime(sec?: number) {
+  if (sec === undefined || sec === null || !Number.isFinite(sec)) return "—";
+  const d = Math.floor(sec / 86400);
+  const h = Math.floor((sec % 86400) / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  if (d > 0) return `${d}d ${h}h`;
+  if (h > 0) return `${h}h ${m}m`;
+  return `${m}m`;
+}
 export function fmtSize(n: number): string {
   const r = Math.round(n);
   if (r < 1024) return `${r} B`;
