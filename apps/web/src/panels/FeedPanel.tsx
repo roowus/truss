@@ -239,16 +239,27 @@ function SharePop({ anchor, item, onClose }: { anchor: HTMLElement; item: FeedIt
   const order = useApp((s) => s.order);
   const sessions = useApp((s) => s.sessions);
   const [q, setQ] = useState("");
+  const [note, setNote] = useState("");
   const input = useRef<HTMLInputElement>(null);
   const [pos] = useState(() => {
     const r = anchor.getBoundingClientRect();
-    return { left: Math.max(8, Math.min(r.right - 260, window.innerWidth - 268)), top: Math.min(r.bottom + 6, window.innerHeight - 300) };
+    return { left: Math.max(8, Math.min(r.right - 260, window.innerWidth - 268)), top: Math.min(r.bottom + 6, window.innerHeight - 340) };
   });
   const list = order.map((id) => sessions[id]).filter(Boolean).filter((s) => !item.sharedWith.includes(s.id) && (!q || s.title.toLowerCase().includes(q.toLowerCase()))).slice(0, 8);
   return createPortal(
     <>
       <div className="fixed inset-0 z-[170]" onPointerDown={onClose} />
       <div role="dialog" aria-label="Share to session" className="fixed z-[171] w-[260px] rounded-lg border border-[var(--t-line2)] bg-[var(--t-bg2)] shadow-2xl t-pop overflow-hidden" style={pos}>
+        {/* issue #24: type what the receiving agent should DO with the card */}
+        <div className="px-3 pt-2 pb-1.5 border-b border-[var(--t-line)]">
+          <input
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            placeholder="add a note for the agent (optional)…"
+            aria-label="Note to the agent"
+            className="w-full bg-[var(--t-bg0)] border border-[var(--t-line)] rounded-md px-2 py-1 text-[11.5px] text-[var(--t-fg)] placeholder:text-[var(--t-dim)] outline-none focus:border-[var(--t-mute)]"
+          />
+        </div>
         <div className="flex items-center gap-2 px-3 h-9 border-b border-[var(--t-line)]">
           <Icon name="search" size={11} className="text-[var(--t-dim)]" />
           <input ref={input} autoFocus value={q} onChange={(e) => setQ(e.target.value)} placeholder="share to session…" className="flex-1 bg-transparent outline-none text-[12px] text-[var(--t-fg)] placeholder:text-[var(--t-dim)]" />
@@ -260,7 +271,7 @@ function SharePop({ anchor, item, onClose }: { anchor: HTMLElement; item: FeedIt
               key={s.id}
               onClick={() => {
                 onClose();
-                void store.be?.shareFeed(item.id, s.id).then(
+                void store.be?.shareFeed(item.id, s.id, note.trim() || undefined).then(
                   () => store.toast("ok", "Shared", `sent to ${s.title}`),
                   (e) => store.toast("error", "Share failed", e.message),
                 );
