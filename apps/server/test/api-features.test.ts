@@ -241,10 +241,10 @@ test("todo access flow over MCP+REST: approval card (deduped), approve, deny, ap
       const f = await api("/api/feed?state=done");
       return f.body.items.find((i: Ev) => i.data?.todoId === todo.id && !i.data?.accessRequest) ?? null;
     }, "todo card settled to done");
-    /* …but the approval card itself is NOT settled by either the approval or
-       the completion — it lingers unread (looks like a UX bug, asserted as-is) */
+    /* FIXED (issue #35): answering an access request settles its card —
+       resolved asks leave the inbox */
     const leftover = (await accessCards())[0];
-    assert.equal(leftover.state, "unread", "SURPRISE: resolved access card stays in the inbox");
+    assert.equal(leftover.state, "done", "resolved access card settles to done");
 
     /* deny flow: C asks, user denies, C is hard-refused from then on */
     const askC = await mcpCall(C, "update_todo", { id: todo.id, title: "nope" });
