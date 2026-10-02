@@ -297,9 +297,16 @@ test("happy path: full run yields state transitions, text+thinking chunks, usage
     const { events, finished } = collect(handle);
     try {
       piAdapter.send(handle, "say hi");
+      /* wait for the run to SETTLE, not just for msg.done: message_end lands
+         before turn_end/agent_settled in the same burst, and the collector
+         delivers them one microtask apart — under load a poll can observe
+         msg.done while llm.call.done and the trailing idle are still queued */
       await waitFor(
-        () => assistantStarts(events).length === 1 && events.some((e) => e.type === "msg.done"),
-        "assistant message done",
+        () =>
+          assistantStarts(events).length === 1 &&
+          events.some((e) => e.type === "msg.done") &&
+          statesOf(events).at(-1) === "idle",
+        "assistant message done and session settled",
       );
 
       assert.deepEqual(statesOf(events), ["idle", "running", "idle"]);
@@ -354,6 +361,10 @@ test("error surfacing (regression): provider 400 arrives only via message_end st
     const { events, finished } = collect(handle);
     try {
       piAdapter.send(handle, "BOOM this model does not exist");
+      /* wait for the settle, not just msg.done: message_end lands before
+         turn_end/agent_settled in the same burst, and the collector delivers
+         them one microtask apart — under load a poll can observe msg.done
+         while the trajectory row (llm.call.done) is still queued */
       await waitFor(
         () =>
           events.some(
@@ -361,8 +372,8 @@ test("error surfacing (regression): provider 400 arrives only via message_end st
               e.type === "msg.done" &&
               typeof (e as { stopReason?: string }).stopReason === "string" &&
               (e as { stopReason: string }).stopReason.includes("Unknown Model"),
-          ),
-        "msg.done carrying the provider error",
+          ) && statesOf(events).at(-1) === "idle",
+        "msg.done carrying the provider error and session settled",
       );
 
       const start = assistantStarts(events)[0] as { messageId: string };
@@ -384,9 +395,6 @@ test("error surfacing (regression): provider 400 arrives only via message_end st
       // the trajectory row stops pretending success: turn_end carries 500
       const callDone = events.find((e) => e.type === "llm.call.done") as { status?: number } | undefined;
       assert.equal(callDone?.status, 500, "failed turn's trajectory row shows 500, not 200");
-
-      // session settles back to idle so the next prompt can go out
-      await waitFor(() => statesOf(events).at(-1) === "idle", "back to idle after error");
     } finally {
       await shutdown(handle, finished);
     }

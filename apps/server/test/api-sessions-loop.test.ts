@@ -115,7 +115,11 @@ test("interrupt mid-run maps to an interrupted assistant bubble and idle state",
   const ev = await waitFor(async () => {
     const r = await api(`/api/sessions/${id}/events`);
     const evs = r.body.events.map((f: { ev: Record<string, unknown> }) => f.ev);
-    return evs.some((e: Ev) => e.type === "session.state" && e.state === "idle") ? evs : null;
+    /* the spawn's own initial idle satisfies a bare "some idle" check before
+       the run has even started — require the full cycle: running, then idle
+       again, so the assertion below is the settle, not the boot */
+    const sts = evs.filter((e: Ev) => e.type === "session.state").map((e: Ev) => e.state);
+    return sts.includes("running") && sts.at(-1) === "idle" ? evs : null;
   }, "idle after interrupt");
   const states = ev.filter((e: Ev) => e.type === "session.state").map((e: Ev) => e.state);
   assert.deepEqual(states.at(-1), "idle");
@@ -136,7 +140,13 @@ test("provider error surfaces as an error pill in the transcript (full loop regr
   const evs = await waitFor(async () => {
     const r = await api(`/api/sessions/${id}/events`);
     const list = r.body.events.map((f: { ev: Record<string, unknown> }) => f.ev);
-    return list.some((e: Ev) => e.type === "msg.done" && typeof e.stopReason === "string") ? list : null;
+    /* message_end persists msg.done a beat before turn_end persists
+       llm.call.done — wait for both, or the 500 assertion below reads a
+       trajectory row that has not landed yet */
+    return list.some((e: Ev) => e.type === "msg.done" && typeof e.stopReason === "string") &&
+      list.some((e: Ev) => e.type === "llm.call.done")
+      ? list
+      : null;
   }, "error stopReason");
   const done = evs.find((e: Ev) => e.type === "msg.done" && typeof e.stopReason === "string" && e.stopReason !== undefined);
   assert.ok(String(done.stopReason).startsWith("error:"), `stopReason carries the error: ${done.stopReason}`);

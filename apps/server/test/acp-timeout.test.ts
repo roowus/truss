@@ -97,6 +97,24 @@ function deadClient(timeoutMs: number) {
   return makeClient("dead", { requestTimeoutMs: timeoutMs });
 }
 
+/* SIGKILL delivery and the exit event are kernel- and scheduler-paced: under
+   parallel test load 100ms is not a safe bound, so poll for the death instead
+   of asserting after a fixed sleep. */
+async function waitForExit(
+  proc: { exitCode: number | null; signalCode: string | null } | null | undefined,
+  what: string,
+  timeoutMs = 5000,
+): Promise<void> {
+  const t0 = Date.now();
+  while (Date.now() - t0 < timeoutMs) {
+    if (proc && (proc.exitCode !== null || proc.signalCode !== null)) return;
+    await tick(25);
+  }
+  throw new Error(
+    `timeout waiting for: ${what} — exitCode=${proc?.exitCode}, signal=${proc?.signalCode}`,
+  );
+}
+
 test("a call whose answer never comes rejects as timed out — it must not pend forever", async () => {
   /* server answers initialize (so ensure() succeeds and the process is
      healthy) but never answers anything else — isolates call()'s timeout */
@@ -151,6 +169,11 @@ test("a retry after a boot timeout succeeds — the killed boot's exit must not 
     const first = await client.ensure().then(() => "resolved", (e: Error) => `rejected: ${e.message}`);
     assert.match(first, /^rejected: .*timed ?out/i, `the slow first boot times out — got: ${first}`);
     process.env.TRUSS_TEST_BOOT_DELAY = "10";
+    /* the retry pins that the healthy boot is USED, not that node boots a
+       child inside 150ms — under parallel load the child boot alone can
+       outlast the tight budget, so the retry gets a loaded-machine budget
+       (the fake still answers 10ms after it is up) */
+    (client as any).opts.requestTimeoutMs = 5000;
     const second = await client.ensure().then(() => "resolved", (e: Error) => `rejected: ${e.message}`);
     assert.equal(second, "resolved", `the retry must complete on the healthy second boot — got: ${second}`);
   } finally {
@@ -176,11 +199,7 @@ test("a timed-out boot's child is dead — the failed boot must not leave a harn
     assert.ok(ghost, "the boot leaves its child where the test can see it");
     const first = await booting.then(() => "resolved", (e: Error) => `rejected: ${e.message}`);
     assert.match(first, /^rejected: .*timed ?out/i, `the slow boot times out — got: ${first}`);
-    await tick(100);
-    assert.ok(
-      ghost.exitCode !== null || ghost.signalCode !== null,
-      `the timed-out boot's child must be killed, not left running — exitCode=${ghost.exitCode}, signal=${ghost.signalCode}`,
-    );
+    await waitForExit(ghost, "the timed-out boot's child must be killed, not left running");
   } finally {
     delete process.env.TRUSS_TEST_BOOT_DELAY;
     kill();
@@ -201,6 +220,9 @@ test("a retry after a killed boot reads its own first frame — the ghost's part
     assert.match(first, /^rejected: .*timed ?out/i, `the partial-frame boot times out and is killed — got: ${first}`);
     delete process.env.TRUSS_TEST_PARTIAL;
     process.env.TRUSS_TEST_BOOT_DELAY = "10";
+    /* same as the boot-timeout retry above: the pin is reading the new
+       child's own frame, not booting node inside 150ms under load */
+    (client as any).opts.requestTimeoutMs = 5000;
     const second = await client.ensure().then(() => "resolved", (e: Error) => `rejected: ${e.message}`);
     assert.equal(second, "resolved", `the retry must read the new child's own initialize answer — got: ${second}`);
   } finally {
@@ -226,11 +248,7 @@ test("a wedged spawn-phase call recycles the process — the next ensure() boots
       (e: Error) => `rejected: ${e.message}`,
     );
     assert.match(control, /^rejected: .*timed ?out/i, `the wedged call times out — got: ${control}`);
-    await tick(100);
-    assert.ok(
-      wedged.exitCode !== null || wedged.signalCode !== null,
-      `the wedged process must be recycled, not left cached and dead-weight — exitCode=${wedged.exitCode}, signal=${wedged.signalCode}`,
-    );
+    await waitForExit(wedged, "the wedged process must be recycled, not left cached and dead-weight");
     /* the exit handler cleared the cached boot, so the next ensure() really
        boots — point it at a healthy server to prove the new child is a new
        child (the client's launch object is the seam) */
@@ -808,11 +826,7 @@ test("a write racing the child's death surfaces as a rejection — it must not t
       /^rejected/,
       `a write into a dying pipe must reject the call, not crash the server — got: ${outcome}`,
     );
-    await tick(100);
-    assert.ok(
-      child.exitCode !== null || child.signalCode !== null,
-      `the killed child is really dead — exitCode=${child.exitCode}, signal=${child.signalCode}`,
-    );
+    await waitForExit(child, "the killed child is really dead");
   } finally {
     kill();
   }
