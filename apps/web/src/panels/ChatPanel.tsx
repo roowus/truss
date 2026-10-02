@@ -6,6 +6,7 @@ import { deviceLabel } from "@/lib/device";
 import { buildModelOptions, modelValue, splitModelValue } from "@/lib/models";
 import { planHeaderFit, HEADER_CLUSTER, HEADER_GAP } from "@/lib/headerFit";
 import { CHAT_WIDTH_DEFAULT, commitChatWidth, dragDisplayWidth, readChatWidthPref, resolveChatWidth, writeChatWidthPref } from "@/lib/chatWidth";
+import { filesFromTransfer, isFileDrag } from "@/lib/attach";
 import { openPanel, openAgentShell, renameSessionPanels } from "@/lib/workspace";
 import { Btn, Empty, HarnessMark, Icon, IconBtn, Select, Spinner, StateDot, STATE_META } from "@/components/ui";
 import { Markdown } from "./Markdown";
@@ -587,7 +588,19 @@ function Composer({ id }: { id: string }) {
           ))}
         </div>
       )}
-      <div className={cn("flex items-end gap-1.5 rounded-xl border bg-[var(--t-bg0)] transition-colors focus-within:border-[var(--t-mute)] px-2 py-1.5", dead ? "border-dashed border-[var(--t-line2)]" : "border-[var(--t-line2)]")}>
+      <div
+        className={cn("flex items-end gap-1.5 rounded-xl border bg-[var(--t-bg0)] transition-colors focus-within:border-[var(--t-mute)] px-2 py-1.5", dead ? "border-dashed border-[var(--t-line2)]" : "border-[var(--t-line2)]")}
+        onDragOver={(e) => {
+          if (isFileDrag(e.dataTransfer)) e.preventDefault();
+        }}
+        onDrop={(e) => {
+          const files = filesFromTransfer(e.dataTransfer);
+          if (files.length) {
+            e.preventDefault();
+            void attachFiles(files);
+          }
+        }}
+      >
         <input
           ref={fileRef}
           type="file"
@@ -601,6 +614,13 @@ function Composer({ id }: { id: string }) {
           ref={ta}
           value={text}
           onChange={(e) => setText(e.target.value)}
+          onPaste={(e) => {
+            const files = filesFromTransfer(e.clipboardData);
+            if (files.length) {
+              e.preventDefault();
+              void attachFiles(files);
+            }
+          }}
           onKeyDown={(e) => {
             if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
               e.preventDefault();
