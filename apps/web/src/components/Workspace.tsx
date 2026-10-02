@@ -28,7 +28,7 @@ import { HostPanel } from "@/panels/HostPanel";
 import { SettingsPanel } from "@/panels/SettingsPanel";
 import { DesktopStrip } from "./DesktopStrip";
 import { tabCloseBehavior } from "@/lib/tabClose";
-import { computeTabStrip } from "@/lib/tabSizing";
+import { decideStrip } from "@/lib/tabSizing";
 import { TAB_DRAG_MIME, encodeTabDrag } from "@/lib/tabDnd";
 import { TabPicker } from "./TabPicker";
 import { Btn, Icon, StateDot, TrussLogo } from "./ui";
@@ -97,34 +97,52 @@ function TrussTab({ api, params }: IDockviewPanelHeaderProps<{ sessionId?: strin
     const probe = probeRef.current;
     if (!tab || !probe) return;
 
+    /* narrow triggers, re-resolved per pass (self-healing): the strip itself
+       for tab add/remove, its parent for strip REPLACEMENT — childList only,
+       never subtree. A subtree observer on the dock root re-measured every
+       tab on every DOM mutation anywhere (chat streaming, terminal output)
+       with forced-layout reads each — O(tabs) layout thrash per frame. */
+    const mo = new MutationObserver(() => measure());
+    let moTargets: Element[] = [];
+    let roStrip: Element | null = null;
+    const ro: ResizeObserver | null = new ResizeObserver(() => measure());
+    const dockRoot = tab.closest(".truss-dock") ?? document.body;
+    ro.observe(dockRoot as Element); // workspace resizes
+    ro.observe(probe); // title/content growth
     const measure = () => {
       /* re-resolve EVERY time — never trust an element captured earlier */
       const strip = tab.closest(".dv-tabs-container");
       if (!strip) return;
-      const specs: { spec: Parameters<typeof computeTabStrip>[0]["tabs"][number]; shell: HTMLElement }[] = [];
+      if (strip !== roStrip) {
+        ro.observe(strip); // splitter drags resize the strip, not the dock root
+        roStrip = strip;
+      }
+      const next = [strip, strip.parentElement].filter((x): x is Element => !!x);
+      if (next.length !== moTargets.length || next.some((x, i) => x !== moTargets[i])) {
+        mo.disconnect();
+        for (const t of next) mo.observe(t, { childList: true });
+        moTargets = next;
+      }
+      const entries: { shell: HTMLElement; naturalWidth: number; active: boolean }[] = [];
       for (const p of strip.querySelectorAll(".truss-tab-probe")) {
         const shell = (p as HTMLElement).closest(".dv-tab") as HTMLElement | null;
         if (!shell) continue;
-        specs.push({
-          spec: {
-            id: shell.getAttribute("data-tab-panel-id") ?? String(specs.length),
-            naturalWidth: (p as HTMLElement).offsetWidth + 38,
-            active: shell.classList.contains("dv-active-tab"),
-          },
+        entries.push({
           shell,
+          naturalWidth: (p as HTMLElement).offsetWidth + 38,
+          active: shell.classList.contains("dv-active-tab"),
         });
       }
-      const mine = tab.getAttribute("data-tab-panel-id");
-      const prev = verdictRef.current;
-      const out = computeTabStrip({
+      /* the caller's tab is matched by ELEMENT IDENTITY (decideStrip) — a
+         data-tab-panel-id attribute nothing sets used to make `mine` always
+         null, so the verdicts never reached this component */
+      const { widths, verdict } = decideStrip({
         stripWidth: strip.clientWidth,
-        tabs: specs.map((x) => ({
-          ...x.spec,
-          ...(x.spec.id === mine ? { prevCramped: prev.cramped, prevUltra: prev.ultra } : {}),
-        })),
+        tabs: entries,
+        mine: tab,
+        prev: verdictRef.current,
       });
-      for (const { spec, shell } of specs) {
-        const w = out.widths[spec.id];
+      for (const { shell, width: w } of widths) {
         /* idempotent re-apply — a re-created shell gets its width back on
            the next pass instead of waiting for a reload */
         if (w && (shell.style.width !== `${w}px` || shell.style.flex !== "0 0 auto")) {
@@ -132,21 +150,13 @@ function TrussTab({ api, params }: IDockviewPanelHeaderProps<{ sessionId?: strin
           shell.style.flex = "0 0 auto";
         }
       }
-      if (mine && out.verdicts[mine]) {
-        verdictRef.current = out.verdicts[mine];
-        setCramped(out.verdicts[mine].cramped);
-        setUltra(out.verdicts[mine].ultra);
+      if (verdict) {
+        verdictRef.current = verdict;
+        setCramped(verdict.cramped);
+        setUltra(verdict.ultra);
       }
     };
 
-    /* observe the stable workspace root, not the replaceable strip: any
-       re-structure (move, restore, heal) re-runs a pass that re-resolves */
-    const dockRoot = tab.closest(".truss-dock") ?? document.body;
-    let ro: ResizeObserver | null = new ResizeObserver(measure);
-    ro.observe(dockRoot as Element);
-    ro.observe(probe);
-    const mo = new MutationObserver(measure);
-    mo.observe(dockRoot, { childList: true, subtree: true });
     const onVis = () => measure();
     document.addEventListener("visibilitychange", onVis);
     measure();

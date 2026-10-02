@@ -46,3 +46,36 @@ export function computeTabStrip(input: { stripWidth: number; tabs: TabInput[] })
   }
   return { widths, verdicts };
 }
+
+/**
+ * The component-side glue, made pure so it can be pinned by tests: scan the
+ * strip as (shell, probe-width) pairs and decide for the CALLER's tab,
+ * identified by ELEMENT IDENTITY — never by a DOM attribute. (The old code
+ * matched on a `data-tab-panel-id` attribute that nothing in the app or
+ * dockview-core ever sets, so `mine` was always null and the cramped/ultra
+ * verdicts never reached the component — the close button stayed inline and
+ * always-visible no matter how squeezed the strip got.)
+ *
+ * Positional ids keep the width bookkeeping consistent within a single pass;
+ * the verdict lookup rides the same identity match, and only the caller's
+ * tab carries prev* history (each tab component tracks its own verdict).
+ */
+export function decideStrip<TShell>(input: {
+  stripWidth: number;
+  tabs: { shell: TShell; naturalWidth: number; active: boolean }[];
+  mine: TShell;
+  prev: { cramped: boolean; ultra: boolean };
+}): { widths: { shell: TShell; width: number }[]; verdict: { cramped: boolean; ultra: boolean } | null } {
+  const mineIndex = input.tabs.findIndex((t) => t.shell === input.mine);
+  const tabs: TabInput[] = input.tabs.map((t, i) => ({
+    id: String(i),
+    naturalWidth: t.naturalWidth,
+    active: t.active,
+    ...(i === mineIndex ? { prevCramped: input.prev.cramped, prevUltra: input.prev.ultra } : {}),
+  }));
+  const out = computeTabStrip({ stripWidth: input.stripWidth, tabs });
+  return {
+    widths: input.tabs.map((t, i) => ({ shell: t.shell, width: out.widths[String(i)] })),
+    verdict: mineIndex >= 0 ? out.verdicts[String(mineIndex)] : null,
+  };
+}
