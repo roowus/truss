@@ -389,7 +389,7 @@ jobs:
             "verdict": "approve", "findings": [], "warnings": []}.
           claude_args: |
             --model ${{ needs.gate.outputs.provider == 'zai' && env.GLM_MODEL || env.KIMI_MODEL }}
-            --max-turns 60
+            --max-turns 80
             --add-dir ${{ runner.temp }}/review-out
             --add-dir ${{ runner.temp }}/build-out
             --allowed-tools "Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh issue view:*),Bash(curl:*),Read,Write,Glob,Grep"
@@ -411,7 +411,7 @@ jobs:
           prompt: *audit-prompt
           claude_args: |
             --model ${{ env.KIMI_MODEL }}
-            --max-turns 60
+            --max-turns 80
             --add-dir ${{ runner.temp }}/review-out
             --add-dir ${{ runner.temp }}/build-out
             --allowed-tools "Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh issue view:*),Bash(curl:*),Read,Write,Glob,Grep"
