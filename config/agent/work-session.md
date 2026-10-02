@@ -29,7 +29,10 @@ When you are handed a PR you did not make (the developer commented
 ## Phase 1 — implement
 
 1. Read the issue fully, including its suggested tests.
-2. Branch: `git checkout -b fix/<n>-<slug>` (or feat/) from current main.
+2. Branch: `git fetch origin main && git checkout -b fix/<n>-<slug>` (or
+   feat/) from `origin/main` — NEVER from another PR's branch. Cumulative
+   branches are banned (TRUSS.md "Branches"): the PR's diff vs main must be
+   exactly this issue's work so PRs merge in any order.
 3. Boot your preview early: `cd pr-preview && PR_NUMBER=<n> tilt up` (the
    worktree at `pr-preview/w/<n>` is yours; keep it in sync with your branch
    via `git -C pr-preview/w/<n> pull` after commits, or work directly in the
