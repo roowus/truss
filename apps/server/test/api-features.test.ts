@@ -329,13 +329,15 @@ test("feed REST: inbox visibility, state transitions, share into a session chat"
     const agentView = await mcpCall(S, "list_feed", {});
     assert.ok(agentView.data.some((i: Ev) => i.id === item.id), "agent sees the shared card");
 
-    /* share envelope validation + a non-atomicity surprise */
+    /* share envelope validation + the atomicity contract (issue #24:
+       shareFeedToSession prompts first, records after — a failed share
+       leaves no phantom sharedWith) */
     assert.equal((await post(`/api/feed/${item.id}/share`, {})).status, 400);
     assert.equal((await post(`/api/feed/nope-nope/share`, { sessionId: S })).status, 400);
     const deadShare = await post(`/api/feed/${item.id}/share`, { sessionId: "bogus-session" });
     assert.equal(deadShare.status, 400, "prompt into a dead session fails");
     const mutated = (await api("/api/feed?state=saved")).body.items.find((i: Ev) => i.id === item.id);
-    assert.ok(mutated.sharedWith.includes("bogus-session"), "SURPRISE: failed share still records sharedWith (mutation precedes the prompt)");
+    assert.ok(!mutated.sharedWith.includes("bogus-session"), "failed share records nothing (prompt precedes the mutation)");
 
     /* dismiss hides from the default inbox, kept under the filter */
     const dis = await post(`/api/feed/${item.id}/state`, { state: "dismissed" });
