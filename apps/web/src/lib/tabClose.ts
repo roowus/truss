@@ -29,13 +29,18 @@ export function tabCloseBehavior(opts: { cramped: boolean; ultra: boolean; activ
   return { placement: "overlay-right", visible: "hover" };
 }
 
+/** per-tab chrome around the probe-measured title: the X button + gaps +
+    paddings. The one place this number lives — the strip layout in
+    Workspace.tsx adds it to every probe width to get a tab's natural width. */
+export const TAB_CHROME_PX = 38;
+
 /**
  * Strip-level overcrowding verdict, Chrome-style: crowded ⇔ every tab at its
  * natural (probe-measured, never-compressed) width plus the per-tab chrome
  * (X + gaps + paddings) would overflow the strip. Mode-independent so it
  * can't oscillate when the X flips mode.
  */
-export function isOvercrowded(probeWidths: number[], stripWidth: number, perTabChrome = 38): boolean {
+export function isOvercrowded(probeWidths: number[], stripWidth: number, perTabChrome = TAB_CHROME_PX): boolean {
   let natural = 0;
   for (const w of probeWidths) natural += w + perTabChrome;
   return natural > stripWidth + 2;
@@ -66,4 +71,18 @@ export function crampedVerdict(prev: boolean, naturalPx: number, stripPx: number
 export function ultraVerdict(prev: boolean, tabWidthPx: number): boolean {
   if (!prev) return tabWidthPx < ULTRA_ENTER_PX;
   return tabWidthPx < ULTRA_EXIT_PX;
+}
+
+/**
+ * The per-tab cramped verdict, by role (issue #23): the ACTIVE tab never
+ * counts as cramped — the strip layout keeps it fully displayed, so its X
+ * stays inline+always; an inactive tab follows the strip verdict.
+ *
+ * `active` is a PARAMETER, not captured state: the verdict must be
+ * recomputed when the focused tab changes. A stale `active` kept the newly
+ * focused tab compressed and wearing the inactive-tab overlay X until an
+ * unrelated resize/title change happened to re-measure (audit B4).
+ */
+export function crampedForTab(prev: boolean, naturalPx: number, stripPx: number, active: boolean): boolean {
+  return crampedVerdict(prev, naturalPx, stripPx) && !active;
 }

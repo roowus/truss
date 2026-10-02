@@ -27,7 +27,7 @@ import { MonitorPanel } from "@/panels/MonitorPanel";
 import { HostPanel } from "@/panels/HostPanel";
 import { SettingsPanel } from "@/panels/SettingsPanel";
 import { DesktopStrip } from "./DesktopStrip";
-import { crampedVerdict, tabCloseBehavior, ultraVerdict } from "@/lib/tabClose";
+import { crampedForTab, crampedVerdict, TAB_CHROME_PX, tabCloseBehavior, ultraVerdict } from "@/lib/tabClose";
 import { layoutTabStrip, STANDARD_TAB_WIDTH, type TabSpec } from "@/lib/tabStrip";
 import { TAB_DRAG_MIME, encodeTabDrag } from "@/lib/tabDnd";
 import { TabPicker } from "./TabPicker";
@@ -124,7 +124,9 @@ function TrussTab({ api, params }: IDockviewPanelHeaderProps<{ sessionId?: strin
         specs.push({
           spec: {
             id: shell.getAttribute("data-tab-panel-id") ?? String(specs.length),
-            naturalWidth: (probe as HTMLElement).offsetWidth + 38,
+            /* probe (title) + per-tab chrome (X, gaps, paddings) = natural
+               width — TAB_CHROME_PX keeps the constant in tabClose.ts */
+            naturalWidth: (probe as HTMLElement).offsetWidth + TAB_CHROME_PX,
             active: shell.classList.contains("dv-active-tab"),
           },
           shell,
@@ -139,10 +141,12 @@ function TrussTab({ api, params }: IDockviewPanelHeaderProps<{ sessionId?: strin
         }
       }
       /* sticky verdicts (issue #21); the active tab never compresses, so it
-         composes roomy regardless (its X stays inline+always — #23 rule) */
+         composes roomy regardless (its X stays inline+always — #23 rule).
+         crampedForTab takes `active` as input — see its doc: the verdict
+         must flip the moment the focused tab changes (audit B4) */
       const myWidth = tab.getBoundingClientRect().width;
       const natural = specs.length * STANDARD_TAB_WIDTH;
-      setCramped((prev) => crampedVerdict(prev, natural, strip.clientWidth) && !active);
+      setCramped((prev) => crampedForTab(prev, natural, strip.clientWidth, active));
       setUltra((prev) => {
         if (!crampedVerdict(prev, natural, strip.clientWidth)) return false;
         return ultraVerdict(prev, myWidth);
@@ -171,7 +175,13 @@ function TrussTab({ api, params }: IDockviewPanelHeaderProps<{ sessionId?: strin
       ro?.disconnect();
       mo?.disconnect();
     };
-  }, [title, pending, meta?.state]);
+    /* `active` IS a dependency (audit B4): the observers see resizes and
+       childList changes, but dockview's dv-active-tab class flip is an
+       attribute change — without re-running this effect on activation, the
+       newly focused tab kept its compressed inactive-share width (the issue
+       #23 headline criterion failed) and the stale-`active` cramped verdict
+       kept the wrong close-X mode on both the focused and the blurred tab */
+  }, [title, pending, meta?.state, active]);
   return (
     <div
       ref={rootRef}
