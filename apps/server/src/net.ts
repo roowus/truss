@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { networkInterfaces } from "node:os";
+import { networkInterfaces, userInfo } from "node:os";
 
 /**
  * Network reachability helper for the add-host wizard: what addresses can a
@@ -28,6 +28,10 @@ export interface NetInfo {
     dnsName?: string;
     serveOn?: boolean;
     serveUrl?: string;
+    /** can this process write the serve config? (operator/root — issue #37) */
+    canServe?: boolean;
+    /** the user Truss runs as — the account `tailscale set --operator=` needs */
+    user?: string;
   };
   lan: string[]; // private IPv4s of this host
 }
@@ -125,20 +129,63 @@ export async function netInfo(port: number, bindHost?: string): Promise<NetInfo>
     } catch {
       /* status parse failed — ip4 is enough */
     }
+    /* can we write serve config at all? (issue #37 — the Settings toggle must
+       know before the user clicks) */
+    try {
+      const prefs = await sh("tailscale", ["debug", "prefs"]);
+      const operator = parsePrefsOperator(prefs);
+      const user = userInfo().username;
+      out.tailscale.user = user;
+      out.tailscale.canServe = canServeWith(operator, user, typeof process.getuid === "function" && process.getuid() === 0);
+    } catch {
+      /* prefs unreadable — report nothing */
+    }
   } catch {
     /* tailscale not installed */
   }
   return out;
 }
 
+/* ── serve-config capability (issue #37): tailscaled's LocalAPI refuses
+   serve writes from non-root, non-operator users — probe instead of 400ing ── */
+
+/** `tailscale debug prefs` JSON → OperatorUser (null when unset/garbage; never throws) */
+export function parsePrefsOperator(prefsJson: string): string | null {
+  try {
+    const j = JSON.parse(prefsJson);
+    const u = j?.OperatorUser;
+    return typeof u === "string" && u.trim() ? u.trim() : null;
+  } catch {
+    return null;
+  }
+}
+
+/** root always can; the operator can; anyone else can't */
+export function canServeWith(operator: string | null, user: string, isRoot: boolean): boolean {
+  if (isRoot) return true;
+  if (operator && operator === user) return true;
+  return false;
+}
+
+/** map tailscaled's denial to the one-line remediation, keeping the original text */
+export function serveErrorHint(stderr: string, user: string): string {
+  if (!/access denied|denied|not permitted|operation not permitted/i.test(stderr)) return stderr;
+  return `${stderr}. This server's user (${user}) can't write tailscale's serve config. Run \`sudo tailscale set --operator=${user}\` once (or run Truss as root), then retry Settings → Network.`;
+}
+
 /** expose Truss on the tailnet at https://<machine>.<tailnet>.ts.net */
 export async function tailscaleServe(on: boolean, port: number): Promise<NetInfo["tailscale"]> {
-  if (on) {
-    /* serve https on the tailnet's 443 → local http port (flags vary a bit
-       across CLIs; this is the stable modern form) */
-    await sh("tailscale", ["serve", "--bg", "--https=443", `http://127.0.0.1:${port}`]);
-  } else {
-    await sh("tailscale", ["serve", "--https=443", "off"]);
+  try {
+    if (on) {
+      /* serve https on the tailnet's 443 → local http port (flags vary a bit
+         across CLIs; this is the stable modern form) */
+      await sh("tailscale", ["serve", "--bg", "--https=443", `http://127.0.0.1:${port}`]);
+    } else {
+      await sh("tailscale", ["serve", "--https=443", "off"]);
+    }
+  } catch (err) {
+    /* denials name the fix (issue #37): the operator one-liner, not a bare 400 */
+    throw new Error(serveErrorHint(err instanceof Error ? err.message : String(err), userInfo().username));
   }
   return (await netInfo(port)).tailscale;
 }
