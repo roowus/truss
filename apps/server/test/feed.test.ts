@@ -31,6 +31,8 @@ test("postFeed: defaults, full options, broadcast, getFeedItem", async () => {
     assert.equal(feed.getFeedItem(item.id)?.title, "hello");
     assert.equal(feed.getFeedItem("fd-missing"), undefined);
 
+    const db = await import("../src/db.js");
+    db.store.createSession({ id: "fd-sess-1", harness: "pi", title: "fd session", cwd: "/tmp" });
     const full = feed.postFeed({
       type: "report",
       title: "full",
@@ -51,6 +53,27 @@ test("postFeed: defaults, full options, broadcast, getFeedItem", async () => {
     assert.equal(seen.length, 2, "second post broadcasts too");
   } finally {
     feed.setFeedBroadcaster(() => {});
+    cleanup();
+  }
+});
+
+test("postFeed: a sessionId that resolves to no session coalesces to unattributed (issue #36)", async () => {
+  const { cleanup } = await freshServer("fd-ghost-sess");
+  const feed = await import("../src/feed.js");
+  try {
+    /* a stale/typo'd id from a future internal caller must not land a ghost
+       card attributed to a nonexistent session — it still files, unattributed */
+    const ghost = feed.postFeed({ type: "note", title: "fd-ghost-card", sessionId: "fd-no-such-session" });
+    assert.equal(ghost.created, true);
+    assert.equal(ghost.item.sessionId, undefined, "ghost session id coalesces to null");
+    assert.equal(feed.getFeedItem(ghost.item.id)?.title, "fd-ghost-card", "the card still lands");
+
+    /* a real session id is kept */
+    const db = await import("../src/db.js");
+    db.store.createSession({ id: "fd-real-sess", harness: "pi", title: "real", cwd: "/tmp" });
+    const real = feed.postFeed({ type: "note", title: "fd-real-card", sessionId: "fd-real-sess" });
+    assert.equal(real.item.sessionId, "fd-real-sess");
+  } finally {
     cleanup();
   }
 });
