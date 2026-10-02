@@ -20,6 +20,13 @@ name: pr-audit
 on:
   issue_comment:
     types: [created]
+  # issues.labeled fires from the DEFAULT branch even for stacked PRs whose
+  # base is another feature branch — pull_request.labeled would evaluate the
+  # workflow from the base branch, which may not have this file.
+  issues:
+    types: [labeled]
+  # synchronize covers the base-is-main case (post-retarget); session
+  # "~run-audit" comments cover the rest.
   pull_request:
     types: [labeled, synchronize]
 
@@ -67,6 +74,8 @@ jobs:
           if [ "$EVENT" = "issue_comment" ] && [ "$IS_PR" = "true" ] && [ "$COMMENT_AUTHOR" = "OWNER" ] \
              && case "$COMMENT_BODY" in *"~run-audit"*) true;; *) false;; esac; then
             fire=true; via=comment
+          elif [ "$EVENT" = "issues" ] && [ "$ACTION" = "labeled" ] && [ "$LABEL" = "audit" ] && [ "$IS_PR" = "true" ]; then
+            fire=true; via=label
           elif [ "$EVENT" = "pull_request" ] && [ "$SAME_REPO" = "true" ]; then
             if [ "$ACTION" = "labeled" ] && [ "$LABEL" = "audit" ]; then
               fire=true; via=label
@@ -87,7 +96,14 @@ jobs:
             exit 0
           fi
           gh pr view "$PR_NUM" --repo "${{ github.repository }}" \
-            --json headRefOid,baseRefName > "$RUNNER_TEMP/pr.json"
+            --json headRefOid,baseRefName,isCrossRepository > "$RUNNER_TEMP/pr.json"
+          # the build step runs the PR's own code: same-repo heads only
+          if [ "$(jq -r .isCrossRepository "$RUNNER_TEMP/pr.json")" = "true" ]; then
+            gh pr comment "$PR_NUM" --repo "${{ github.repository }}" --body \
+              "🔍 Audit skipped: only same-repo PR heads are audited (the build step runs the PR's code)."
+            echo "fire=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           echo "fire=true" >> "$GITHUB_OUTPUT"
           echo "via=$via" >> "$GITHUB_OUTPUT"
           echo "pr_number=$PR_NUM" >> "$GITHUB_OUTPUT"
