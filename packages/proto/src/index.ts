@@ -244,6 +244,19 @@ export interface CtxUsage {
   };
 }
 
+/** a shell was created/renamed/exited (upsert) or killed (deleted) —
+   broadcast-only; the terminals list is the source of truth */
+export interface TerminalUpsert {
+  type: "terminal.upsert";
+  sessionId: string; // "" — terminals aren't sessions
+  terminal: { id: string; title: string; cwd: string; alive: boolean };
+}
+export interface TerminalDeleted {
+  type: "terminal.deleted";
+  sessionId: string;
+  id: string;
+}
+
 export type ProtoEvent =
   | SessionCreated
   | SessionStateEvent
@@ -263,7 +276,9 @@ export type ProtoEvent =
   | LlmCallDone
   | SubagentSpawn
   | SubagentDone
-  | CtxUsage;
+  | CtxUsage
+  | TerminalUpsert
+  | TerminalDeleted;
 
 export type ProtoEventType = ProtoEvent["type"];
 

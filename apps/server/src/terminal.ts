@@ -18,9 +18,26 @@ interface Term {
   scrollback: string;
   clients: Set<{ send: (s: string) => void }>;
   alive: boolean;
+  /** deliberately closed — the dying pty's exit must NOT re-upsert a ghost
+     after the deleted frame (closeTerminal kills, exit fires async after) */
+  closing?: boolean;
 }
 
 const terms = new Map<string, Term>();
+
+/* the bus (issue #38): shells are app-global — every client learns of births,
+   renames, deaths without a reload. Same broadcaster seam as feed/todos. */
+type TerminalEvent =
+  | { type: "terminal.upsert"; sessionId: string; terminal: { id: string; title: string; cwd: string; alive: boolean } }
+  | { type: "terminal.deleted"; sessionId: string; id: string };
+
+let broadcaster: ((ev: TerminalEvent) => void) | null = null;
+export function setTerminalBroadcaster(fn: ((ev: TerminalEvent) => void) | null) {
+  broadcaster = fn;
+}
+const emitUp = (t: Term) =>
+  broadcaster?.({ type: "terminal.upsert", sessionId: "", terminal: { id: t.id, title: t.title, cwd: t.cwd, alive: t.alive } });
+const emitDel = (id: string) => broadcaster?.({ type: "terminal.deleted", sessionId: "", id });
 
 export function createTerminal(opts: { cwd?: string; shell?: string; title?: string }): {
   id: string;
@@ -61,6 +78,7 @@ export function createTerminal(opts: { cwd?: string; shell?: string; title?: str
 
   pty.onExit(({ exitCode }) => {
     t.alive = false;
+    if (!t.closing) emitUp(t); /* natural exit: sidebars show the red ghost; a deliberate close already said deleted */
     const frame = JSON.stringify({ type: "exit", code: exitCode });
     for (const c of t.clients) {
       try {
@@ -72,6 +90,7 @@ export function createTerminal(opts: { cwd?: string; shell?: string; title?: str
   });
 
   terms.set(id, t);
+  emitUp(t);
   return { id, title: t.title };
 }
 
@@ -84,6 +103,8 @@ export function renameTerminal(id: string, title: string): { id: string; title: 
   if (!clean) throw new Error("title must not be empty");
   if (clean.length > 64) throw new Error("title too long (64 characters max)");
   t.title = clean;
+  /* guard like the onData/onExit loops: a half-open socket whose close event
+     hasn't fired must not abort the rename between the mutation and emitUp */
   const frame = JSON.stringify({ type: "title", title: clean });
   for (const c of t.clients) {
     try {
@@ -94,6 +115,7 @@ export function renameTerminal(id: string, title: string): { id: string; title: 
          the remaining clients of the title frame */
     }
   }
+  emitUp(t); /* every client, not just attached ones */
   return { id, title: clean };
 }
 
@@ -104,12 +126,14 @@ export function listTerminals() {
 export function closeTerminal(id: string) {
   const t = terms.get(id);
   if (!t) return;
+  t.closing = true;
   try {
     t.pty.kill();
   } catch {
     /* already dead */
   }
   terms.delete(id);
+  emitDel(id);
 }
 
 /** Wire one WS socket to a terminal: replay scrollback, then pipe both ways. */

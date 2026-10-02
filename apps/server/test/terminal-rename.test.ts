@@ -33,6 +33,7 @@ interface TerminalModule {
   closeTerminal(id: string): void;
   attachTerminal(id: string, socket: { send: (s: string) => void; on: (ev: string, fn: (d: unknown) => void) => void; close: () => void }): boolean;
   renameTerminal?(id: string, title: string): { id: string; title: string };
+  setTerminalBroadcaster?(fn: (ev: { type: string }) => void): void;
 }
 
 const terminal = (await import("../src/terminal.js")) as TerminalModule;
@@ -125,27 +126,34 @@ test("a rename works on an exited-but-listed shell (its ghost tab stays renamabl
   }
 });
 
-test("a client whose send throws (vanished mid-write) does not fail the rename nor starve later clients", () => {
-  const t = terminal.createTerminal({ shell: "/bin/sh", cwd: "/tmp" });
+test("a half-open client whose send throws must not abort the rename — title mutates AND the bus frame still fires", () => {
+  /* regression pin for the audit finding: the rename send loop ran WITHOUT
+     the try/catch the onData/onExit loops have. A socket whose close event
+     hasn't fired yet threw mid-rename — title already mutated, but the route
+     returned 400 and emitUp never ran, leaving every other client stale. */
+  const frames: { type: string }[] = [];
+  terminal.setTerminalBroadcaster!((ev) => frames.push(ev));
+  const t = terminal.createTerminal({ shell: "/bin/sh", cwd: "/tmp", title: "before" });
   try {
-    assert.equal(typeof terminal.renameTerminal, "function", "renameTerminal must exist (see rename test)");
-    /* a socket that dies after attach, then a live one — the out/exit frames
-       guard this same race with try/catch; the title frame must too */
-    let gone = false;
-    const dead = { send: () => { if (gone) throw new Error("socket closed"); }, on: () => {}, close: () => {} };
-    const { frames, socket } = fakeSocket();
-    assert.equal(terminal.attachTerminal(t.id, dead), true);
+    let dead = false;
+    const socket = {
+      send: () => {
+        if (dead) throw new Error("socket went away mid-write");
+      },
+      on: () => {},
+      close: () => {},
+    };
     assert.equal(terminal.attachTerminal(t.id, socket), true);
-    gone = true;
-    frames.length = 0;
+    dead = true; /* vanished, but no close event yet — still in t.clients */
 
-    const r = terminal.renameTerminal!(t.id, "survived");
-    assert.equal(r.title, "survived", "the rename succeeds despite the dead client");
-    const titleFrame = frames.find((f) => f.type === "title");
-    assert.ok(titleFrame, "clients after the dead one still get the title frame");
-    assert.equal(titleFrame.title, "survived");
-    assert.equal(terminal.listTerminals().find((x) => x.id === t.id)?.title, "survived");
+    frames.length = 0; /* ignore the create/attach chatter */
+    const r = terminal.renameTerminal!(t.id, "after");
+    assert.equal(r.title, "after", "the rename returns success despite the dead client");
+    assert.equal(terminal.listTerminals().find((x) => x.id === t.id)?.title, "after", "the title of record mutated");
+    const up = frames.filter((f) => f.type === "terminal.upsert");
+    assert.equal(up.length, 1, "the bus broadcast still fires — other clients must not stay stale");
   } finally {
+    terminal.setTerminalBroadcaster!(undefined as never);
     terminal.closeTerminal(t.id);
   }
 });
