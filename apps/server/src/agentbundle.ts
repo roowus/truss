@@ -134,3 +134,19 @@ echo
 echo "the agent dials OUT to ${wsUrl} — no inbound ports needed on this host."
 `;
 }
+
+/**
+ * The DELIVERED-file variant (issue #1): same installer with the token baked
+ * in, so `sh truss-install-<host>.sh` runs with zero arguments after a
+ * taildrop. installScript (the wizard's copy command) keeps the token as $1
+ * — the copy path must never embed it in the command line, the delivered
+ * file must never lack it.
+ */
+export function standaloneInstallScript(hostId: string, serverUrl: string, token: string): string {
+  if (!/^truss_agent_[a-f0-9]+$/.test(token)) throw new Error("unexpected token shape — refusing to embed");
+  const script = installScript(hostId, serverUrl);
+  const needle = 'TOKEN="${1:-}"';
+  const i = script.indexOf(needle);
+  if (i === -1) throw new Error("install script shape changed — embed point missing");
+  return script.slice(0, i) + `TOKEN="${token}"` + script.slice(i + needle.length);
+}

@@ -62,7 +62,8 @@ function loadDshEnv(): Record<string, string> {
 }
 
 /** the shared dsh ACP client — exported so tests can pin how this adapter
-    calls it (the turn call's budget wiring) */
+    calls it (the turn call's budget wiring); TRUSS_DSH_BIN lets tests/ops
+    point at a different dsh binary */
 export const client = new AcpClient({
   command: process.env.TRUSS_DSH_BIN ?? "dsh",
   args: ["--profile", "acp", "--patch", PATCH],
