@@ -194,6 +194,7 @@ jobs:
       # PR code runs here, so no model keys are in scope for this step.
       - name: Build and test the head
         run: |
+          set +e  # a failing build must be CAPTURED, not fail the step — the audit reports it
           mkdir -p "${{ runner.temp }}/build-out" "${{ runner.temp }}/review-out"
           cd pr-head
           {
