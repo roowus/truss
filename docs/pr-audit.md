@@ -1,63 +1,71 @@
-# PR audit automations
+# PR audit and the issue pipeline
 
-Comment-triggered workflows in `.github/workflows/`. The audit and the fixer
-are each defined exactly once, as reusable workflows (`audit-core.yml`,
-`fix-core.yml`). The two comment triggers (`pr-audit.yml`,
-`pr-audit-loop.yml`) are thin callers that invoke them as jobs — the loop
-never posts fake trigger comments; it calls the audit directly per round.
+One GitHub workflow, `pr-audit`, plus session-side automation. The GitHub
+side only audits; a DSH work session on the developer's box is the fixer and
+drives the loop.
 
-## Setup (once)
+## The flow
 
-1. Add two repository secrets (Settings → Secrets and variables → Actions):
-   `ZAI_API_KEY` (primary) and `FIREWORKS_API_KEY` (fallback). The keys live
-   only in GitHub secrets; they are never in the repo.
-2. Confirm the model IDs and base URLs at the top of each workflow
-   (`GLM_MODEL`, `KIMI_MODEL`, `ZAI_BASE_URL`, `FW_BASE_URL`). If the GLM id
-   404s, try `glm-4.5-flash`.
+1. **Intake** (`config/agent/issue-intake.md`): the developer drops a raw
+   issue/suggestion into the intake session's queue. The session
+   investigates against the repo and files a proper GitHub issue: context,
+   classification, suggested approach, suggested tests, priority — and adds
+   it to the project board.
+2. **Scheduling** (`config/agent/cron-prioritize.md`): a cron picks the
+   highest-priority codable issue (bugs/enhancements; new features that need
+   planning stay parked) and starts a work session on a new branch.
+3. **Implementation** (`config/agent/work-session.md`): the work session
+   fixes the issue in its own checkout, verifies the issue's suggested
+   tests first, boots the per-PR preview (`pr-preview/`, tilt), and opens
+   the PR with the `audit` label and a `truss-session: <id>` marker in the
+   body.
+4. **Audit**: the `audit` label fires `pr-audit` when applied and on every
+   push while it stays applied. Each run builds/lints/tests the head (a
+   failing build is a Critical finding), audits with GLM, and posts the
+   report as a PR comment. The preview at `https://pr-<N>.truss.rewis` is
+   passed to the auditor as probeable context.
+5. **Fix loop**: `scripts/audit-watch.sh` on the developer's box polls
+   GitHub (no LLM tokens) and delivers fresh reports to the owning session.
+   The session validates findings adversarially, fixes the valid ones,
+   pushes — and the push re-fires the audit. When the session judges the
+   audit nitpicking or the work done, it removes the label FIRST (that is
+   the off switch), makes any final commit, and hands the preview URL to
+   the developer for manual testing.
+6. **Merge**: the developer tests at the preview, messages the session if
+   anything is wrong, and clicks merge. Merging is never automated.
 
 ## Models and fallback
 
-The primary model is GLM via Z.AI. The fallback is Kimi via Fireworks, and it
-kicks in two ways:
+The auditor is GLM (Z.AI). It switches to Kimi (Fireworks) when:
 
-1. Any agent step that fails on GLM (for example the key is out of credits)
-   retries the same round once on Kimi.
-2. In the loop, if 3 consecutive rounds report identical critical/high
-   findings (no progress — the same issues are not getting solved), the fix
-   stage switches to Kimi until the streak breaks.
+1. the GLM run itself fails (for example out of credits) — retried once, or
+2. the last 3 audits on that PR reported identical major findings (no
+   progress). The state lives in a hidden `truss-audit-state` marker in each
+   report comment.
 
-The loop cycles as a self-dispatching chain of one-round runs (state passes
-as dispatch inputs), capped at 10 rounds (`MAX_ROUNDS` in
-`pr-audit-loop.yml`). Anything still churning after that is posted for a
-human.
+## Setup (once)
 
-## `~run-audit`
-
-Comment `~run-audit` on any PR. The `pr-audit` workflow audits the diff for
-bugs, security issues, and compliance with `TRUSS.md`, then posts a report as
-a PR comment. Every report ends with three standing verdicts
-(Proportionality, Test Coverage, Business-Logic Risk) and a machine-readable
-JSON block that the loop below consumes.
-
-## `~audit-loop`
-
-Comment `~audit-loop` on a PR. The `pr-audit-loop` workflow runs one round
-per workflow run — audit the head, validate each critical/important finding
-adversarially (valid, not worth it, refuted, out of scope), fix the valid
-ones with tests per `TRUSS.md`, push one commit — then re-dispatches itself
-for the next round until an audit finds nothing major (hard cap 10). The
-started note on the PR tracks progress and becomes the final summary.
-Merging stays a human decision; when the loop pushed commits, its final run
-approves the parked `ci` run on the head (or dispatches `ci` directly).
+1. Repo secrets: `ZAI_API_KEY`, `FIREWORKS_API_KEY` (never commit keys).
+2. Optional secrets: `AUDIT_FORWARD_URL` + `AUDIT_FORWARD_TOKEN` — when set,
+   the workflow POSTs each report there (push-style delivery). Without them,
+   the local watcher poll is the delivery path.
+3. Project board: `GH_PROJECT_PAT` — a PAT with the `project` scope, because
+   `GITHUB_TOKEN` cannot write user-owned Projects v2 boards. Used by
+   sessions for `gh project item-add/item-edit`.
+4. The watcher on the developer's box, via cron:
+   `* * * * * /home/ubuntu/projects/truss/scripts/audit-watch.sh`
+   Route reports to sessions by setting `TRUSS_AUDIT_INJECT` to a command
+   that takes `<session-id> <report-file>`; the default spools reports to
+   `~/.local/state/truss-audit-spool/`.
 
 ## Guardrails
 
-- Only comments by the repo owner trigger either workflow.
-- Both workflows share one concurrency group per PR (`truss-audit-<number>`),
-  so an audit and a loop never run on the same PR at once. A second trigger
-  queues instead of interrupting.
-- The loop only runs on same-repo PRs, because the fix stage installs
-  dependencies and runs the PR's own code.
-- Agents treat all PR content (code, title, body, linked issues) as untrusted
-  data. The fix agent commits but never pushes; a workflow-owned step pushes,
-  pinned to the PR branch. Agents never edit `.github/workflows/**`.
+- Audits fire only for same-repo PRs (the build step runs the PR's code).
+- Stacked audits don't pile up: a run refuses to start when one is already
+  active for the PR, and all runs share the `truss-audit-<pr>` concurrency
+  group.
+- A `~run-audit` comment by the repo owner still forces a one-off audit,
+  label or not.
+- Agents treat all PR content, reports, and issue text as untrusted data.
+- `scripts/pr-audit-driver.sh` is retired: it drove the deleted
+  `~audit-loop` workflow. The label + session model replaces it.
