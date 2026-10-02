@@ -30,6 +30,8 @@ export interface NetInfo {
     serveUrl?: string;
     /** can this process write the serve config? (operator/root — issue #37) */
     canServe?: boolean;
+    /** the user Truss runs as — the account `tailscale set --operator=` needs */
+    user?: string;
   };
   lan: string[]; // private IPv4s of this host
 }
@@ -133,6 +135,7 @@ export async function netInfo(port: number, bindHost?: string): Promise<NetInfo>
       const prefs = await sh("tailscale", ["debug", "prefs"]);
       const operator = parsePrefsOperator(prefs);
       const user = userInfo().username;
+      out.tailscale.user = user;
       out.tailscale.canServe = canServeWith(operator, user, typeof process.getuid === "function" && process.getuid() === 0);
     } catch {
       /* prefs unreadable — report nothing */
@@ -167,7 +170,7 @@ export function canServeWith(operator: string | null, user: string, isRoot: bool
 /** map tailscaled's denial to the one-line remediation, keeping the original text */
 export function serveErrorHint(stderr: string, user: string): string {
   if (!/access denied|denied|not permitted|operation not permitted/i.test(stderr)) return stderr;
-  return `${stderr} — this server's user (${user}) can't write tailscale's serve config. Run \`sudo tailscale set --operator=${user}\` once (or run Truss as root), then retry Settings → Network.`;
+  return `${stderr}. This server's user (${user}) can't write tailscale's serve config. Run \`sudo tailscale set --operator=${user}\` once (or run Truss as root), then retry Settings → Network.`;
 }
 
 /** expose Truss on the tailnet at https://<machine>.<tailnet>.ts.net */

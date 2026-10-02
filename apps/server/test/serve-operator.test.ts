@@ -73,6 +73,10 @@ test("serveErrorHint: the denial gains the remediation; other errors pass throug
 
     const other = "backend not running";
     assert.equal(net.serveErrorHint(other, "ubuntu"), other, "unrelated errors stay verbatim");
+
+    /* TRUSS.md: no em dashes in user-facing copy — this string renders
+       verbatim in the Settings error line and the API 400 body */
+    assert.ok(!hint.includes("—"), "no em dash in the hinted remediation (TRUSS.md)");
   } finally {
     cleanup();
   }
@@ -85,6 +89,10 @@ test("netInfo surfaces tailscale.canServe (boolean when tailscale is installed)"
     const info = await net.netInfo(4040);
     if (!info.tailscale.installed) return; // CI without tailscale: nothing to assert
     assert.equal(typeof info.tailscale.canServe, "boolean", "canServe reported (Settings greys/guides the toggle)");
+    /* the probed username rides along so the UI names the actual account in
+       the remediation — a static $USER can name the admin's ssh login instead */
+    assert.equal(typeof info.tailscale.user, "string", "user reported alongside canServe (the operator tailscale needs)");
+    assert.ok(info.tailscale.user.length > 0, "user is a real account name");
     /* on the reporting box this is currently false (no operator, non-root) —
        the probe must agree with tailscaled's denial */
   } finally {

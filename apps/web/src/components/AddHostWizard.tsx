@@ -207,10 +207,13 @@ export function AddHostWizard({ onClose }: { onClose: () => void }) {
                       className="underline decoration-dotted hover:brightness-125"
                       onClick={() => {
                         setServeBusy(true);
+                        setErr(null);
+                        /* issue #37: surface the server's hinted denial (the
+                           operator one-liner) — never fail silently */
                         be?.tailscaleServe(true)
                           .then(() => be.netInfo())
                           .then((n) => { setNet(n); setServeBusy(false); })
-                          .catch(() => setServeBusy(false));
+                          .catch((e) => { setErr(e?.message ?? String(e)); setServeBusy(false); });
                       }}
                     >
                       turn on tailscale serve now
