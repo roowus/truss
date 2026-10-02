@@ -29,7 +29,7 @@ const SESSION = {
 const TODO = {
   id: "t1", sessionId: "s1", title: "ship it", notes: "", priority: "normal" as const,
   labels: ["api"], subtasks: [], meta: {}, status: "open" as const, createdBy: "agent" as const,
-  sharedEditors: [], deniedEditors: [], createdAt: 0, updatedAt: 0,
+  sharedEditors: [], sharedWith: [], deniedEditors: [], createdAt: 0, updatedAt: 0,
 };
 
 /* every `height:` in the rendered markup — in these two panels Select's
