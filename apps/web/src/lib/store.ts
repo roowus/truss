@@ -457,7 +457,13 @@ class Store {
     /* metadata changes (archive/retitle/regroup) patch the row in place */
     if (ev.type === "session.updated") {
       const meta = this.state.sessions[id];
-      if (!meta) this.refreshSessionsSoon(); // a restore re-lists it here
+      if (!meta) {
+        this.refreshSessionsSoon(); // a restore re-lists it here
+        /* ...and a restore also pulls the row out of the trash — only the
+           restoring client refreshes its trash list itself, so without this
+           every other client keeps the ghost until reload */
+        void this.refreshTrash();
+      }
       if (meta) {
         this.set((s) => ({
           sessions: {

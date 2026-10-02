@@ -14,7 +14,19 @@ import {
   fmtSize,
   shortPath,
   argSummary,
+  procCell,
 } from "../src/lib/format";
+
+test("procCell: missing columns from a pre-upgrade node-agent render a dash, not a blank or NaN", () => {
+  /* issue #10 added user/memPct/threads/ageSec; older agents and the demo
+     fixture omit them — the Monitor table must stay readable */
+  assert.equal(procCell(undefined), "—");
+  assert.equal(procCell(null), "—");
+  assert.equal(procCell(""), "—");
+  assert.equal(procCell(0), "0", "zero is real data, not missing");
+  assert.equal(procCell(3.5), "3.5");
+  assert.equal(procCell("root"), "root");
+});
 
 test("baseHarness / hostOf split id@host", () => {
   assert.equal(baseHarness("pi"), "pi");

@@ -445,6 +445,10 @@ app.post("/api/sessions/:id/purge", async (req, reply) => {
 app.delete("/api/sessions/:id", async (req, reply) => {
   const { id } = req.params as { id: string };
   const { hard } = req.query as { hard?: string };
+  /* naming trap (issue #5): ?hard=1 here means "trash it" — deleteSession is
+     a 30-day soft delete since the trash shipped. MCP delete_session takes
+     the same flag name but hard=true PURGES forever. Delete-forever over
+     HTTP is POST /api/sessions/:id/purge. */
   try {
     if (hard === "1") deleteSession(id);
     else closeSession(id);

@@ -53,6 +53,13 @@ export function fmtSize(n: number): string {
 }
 export const shortPath = (p: string) => p.replace(/^\/home\/[^/]+/, "~").replace(/^\/Users\/[^/]+/, "~");
 
+/** proc-table cell: user/memPct/threads/ageSec arrived with issue #10, so a
+   pre-upgrade node-agent (or the demo fixture) omits them — dash, not a
+   blank or NaN */
+export function procCell(v: string | number | undefined | null): string {
+  return v === undefined || v === null || v === "" ? "—" : String(v);
+}
+
 export function argSummary(args: unknown): string {
   if (args === null || args === undefined) return "";
   if (typeof args === "string") return args;

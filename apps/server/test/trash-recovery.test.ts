@@ -6,7 +6,8 @@ import { freshServer } from "./helpers.js";
 import type { AdapterHandle, HarnessAdapter, SessionOpts } from "../src/adapters/types.js";
 
 /* SPEC-TESTS for 30-day deleted-chat recovery — https://github.com/roowus/truss/issues/5
-   These FAIL on purpose today: they pin the contract a fix must satisfy.
+   These pin the contract the issue demanded; the fix landed with them, so
+   they pass.
 
    Today sessions.deleteSession is a HARD delete: the row goes, the FK cascade
    wipes the event log, and session.deleted is broadcast-only because nothing
