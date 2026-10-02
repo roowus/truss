@@ -1,4 +1,5 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import type { Ref } from "react";
 import type { IDockviewPanelProps } from "dockview-react";
 import { createPortal } from "react-dom";
 import { store, useApp, useNow } from "@/lib/store";
@@ -8,6 +9,8 @@ import { openPanel } from "@/lib/workspace";
 import { Markdown } from "./Markdown";
 import type { FeedItem, FeedState, FeedType } from "@/lib/proto";
 import { cn } from "@/utils/cn";
+import { CARD_ACTION_ICON_PX, CARD_ACTION_SIZE_PX, feedCardActions } from "@/lib/feedActions";
+import { TIP_DELAY_MS, TIP_MAX_W, clampTipPos } from "@/lib/tooltip";
 
 /**
  * Feed — the unified inbox. Permission decisions (actionable), agent-filed
@@ -195,13 +198,33 @@ function FeedCard({ item, sessions, now, setState }: {
               <Btn size="xs" variant="ghost" icon="chat" onClick={() => openPanel("chat", { sessionId: s.id })}>Open session</Btn>
             )}
             <span className="ml-auto" />
-            {/* universal actions */}
-            <CardAction icon="check" label={unread ? "Mark read" : "Mark unread"} onClick={() => setState(item.id, unread ? "read" : "unread")} />
-            <CardAction icon="tag" label={item.state === "saved" ? "Unsave" : "Save"} active={item.state === "saved"} onClick={() => setState(item.id, item.state === "saved" ? "read" : "saved")} />
-            <button ref={shareRef} onClick={() => setShareOpen((v) => !v)} className="w-6 h-6 grid place-items-center rounded text-[var(--t-dim)] hover:text-[var(--t-fg)] hover:bg-white/5" title="Share to another agent's session" aria-label="Share">
-              <Icon name="send" size={11} />
-            </button>
-            <CardAction icon="x" label="Dismiss" onClick={() => setState(item.id, "dismissed")} />
+            {/* universal actions — descriptors carry label + tooltip (issue #25:
+               bigger, brighter, self-explaining) */}
+            {feedCardActions(item).map((a) =>
+              a.id === "share" ? (
+                <CardAction
+                  key={a.id}
+                  ref={shareRef}
+                  icon={a.icon}
+                  label={a.label}
+                  tooltip={a.tooltip}
+                  onClick={() => setShareOpen((v) => !v)}
+                />
+              ) : (
+                <CardAction
+                  key={a.id}
+                  icon={a.icon}
+                  label={a.label}
+                  tooltip={a.tooltip}
+                  active={a.id === "save" && item.state === "saved"}
+                  onClick={() => {
+                    if (a.id === "read") setState(item.id, unread ? "read" : "unread");
+                    else if (a.id === "save") setState(item.id, item.state === "saved" ? "read" : "saved");
+                    else if (a.id === "dismiss") setState(item.id, "dismissed");
+                  }}
+                />
+              ),
+            )}
           </div>
           {item.sharedWith.length > 0 && (
             <div className="mt-1.5 font-mono text-[9.5px] text-[var(--t-dim)]">shared with {item.sharedWith.map((id) => sessions[id]?.title ?? id).join(", ")}</div>
@@ -226,11 +249,74 @@ function TodoQuickAction({ todoId, onDone }: { todoId: string; onDone: () => voi
   );
 }
 
-function CardAction({ icon, label, onClick, active }: { icon: string; label: string; onClick: () => void; active?: boolean }) {
+function CardAction({ icon, label, tooltip, onClick, active, ref }: {
+  icon: string;
+  label: string;
+  tooltip: string;
+  onClick: () => void;
+  active?: boolean;
+  ref?: Ref<HTMLButtonElement>;
+}) {
+  const own = useRef<HTMLButtonElement | null>(null);
+  const bubble = useRef<HTMLSpanElement>(null);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [shown, setShown] = useState(false);
+  const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
+
+  const setRefs = (el: HTMLButtonElement | null) => {
+    own.current = el;
+    if (typeof ref === "function") ref(el);
+    else if (ref) ref.current = el;
+  };
+
+  useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, []);
+
+  /* issue #25: a themed, fast tooltip instead of the native title. Measure
+     the bubble after it mounts, then clamp it into the viewport (same
+     pattern as Select's dropdown). */
+  useLayoutEffect(() => {
+    if (!shown || !own.current || !bubble.current) return;
+    const r = own.current.getBoundingClientRect();
+    setPos(clampTipPos(r, bubble.current.offsetWidth, bubble.current.offsetHeight, window.innerWidth, window.innerHeight));
+  }, [shown]);
+
+  const enter = () => {
+    if (timer.current) clearTimeout(timer.current);
+    timer.current = setTimeout(() => setShown(true), TIP_DELAY_MS);
+  };
+  const leave = () => {
+    if (timer.current) { clearTimeout(timer.current); timer.current = null; }
+    setShown(false);
+    setPos(null);
+  };
+
   return (
-    <button onClick={onClick} title={label} aria-label={label} className={cn("w-6 h-6 grid place-items-center rounded hover:bg-white/5", active ? "text-[var(--t-sky)]" : "text-[var(--t-dim)] hover:text-[var(--t-fg)]")}>
-      <Icon name={icon} size={11} />
-    </button>
+    <>
+      <button
+        ref={setRefs}
+        onClick={() => { leave(); onClick(); }}
+        onMouseEnter={enter}
+        onMouseLeave={leave}
+        onFocus={enter}
+        onBlur={leave}
+        aria-label={label}
+        style={{ width: CARD_ACTION_SIZE_PX, height: CARD_ACTION_SIZE_PX }}
+        className={cn("grid place-items-center rounded-md border border-transparent hover:bg-white/8 hover:border-[var(--t-line2)]", active ? "text-[var(--t-sky)]" : "text-[var(--t-mute)] hover:text-[var(--t-fg)]")}
+      >
+        <Icon name={icon} size={CARD_ACTION_ICON_PX} />
+      </button>
+      {shown && createPortal(
+        <span
+          ref={bubble}
+          role="tooltip"
+          className="fixed z-[180] rounded-md border border-[var(--t-line2)] bg-[var(--t-bg2)] px-2 py-1 text-[11px] leading-snug text-[var(--t-fg2)] shadow-xl pointer-events-none"
+          style={{ left: pos?.left ?? -9999, top: pos?.top ?? -9999, visibility: pos ? "visible" : "hidden", maxWidth: TIP_MAX_W }}
+        >
+          {tooltip}
+        </span>,
+        document.body,
+      )}
+    </>
   );
 }
 
