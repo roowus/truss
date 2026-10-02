@@ -87,14 +87,10 @@ jobs:
             echo "fire=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          # don't stack audits: if one is already queued/running for this PR,
-          # let it finish (the concurrency group would queue us anyway)
-          ACTIVE=$(gh run list --repo "${{ github.repository }}" --workflow pr-audit.yml \
-            --json status --jq '[.[] | select(.status != "completed")] | length')
-          if [ "$ACTIVE" -gt 1 ]; then
-            echo "fire=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
+          # no anti-pileup check here: the truss-audit-<pr> concurrency group
+          # already serializes runs per PR, and audits of DIFFERENT PRs must
+          # be able to run in parallel (a repo-wide active-count check once
+          # silently refused audits during a backlog sweep)
           gh pr view "$PR_NUM" --repo "${{ github.repository }}" \
             --json headRefOid,baseRefName,isCrossRepository > "$RUNNER_TEMP/pr.json"
           # the build step runs the PR's own code: same-repo heads only
