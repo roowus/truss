@@ -33,6 +33,16 @@ export function isTabDrag(types: readonly string[]): boolean {
   return types.includes(TAB_DRAG_MIME);
 }
 
+/** chip highlight: native dragleave BUBBLES, so crossing the chip's inner
+    buttons fires a leave on the chip and the highlight flickers until the
+    next dragover. Clear only when the pointer truly left the chip —
+    relatedTarget outside it (or null: the drag left the window). */
+export function dragLeftChip(chip: Pick<Element, "contains"> | null, related: unknown): boolean {
+  if (!chip) return true;
+  if (related == null) return true;
+  return !chip.contains(related as Node);
+}
+
 export type TabDropDecision = { kind: "move"; from: string; to: string; panelId: string } | { kind: "noop" } | null;
 
 /** decode + decide: move across workspaces, no-op back on the source, reject archived/unknown targets */
