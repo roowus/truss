@@ -29,8 +29,8 @@ audit-fix loop yourself — the GitHub side only audits; you are the fixer.
 - Title: conventional-commit format, ≤70 chars, what the PR does now.
 - Body: 1-3 plain sentences first (what was broken, what the PR does),
   then `Fixes #<n>`, then details. Include this marker line verbatim at the
-  end so the report router can find you:
-  `truss-session: <your session id>`
+  end so the local watcher knows this PR has a live session:
+  `agent-session: <a short name for this session>`
 - Apply the `audit` label: `gh pr edit <pr> --add-label audit`.
   The label is the audit switch: while it is applied, every push re-audits.
 - Add the PR to the project board, linked to the issue
@@ -39,10 +39,22 @@ audit-fix loop yourself — the GitHub side only audits; you are the fixer.
 
 ## Phase 3 — the audit loop (you are the fixer)
 
-The `audit` label fires the pr-audit workflow on every push. Do NOT poll
-GitHub yourself — a local watcher watches for the report and drops it in
-front of you (or it arrives as a message in this session). When a new
-`## 🔍 PR audit` report for YOUR head arrives:
+Every push fires the pr-audit workflow (the label fires it when the PR's
+base is main; your `~run-audit` comment after each push is the reliable
+path — see phase 2/3 mechanics below). Audits take ~10-20 minutes.
+
+**Waiting protocol (DSH-native, no polling loop):** after each push +
+trigger, end your turn with a ONE-SHOT reminder ~12 minutes out: "check
+whether a new `## 🔍 PR audit` report for head <sha> has landed on PR #<n>;
+if yes process it per the audit loop; if not, re-arm for another 12
+minutes." An idle session burns nothing, and each check is one tiny turn.
+The local watcher (scripts/audit-watch.sh, cron'd) also spools fresh
+reports to `~/.local/state/truss-audit-spool/` — check there first; reading
+a file beats an API call. If several checks in a row find nothing, look at
+the workflow runs (`gh run list --repo roowus/truss --workflow pr-audit.yml`)
+before assuming the audit is just slow.
+
+When a new `## 🔍 PR audit` report for YOUR head arrives:
 
 1. **Validate, never blind-fix.** For each Critical/Important finding, read
    the actual code at the cited location and check the claim against reality.

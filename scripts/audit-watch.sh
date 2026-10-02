@@ -6,12 +6,12 @@
 # with a session marker gets a fresh report, hands the report to that
 # session. Work sessions therefore never poll and never burn context waiting.
 #
-# Routing: the work session puts a `truss-session: <id>` marker line in the
-# PR body (see config/agent/work-session.md). The watcher routes the report
-# to that session via $TRUSS_AUDIT_INJECT, a command that receives the
-# session id as $1 and the report file path as $2. Default: append the
-# report to a spool file at ~/.local/state/truss-audit-spool/<id>.md for the
-# session's next wake.
+# Routing: the work session puts an `agent-session: <name>` marker line in
+# the PR body (see config/agent/work-session.md). DSH work sessions normally
+# self-wake with one-shot reminders — this watcher is the safety net and the
+# payload drop: it spools fresh reports so a waking session reads a file
+# instead of calling the API. If $TRUSS_AUDIT_INJECT is set, it is called as
+# `$TRUSS_AUDIT_INJECT <session-name> <report-file>` for real push delivery.
 #
 # Run it from cron or a systemd user timer, every minute or two:
 #   * * * * * /home/ubuntu/projects/truss/scripts/audit-watch.sh
@@ -29,9 +29,9 @@ mkdir -p "$SPOOL" "$(dirname "$STATE")"
 
 # open PRs that carry a session marker
 gh pr list -R "$REPO" --state open --json number,body,updatedAt \
-  --jq '.[] | select(.body | test("truss-session:")) | "\(.number)\t\(.body)"' \
+  --jq '.[] | select(.body | test("(agent|truss)-session:")) | "\(.number)\t\(.body)"' \
 | while IFS=$'\t' read -r pr body; do
-    session=$(printf '%s' "$body" | grep -oE 'truss-session: *[A-Za-z0-9._-]+' | head -1 | awk '{print $2}')
+    session=$(printf '%s' "$body" | grep -oE '(agent|truss)-session: *[A-Za-z0-9._-]+' | head -1 | awk '{print $2}')
     [ -z "$session" ] && continue
 
     # newest audit report comment on this PR
