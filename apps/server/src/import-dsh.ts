@@ -214,9 +214,9 @@ function mapLog(recs: DshRec[], sessionId: string): { events: ProtoEvent[]; titl
 }
 
 export function importDshSessions(): ImportResult {
-  const known = new Set(
-    store.listSessions().map((s) => s.harness_ref).filter(Boolean),
-  );
+  /* trashed rows keep their ref: deduping against listSessions() alone would
+     let a re-import resurrect a chat the user deleted (issue #5) */
+  const known = new Set(store.knownHarnessRefs());
   const result: ImportResult = { imported: 0, skipped: 0, failed: [], sessions: [] };
 
   for (const { file, dshId } of walkSessionFiles(DSH_SESSIONS)) {

@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { cn } from "@/utils/cn";
 import { harnessStyle, hostOf } from "@/lib/format";
 import { clampPopoverPos } from "@/lib/popover";
+import { selectTriggerHeight } from "@/lib/controls";
 import { HarnessLogo } from "./harnessLogos";
 import type { SessionState } from "@/lib/proto";
 
@@ -206,6 +207,7 @@ export function Select({
   disabled,
   ariaLabel,
   width,
+  size = "form",
 }: {
   value: string;
   options: SelectOption[];
@@ -214,6 +216,9 @@ export function Select({
   disabled?: boolean;
   ariaLabel?: string;
   width?: number | string;
+  /** "bar" = the compact 24px filter-bar row (matches the search box);
+     "form" (default) = 34px t-input — every dialog keeps its look */
+  size?: "bar" | "form";
 }) {
   const [open, setOpen] = useState(false);
   const [highlight, setHighlight] = useState(0);
@@ -316,7 +321,7 @@ export function Select({
           disabled && "opacity-40 cursor-not-allowed",
           className,
         )}
-        style={width ? { width } : undefined}
+        style={{ ...(width ? { width } : {}), height: selectTriggerHeight(size) }}
       >
         <span className="min-w-0 truncate">{current ? current.label : <span className="text-[var(--t-dim)]">—</span>}</span>
         <Icon name="down" size={11} className={cn("shrink-0 text-[var(--t-dim)] transition-transform", open && "rotate-180")} />

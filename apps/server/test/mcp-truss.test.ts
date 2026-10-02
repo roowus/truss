@@ -569,10 +569,14 @@ test("session tools over MCP: list/get/rename/project/archive/harnesses/agents/c
   assert.equal(closedMeta.body.session.state, "closed");
   assert.equal(closedMeta.body.session.live, false);
 
-  /* BUG-ish, asserting actual behavior: delete_session IGNORES its `hard`
-     argument — the handler always hard-deletes (row + transcript) and always
-     answers hard:true, even when the caller passes hard:false. Reported. */
+  /* delete_session honors `hard` (fixed): default moves to the 30-day trash,
+     hard:true purges forever (row + transcript cascade) */
   const del = await call("delete_session", { id: madeId, hard: false });
-  assert.deepEqual(del.data, { ok: true, hard: true });
-  assert.equal((await api(`/api/sessions/${madeId}`)).status, 404, "row gone despite hard:false");
+  assert.deepEqual(del.data, { ok: true, trashed: true, recoverableForDays: 30 });
+  let meta = await api(`/api/sessions/${madeId}`);
+  assert.ok(meta.body.session?.deleted_at, "trashed, not destroyed");
+
+  const purge = await call("delete_session", { id: madeId, hard: true });
+  assert.deepEqual(purge.data, { ok: true, purged: true });
+  assert.equal((await api(`/api/sessions/${madeId}`)).status, 404, "purged row really gone");
 });

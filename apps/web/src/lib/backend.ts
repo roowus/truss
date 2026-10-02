@@ -59,6 +59,10 @@ export interface Backend {
   interrupt(id: string): Promise<{ ok: boolean }>;
   permission(id: string, requestId: string, choice: string): Promise<{ ok: boolean }>;
   deleteSession(id: string, hard: boolean): Promise<unknown>;
+  /** the 30-day trash: list / restore / delete-forever */
+  trash(): Promise<{ sessions: SessionMeta[] }>;
+  restoreSession(id: string): Promise<unknown>;
+  purgeSession(id: string): Promise<unknown>;
   archiveSession(id: string, archived: boolean): Promise<unknown>;
   archiveProject(project: string, archived: boolean): Promise<unknown>;
   listTerminals(): Promise<{ terminals: TerminalInfo[] }>;
@@ -177,6 +181,9 @@ export function createLiveBackend(): Backend {
     interrupt: (id) => req("POST", `/api/sessions/${encodeURIComponent(id)}/interrupt`, {}),
     permission: (id, requestId, choice) =>
       req("POST", `/api/sessions/${encodeURIComponent(id)}/permission`, { requestId, choice }),
+    trash: () => req("GET", "/api/trash"),
+    restoreSession: (id) => req("POST", `/api/sessions/${encodeURIComponent(id)}/restore`, {}),
+    purgeSession: (id) => req("POST", `/api/sessions/${encodeURIComponent(id)}/purge`, {}),
     deleteSession: (id, hard) =>
       req("DELETE", `/api/sessions/${encodeURIComponent(id)}${hard ? "?hard=1" : ""}`),
     archiveSession: (id, archived) =>

@@ -1,7 +1,7 @@
 import { useMemo, useState, useEffect, type ReactNode } from "react";
 import { store, useApp, useNow } from "@/lib/store";
 import { desktops, useDesktops } from "@/lib/desktops";
-import { ago, shortPath } from "@/lib/format";
+import { ago, daysLeftInTrash, shortPath } from "@/lib/format";
 import { openAgentShell, openDailyDriver, openFreeShell, openPanel, openSession } from "@/lib/workspace";
 import { HarnessMark, Icon, IconBtn, StateDot, TrussLogo, Spinner, STATE_META } from "./ui";
 import type { SessionMeta } from "@/lib/proto";
@@ -121,6 +121,9 @@ export function Sidebar({ onNew }: { onNew: () => void }) {
           })
         )}
 
+        {/* recently deleted (30-day trash) — restore or delete forever */}
+        <TrashSection />
+
         {/* archived sessions collect here, collapsed by default */}
         {archived.length > 0 && (
           <div className="mt-2">
@@ -201,7 +204,7 @@ function Section({ title, action, children }: { title: string; action?: ReactNod
   );
 }
 
-function SessionRow({ s, now, archived }: { s: SessionMeta; now: number; archived?: boolean }) {
+function SessionRow({ s, now, archived, trashView }: { s: SessionMeta; now: number; archived?: boolean; trashView?: boolean }) {
   const focused = useApp((st) => st.focused === s.id);
   const pending = useApp((st) => st.views[s.id]?.pending.length ?? 0);
   const [confirm, setConfirm] = useState(false);
@@ -211,12 +214,16 @@ function SessionRow({ s, now, archived }: { s: SessionMeta; now: number; archive
     return () => clearTimeout(t);
   }, [confirm]);
   const dead = s.state === "closed" || s.state === "error";
+  /* trash rows don't open a chat panel: the session is not in the live list,
+     so the panel would only claim it no longer exists. Restore is the way
+     back in (issue #5). */
+  const openable = !trashView;
   return (
     <div
-      onClick={() => openSession(s.id)}
-      onDoubleClick={() => openDailyDriver(s.id)}
-      className={cn("group relative mx-0.5 flex items-center gap-2 px-2 t-session-row rounded-md cursor-pointer transition-colors", focused ? "bg-[var(--t-bg2)]" : "hover:bg-white/[0.03]")}
-      title={`${s.title}\n${s.harness}${s.model ? ` · ${s.model}` : ""}\n${shortPath(s.cwd)}\n${STATE_META[s.state]?.hint ?? s.state}${archived ? "\narchived — hidden from the main list" : ""}\n(double-click: chat + trajectory + context)`}
+      onClick={openable ? () => openSession(s.id) : undefined}
+      onDoubleClick={openable ? () => openDailyDriver(s.id) : undefined}
+      className={cn("group relative mx-0.5 flex items-center gap-2 px-2 t-session-row rounded-md transition-colors", openable ? "cursor-pointer" : "cursor-default", focused ? "bg-[var(--t-bg2)]" : "hover:bg-white/[0.03]")}
+      title={`${s.title}\n${s.harness}${s.model ? ` · ${s.model}` : ""}\n${shortPath(s.cwd)}\n${STATE_META[s.state]?.hint ?? s.state}${archived ? "\narchived — hidden from the main list" : ""}${openable ? "\n(double-click: chat + trajectory + context)" : ""}`}
     >
       {focused && <span className="absolute left-0 top-2 bottom-2 w-[2px] rounded-full bg-[var(--t-amber)]" />}
       <HarnessMark harness={s.harness} size={17} className={dead ? "opacity-45" : ""} />
@@ -225,7 +232,13 @@ function SessionRow({ s, now, archived }: { s: SessionMeta; now: number; archive
         <span className="shrink-0 inline-grid place-items-center w-4 h-4 rounded-full bg-[var(--t-amber)] text-[#1b1305] text-[9.5px] font-bold t-pulse-soft" title="Permission waiting">{pending}</span>
       )}
       <span className="group-hover:hidden flex items-center gap-1.5 shrink-0">
-        <span className="text-[10px] text-[var(--t-dim)] tabular-nums">{ago(+new Date(s.updated_at) || Date.parse(String(s.updated_at)), now)}</span>
+        {trashView && s.deleted_at != null ? (
+          <span className="text-[10px] text-[var(--t-dim)] tabular-nums" title="Days before this chat is purged">
+            {daysLeftInTrash(+new Date(s.deleted_at) || Date.parse(String(s.deleted_at)), now)}d left
+          </span>
+        ) : (
+          <span className="text-[10px] text-[var(--t-dim)] tabular-nums">{ago(+new Date(s.updated_at) || Date.parse(String(s.updated_at)), now)}</span>
+        )}
         <StateDot state={s.state} size={6} />
       </span>
       <span className="hidden group-hover:flex items-center shrink-0" onClick={(e) => e.stopPropagation()}>
@@ -237,14 +250,52 @@ function SessionRow({ s, now, archived }: { s: SessionMeta; now: number; archive
             <IconBtn icon="archive" label="Archive (hide from sidebar; keeps history)" className="w-6 h-6" onClick={() => store.archiveSession(s.id, true)} />
           </>
         )}
-        {!dead && !archived && <IconBtn icon="power" label="Close (stop process, keep history)" className="w-6 h-6" onClick={() => store.closeSession(s.id)} />}
-        <IconBtn
-          icon="trash"
-          label={confirm ? "Click again to delete permanently" : "Delete session + history"}
-          className={cn("w-6 h-6", confirm && "!text-[var(--t-red)] bg-[color-mix(in_oklab,var(--t-red)_15%,transparent)]")}
-          onClick={() => (confirm ? store.deleteSession(s.id) : setConfirm(true))}
-        />
+        {!dead && !archived && !trashView && <IconBtn icon="power" label="Close (stop process, keep history)" className="w-6 h-6" onClick={() => store.closeSession(s.id)} />}
+        {trashView ? (
+          <>
+            <IconBtn icon="retry" label="Restore (back to the sidebar, history intact)" className="w-6 h-6" onClick={() => void store.restoreSession(s.id)} />
+            <IconBtn
+              icon="trash"
+              label={confirm ? "Click again: gone forever, no undo" : "Delete forever (no undo)"}
+              className={cn("w-6 h-6", confirm && "!text-[var(--t-red)] bg-[color-mix(in_oklab,var(--t-red)_15%,transparent)]")}
+              onClick={() => (confirm ? store.purgeSession(s.id) : setConfirm(true))}
+            />
+          </>
+        ) : (
+          <IconBtn
+            icon="trash"
+            label={confirm ? "Click again to move to trash" : "Move to trash (recoverable for 30 days)"}
+            className={cn("w-6 h-6", confirm && "!text-[var(--t-red)] bg-[color-mix(in_oklab,var(--t-red)_15%,transparent)]")}
+            onClick={() => (confirm ? store.deleteSession(s.id) : setConfirm(true))}
+          />
+        )}
       </span>
+    </div>
+  );
+}
+
+
+/* ---------------- recently deleted (30-day trash) ---------------- */
+function TrashSection() {
+  const trash = useApp((s) => s.trash);
+  const [open, setOpen] = useState(false);
+  const now = useNow(30_000, open);
+  useEffect(() => {
+    void store.refreshTrash();
+  }, []);
+  if (trash.length === 0) return null;
+  return (
+    <div className="mt-2">
+      <button
+        className="w-full flex items-center gap-1.5 px-2 h-7 text-[10.5px] font-medium uppercase tracking-[0.08em] text-[var(--t-dim)] hover:text-[var(--t-mute)]"
+        onClick={() => setOpen((o) => !o)}
+      >
+        <Icon name="chev" size={9} className={cn("transition-transform", open && "rotate-90")} />
+        <Icon name="trash" size={10} />
+        <span>recently deleted</span>
+        <span className="ml-auto tabular-nums">{trash.length}</span>
+      </button>
+      {open && trash.map((s) => <SessionRow key={s.id} s={s} now={now} trashView />)}
     </div>
   );
 }
