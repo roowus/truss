@@ -37,6 +37,7 @@ interface Addr {
 }
 interface ReachModule {
   reachableAddresses(net: NetLike): Addr[];
+  impliedTailscaleReturn(net: NetLike): string | null;
 }
 
 async function load(): Promise<ReachModule | null> {
@@ -96,4 +97,51 @@ test("a specific bind ip keeps only its own entries; loopback ipv6 treated as lo
   const onlyTail = mod.reachableAddresses(NET("100.107.125.118"));
   assert.ok(onlyTail.length > 0 && onlyTail.every((a) => a.value.includes("100.107.125.118") || a.value.includes("rewvis.tail208cbf.ts.net")), "bound to the tailnet ip: only tailnet entries");
   assert.deepEqual(mod.reachableAddresses(NET("::1", false)), [], "::1 is loopback too");
+});
+
+/* audit B2: serve proxies tailnet-443 to http://127.0.0.1:<port>, so under a
+   SPECIFIC non-loopback bind the proxy is refused and the serve URL is as
+   dead as the raw addresses — it must not be offered */
+test("specific non-loopback bind + serve on → the serve URL is dead too (not offered)", async () => {
+  const mod = await load();
+  assert.ok(mod, "reachability module must exist (see module test)");
+  const lan = mod.reachableAddresses(NET("192.168.1.10", true));
+  assert.deepEqual(lan.map((a) => a.value), ["http://192.168.1.10:4040"], "lan bind: only its own entry — no dead serve URL on top");
+  const tail = mod.reachableAddresses(NET("100.107.125.118", true));
+  assert.ok(tail.length > 0 && tail.every((a) => !a.value.startsWith("https://")), "tailnet-ip bind: serve URL refused (loopback proxy), tailnet entries survive");
+});
+
+test("all-interfaces bind + serve on → the serve URL leads (it does answer loopback)", async () => {
+  const mod = await load();
+  assert.ok(mod, "reachability module must exist (see module test)");
+  const out = mod.reachableAddresses(NET("0.0.0.0", true));
+  assert.equal(out[0]?.value, "https://rewvis.tail208cbf.ts.net");
+  assert.ok(out.length > 1, "everything else survives too");
+});
+
+/* audit B1: the wizard's "it calls home at" line must pass the SAME filter —
+   defaultTailscaleReturn is bind-blind, so impliedTailscaleReturn gates it on
+   membership in the filtered list (never imply a dead address) */
+test("impliedTailscaleReturn: a specific non-tailnet bind kills the implied tailnet address", async () => {
+  const mod = await load();
+  assert.ok(mod, "reachability module must exist (see module test)");
+  assert.equal(mod.impliedTailscaleReturn(NET("192.168.1.10", false)), null, "serve off: magic-dns url is dead under a lan bind — wizard must show the dropdown instead");
+  assert.equal(mod.impliedTailscaleReturn(NET("192.168.1.10", true)), null, "serve on: the serve URL is dead under a lan bind too (audit B2)");
+});
+
+test("impliedTailscaleReturn: binds that answer the tailnet identity keep the implied address", async () => {
+  const mod = await load();
+  assert.ok(mod, "reachability module must exist (see module test)");
+  assert.equal(mod.impliedTailscaleReturn(NET("0.0.0.0", false)), "http://rewvis.tail208cbf.ts.net:4040");
+  assert.equal(mod.impliedTailscaleReturn(NET("100.107.125.118", false)), "http://rewvis.tail208cbf.ts.net:4040", "tailnet-ip bind answers its dns name");
+  assert.equal(mod.impliedTailscaleReturn(NET("0.0.0.0", true)), "https://rewvis.tail208cbf.ts.net");
+  assert.equal(mod.impliedTailscaleReturn(NET("127.0.0.1", true)), "https://rewvis.tail208cbf.ts.net", "loopback + serve: the one reachable address");
+  assert.equal(mod.impliedTailscaleReturn(NET("127.0.0.1", false)), null, "loopback + serve off: nothing answerable");
+});
+
+test("impliedTailscaleReturn: null without tailscale", async () => {
+  const mod = await load();
+  assert.ok(mod, "reachability module must exist (see module test)");
+  const noTs: NetLike = { port: 4040, bind: "0.0.0.0", tailscale: { installed: false }, lan: ["192.168.1.10"] };
+  assert.equal(mod.impliedTailscaleReturn(noTs), null);
 });

@@ -68,6 +68,9 @@ import { collectMetrics } from "@truss/proto";
 import { registerAdapter, unregisterAdapter } from "./sessions.js";
 
 const PORT = Number(process.env.TRUSS_PORT ?? 4040);
+/* the ONE bind decision — .listen() and /api/net share it, so the wizard's
+   reachability filter never drifts from the socket's actual host (issue #33) */
+const HOST = process.env.TRUSS_HOST ?? "0.0.0.0";
 const app = Fastify({ logger: process.env.TRUSS_TEST ? false : true });
 
 await app.register(websocket);
@@ -215,7 +218,7 @@ app.get("/agent/connect", { websocket: true }, (socket, req) => {
 app.get("/api/agents", async () => ({ agents: listAgents() }));
 
 /* ── network reachability + the agent installer ── */
-app.get("/api/net", async () => netInfo(PORT));
+app.get("/api/net", async () => netInfo(PORT, HOST));
 app.get("/api/net/tailscale/peers", async () => tailscalePeers());
 app.post("/api/net/tailscale-serve", async (req, reply) => {
   const { on } = (req.body ?? {}) as { on?: boolean };
@@ -932,7 +935,7 @@ if (existsSync(join(webDist, "index.html"))) {
 export { app };
 
 app
-  .listen({ port: PORT, host: process.env.TRUSS_HOST ?? "0.0.0.0" })
+  .listen({ port: PORT, host: HOST })
   .catch((err) => {
     app.log.error(err);
     process.exit(1);

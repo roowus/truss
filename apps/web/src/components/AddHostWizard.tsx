@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { store, useApp } from "@/lib/store";
 import { ago, until } from "@/lib/format";
-import { defaultTailscaleReturn, peerAlreadyAdded } from "@/lib/device";
+import { peerAlreadyAdded } from "@/lib/device";
 import { buildInstallCommand } from "@/lib/installCommand";
-import { reachableAddresses } from "@/lib/reachability";
+import { impliedTailscaleReturn, reachableAddresses } from "@/lib/reachability";
 import type { TailscalePeer } from "@/lib/proto";
 import { Btn, Icon, Select, Spinner } from "./ui";
 import { cn } from "@/utils/cn";
@@ -68,7 +68,10 @@ export function AddHostWizard({ onClose }: { onClose: () => void }) {
   /* tailscale: both ends are on the tailnet by construction, so the return
      address is this server's own tailnet identity — no second selection.
      The dropdown only appears as an explicit override (or for Direct). */
-  const impliedReturn = method === "tailscale" && !unreachable ? defaultTailscaleReturn(net) : null; /* never imply a dead address (issue #33) */
+  /* never imply a dead address (issue #33): gate on membership in the
+     filtered list, not just on SOMETHING being reachable — a specific
+     non-tailnet bind makes the bind-blind tailnet identity dead too */
+  const impliedReturn = method === "tailscale" ? impliedTailscaleReturn(net) : null;
   const serverAddr = addrOverride || !impliedReturn ? (addr === "custom" ? customAddr.trim() : addr) : impliedReturn;
 
   const create = async () => {
