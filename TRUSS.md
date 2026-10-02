@@ -25,6 +25,16 @@ House rules for anyone (human or agent) working in this repo.
 - If main has moved since the branch was cut, rebase onto `origin/main`
   before opening or updating the PR.
 
+## Commits
+
+- Commit author and committer are always the repo owner
+  (`roowus <roowus@users.noreply.github.com>`), including automation-made
+  commits — bots act on the owner's behalf and do not get credit lines.
+- No AI-attribution trailers or banners in commit messages: no
+  `Co-Authored-By:` lines, no "Generated with …" footers, no tool names.
+- PR titles follow conventional-commit style, ≤70 chars; the body opens with
+  1-3 plain sentences (what was broken, what the PR does) before any lists.
+
 ## Posting
 
 - File todos for anything the user must verify by hand; label them `verify`.

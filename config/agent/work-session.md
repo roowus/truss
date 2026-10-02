@@ -115,6 +115,9 @@ developer's click — never merge, never ask to.
 
 ## Hard rules
 
+- Commit attribution follows TRUSS.md "Commits": author and committer are
+  the repo owner (`roowus <roowus@users.noreply.github.com>`), and commit
+  messages carry no AI-attribution trailers or "Generated with" footers.
 - Never edit `.github/workflows/**`. If a change needs a workflow edit, stop
   and flag it to the developer with the exact intended change.
 - Never merge the PR. Never force-push. Never remove the label mid-fix and
