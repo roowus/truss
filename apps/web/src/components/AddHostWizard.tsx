@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { store, useApp } from "@/lib/store";
 import { ago, until } from "@/lib/format";
-import { defaultTailscaleReturn, peerAlreadyAdded } from "@/lib/device";
+import { peerAlreadyAdded } from "@/lib/device";
 import { buildInstallCommand } from "@/lib/installCommand";
+import { impliedTailscaleReturn, reachableAddresses } from "@/lib/reachability";
 import type { TailscalePeer } from "@/lib/proto";
 import { Btn, Icon, Select, Spinner } from "./ui";
 import { cn } from "@/utils/cn";
@@ -18,7 +19,7 @@ export function AddHostWizard({ onClose }: { onClose: () => void }) {
   const [step, setStep] = useState(1);
   const [label, setLabel] = useState("");
   const [method, setMethod] = useState<"tailscale" | "direct">("tailscale");
-  const [net, setNet] = useState<{ port: number; tailscale: { installed: boolean; ip4?: string; dnsName?: string; serveOn?: boolean; serveUrl?: string }; lan: string[] } | null>(null);
+  const [net, setNet] = useState<import('@/lib/proto').NetInfo | null>(null);
   const [peers, setPeers] = useState<{ self?: TailscalePeer; peers: TailscalePeer[] } | null>(null);
   const [pickedPeer, setPickedPeer] = useState<string | null>(null); // dnsName
   const labelTouched = useRef(false);
@@ -45,22 +46,20 @@ export function AddHostWizard({ onClose }: { onClose: () => void }) {
     if (!labelTouched.current) setLabel(p.hostName);
   };
 
-  /* address the remote will use to reach this server */
+  /* address the remote will use to reach this server — filtered to what the
+     server can actually ANSWER (issue #33): a loopback bind makes the raw
+     tailnet/LAN URLs dead on arrival (curl: (7) connect refused) */
   const addresses = useMemo(() => {
     if (!net) return [];
-    const out: { value: string; label: string }[] = [];
-    if (method === "tailscale") {
-      if (net.tailscale.serveOn && net.tailscale.serveUrl) out.push({ value: net.tailscale.serveUrl, label: `${net.tailscale.serveUrl} (tailscale serve, https)` });
-      if (net.tailscale.dnsName) out.push({ value: `http://${net.tailscale.dnsName}:${net.port}`, label: `${net.tailscale.dnsName} (tailnet name)` });
-      if (net.tailscale.ip4) out.push({ value: `http://${net.tailscale.ip4}:${net.port}`, label: `${net.tailscale.ip4} (tailnet ip)` });
-    }
-    for (const ip of net.lan) {
-      if (ip === net.tailscale.ip4) continue; // already offered as the tailnet address
-      out.push({ value: `http://${ip}:${net.port}`, label: `${ip} (lan/overlay)` });
-    }
+    const out = reachableAddresses(net);
     out.push({ value: "custom", label: "custom address…" });
     return out;
   }, [net, method]);
+
+  /* nothing reachable at all (loopback bind, serve off) → the wizard says so
+     and steers: serve toggle inline, or TRUSS_HOST=0.0.0.0 on restart */
+  const unreachable = !!net && reachableAddresses(net).length === 0;
+  const [serveBusy, setServeBusy] = useState(false);
 
   const [addr, setAddr] = useState("");
   const [addrOverride, setAddrOverride] = useState(false);
@@ -69,7 +68,10 @@ export function AddHostWizard({ onClose }: { onClose: () => void }) {
   /* tailscale: both ends are on the tailnet by construction, so the return
      address is this server's own tailnet identity — no second selection.
      The dropdown only appears as an explicit override (or for Direct). */
-  const impliedReturn = method === "tailscale" ? defaultTailscaleReturn(net) : null;
+  /* never imply a dead address (issue #33): gate on membership in the
+     filtered list, not just on SOMETHING being reachable — a specific
+     non-tailnet bind makes the bind-blind tailnet identity dead too */
+  const impliedReturn = method === "tailscale" ? impliedTailscaleReturn(net) : null;
   const serverAddr = addrOverride || !impliedReturn ? (addr === "custom" ? customAddr.trim() : addr) : impliedReturn;
 
   const create = async () => {
@@ -191,6 +193,32 @@ export function AddHostWizard({ onClose }: { onClose: () => void }) {
                     <div className="px-2.5 py-2 text-[11px] text-[var(--t-dim)]">No other devices on the tailnet yet — add one with <span className="font-mono text-[var(--t-mute)]">sudo tailscale up</span> on the remote.</div>
                   )}
                 </div>
+              </div>
+            )}
+            {unreachable && (
+              <div className="rounded-lg border border-[var(--t-amber)]/40 bg-[var(--t-amber)]/6 px-3 py-2 text-[11.5px] leading-relaxed text-[var(--t-amber)]">
+                This server only listens on loopback (<span className="font-mono">{net?.bind}</span>) — nothing off-host can connect, so there's no address to offer.{" "}
+                {net?.tailscale.installed ? (
+                  <>
+                    Turn on tailscale serve (https on the tailnet → loopback) or restart with <span className="font-mono">TRUSS_HOST=0.0.0.0</span>.{" "}
+                    <button
+                      type="button"
+                      disabled={serveBusy}
+                      className="underline decoration-dotted hover:brightness-125"
+                      onClick={() => {
+                        setServeBusy(true);
+                        be?.tailscaleServe(true)
+                          .then(() => be.netInfo())
+                          .then((n) => { setNet(n); setServeBusy(false); })
+                          .catch(() => setServeBusy(false));
+                      }}
+                    >
+                      turn on tailscale serve now
+                    </button>
+                  </>
+                ) : (
+                  <>Restart with <span className="font-mono">TRUSS_HOST=0.0.0.0</span> to listen on the network.</>
+                )}
               </div>
             )}
             {method === "tailscale" && impliedReturn && !addrOverride ? (

@@ -19,6 +19,9 @@ function sh(cmd: string, args: string[]): Promise<string> {
 
 export interface NetInfo {
   port: number;
+  /** the address the server listens on (issue #33: the wizard must not offer
+     addresses the server can't answer — a loopback bind kills tailnet URLs) */
+  bind: string;
   tailscale: {
     installed: boolean;
     ip4?: string;
@@ -85,8 +88,8 @@ export async function tailscalePeers(): Promise<{ self?: TailscalePeer; peers: T
   }
 }
 
-export async function netInfo(port: number): Promise<NetInfo> {
-  const out: NetInfo = { port, tailscale: { installed: false }, lan: [] };
+export async function netInfo(port: number, bindHost?: string): Promise<NetInfo> {
+  const out: NetInfo = { port, bind: bindHost ?? process.env.TRUSS_HOST ?? "0.0.0.0", tailscale: { installed: false }, lan: [] };
   for (const [name, addrs] of Object.entries(networkInterfaces())) {
     if (name === "lo") continue;
     for (const a of addrs ?? []) {
