@@ -27,12 +27,22 @@ issue right now, and if so, which one. Cheap and deterministic: no wandering.
    (`gh issue view <n> --json title,body,labels`). Confirm its suggested
    approach is still plausible against the current repo (a quick look at the
    files it names).
-5. Start or hand to a work session for that issue (see
-   config/agent/work-session.md), on a new branch `fix/<n>-<slug>` or
-   `feat/<n>-<slug>`. Update the project board item to in-progress:
+5. Spawn the work session over the dsh-spawn plugin (one call creates a
+   sidebar-visible session and starts it on the work prompt):
+
+   ```sh
+   curl -sS -X POST http://127.0.0.1:3080/plugins/dsh-spawn/session \
+     -H 'content-type: application/json' -d @- <<'JSON'
+   {"cwd": "/home/ubuntu/projects/truss",
+    "title": "work: #<n> — <slug>",
+    "prompt": "You are a work session for the truss repo. Read /home/ubuntu/projects/truss/config/agent/work-session.md and follow it fully. Your issue is #<n> — start at phase 1."}
+   JSON
+   ```
+   The response is `{"sessionId": "session-…"}` — that id is the worker.
+   Update the project board item to in-progress:
    `gh project item-edit ...` (see docs/pr-audit.md for the PAT setup).
 6. Record the mapping so the developer can watch the worker: append
-   `{"issue": <n>, "session": "<the work session's id>", "since": "<iso>",
+   `{"issue": <n>, "session": "<the spawned session's id>", "since": "<iso>",
    "state": "working"}` to `~/.local/state/truss-sessions.json` (a JSON
    array; create if missing). The work session keeps its own entry current
    (config/agent/work-session.md phase 1 step 0).
