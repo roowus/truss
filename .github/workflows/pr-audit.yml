@@ -261,6 +261,11 @@ jobs:
             re-check only the ones whose files changed since. Spend your budget on
             the code that changed since the last reviewed head — that is where new
             findings live.
+            STANDING RULE: this repo has legacy cumulative/stacked branches from
+            before TRUSS.md's Branches rule; they are owner-grandfathered. Never
+            raise branch STRUCTURE as a finding — stacking, cumulative diff size,
+            or a stale base vs main (a rebase after predecessors merge handles
+            it). Judge only the PR's own code content.
 
             FINDINGS — group by severity, give file:line references, stay concise
             and actionable. If nothing: state "✅ No issues found".
