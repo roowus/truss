@@ -13,6 +13,9 @@ import type { ProtoEvent } from "../src/lib/proto";
    schedules notifications via requestAnimationFrame — shim it for those two
    Store-level tests; everything else still uses the pure reduce path */
 (globalThis as any).requestAnimationFrame ??= (cb: (t: number) => void) => setTimeout(() => cb(Date.now()), 0);
+/* refreshSessionsSoon (reached by the restore path) schedules via
+   window.setTimeout */
+(globalThis as any).window.setTimeout ??= globalThis.setTimeout.bind(globalThis);
 const { reduce, emptyView, toMs, store } = await import("../src/lib/store");
 
 const T0 = 1_000; // arbitrary frameTime base

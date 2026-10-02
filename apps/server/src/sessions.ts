@@ -501,6 +501,28 @@ export function deleteSession(sessionId: string) {
   broadcastFn({ seq: 0, ev: { type: "session.deleted", sessionId } });
 }
 
+/**
+ * Bulk sibling of deleteSession (issue #4): each id gets exactly the
+ * single-delete (trash-move) semantics — close-if-live, stamp, one
+ * session.deleted broadcast per id. Unknown/already-gone ids are skipped
+ * without aborting the batch (a stale sidebar selection must not), and
+ * duplicates count once. Returns the number actually trashed. Working
+ * directories are never touched — this is a database-only operation.
+ */
+export function deleteSessions(ids: string[]): number {
+  let n = 0;
+  const seen = new Set<string>();
+  for (const id of ids) {
+    if (seen.has(id)) continue;
+    seen.add(id);
+    const row = store.getSession(id);
+    if (!row || row.deleted_at) continue; // unknown or already trashed: skip
+    deleteSession(id);
+    n++;
+  }
+  return n;
+}
+
 /** un-trash: the chat returns to the list with its full history */
 export function restoreSession(sessionId: string) {
   const row = store.getSession(sessionId);
