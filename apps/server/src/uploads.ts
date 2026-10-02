@@ -1,5 +1,5 @@
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
+import { join, sep } from "node:path";
 
 /**
  * Chat prompt attachments (issue #2): files land INSIDE the session's
@@ -33,6 +33,18 @@ export function saveUpload(root: string, name: string, data: Buffer, opts: { max
 
   const dir = join(root, UPLOAD_DIR);
   mkdirSync(dir, { recursive: true });
+
+  /* symlink containment (issue #2 security notes: lexical AND symlink escapes
+     refused). The harness runs code inside the workspace and could plant
+     .truss-uploads as a symlink pointing outside; the truss server is
+     unsandboxed, so check the realpath the way files.ts confine() does. The
+     filename itself is already a neutralized basename, so pinning the dir is
+     sufficient. */
+  const realRoot = realpathSync(root);
+  const realDir = realpathSync(dir);
+  if (realDir !== realRoot && !realDir.startsWith(realRoot + sep)) {
+    throw new Error("upload dir escapes the workspace root (symlink)");
+  }
 
   /* dedupe collisions: name.ext → name-1.ext → name-2.ext — an earlier
      upload is evidence, never clobber it */
