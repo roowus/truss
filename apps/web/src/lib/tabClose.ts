@@ -40,3 +40,30 @@ export function isOvercrowded(probeWidths: number[], stripWidth: number, perTabC
   for (const w of probeWidths) natural += w + perTabChrome;
   return natural > stripWidth + 2;
 }
+
+/* ── hysteresis (issue #21): threshold crossings become sticky so a ±1px
+   wobble mid-resize can't flip every tab's X at the same pixel ── */
+
+/** deadband width for the cramped verdict — a real band, not an epsilon */
+export const TAB_CRAMPED_HYSTERESIS_PX = 48;
+/** ultra slivers enter below 64px and only leave at 72px (exit > enter) */
+export const ULTRA_ENTER_PX = 64;
+export const ULTRA_EXIT_PX = 72;
+
+/**
+ * Sticky cramped verdict: roomy → cramped once the strip is at/below the
+ * natural content width; cramped → roomy only once it exceeds natural + the
+ * deadband. Inside the band the previous verdict stands, so measurement
+ * flutter (sub-pixel layout, scrollbar appearance) never toggles the strip.
+ */
+export function crampedVerdict(prev: boolean, naturalPx: number, stripPx: number): boolean {
+  if (naturalPx <= 0) return false; // a hidden strip (0px) has no crowding; it corrects on show
+  if (!prev) return stripPx <= naturalPx; // enter at the edge, as today
+  return stripPx < naturalPx + TAB_CRAMPED_HYSTERESIS_PX; // exit only past the deadband
+}
+
+/** same stickiness around the sliver edge */
+export function ultraVerdict(prev: boolean, tabWidthPx: number): boolean {
+  if (!prev) return tabWidthPx < ULTRA_ENTER_PX;
+  return tabWidthPx < ULTRA_EXIT_PX;
+}
