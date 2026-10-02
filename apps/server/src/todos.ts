@@ -238,10 +238,21 @@ export async function shareTodo(id: string, sessionId: string, note?: string): P
   if (!t.sharedWith.includes(sessionId)) {
     store.run(`UPDATE todos SET shared_with = ?, updated_at = ? WHERE id = ?`, JSON.stringify([...t.sharedWith, sessionId]), Date.now(), id);
   }
-  /* the card goes too (it's the link back) */
-  const { shareFeedItem, listFeed } = await import("./feed.js");
-  const card = listFeed({}).find((c) => c.type === "todo" && (c.data as { todoId?: string }).todoId === id);
-  if (card) shareFeedItem(card.id, sessionId);
+  /* the card goes too (it's the link back) — POST it rather than only
+     finding it: a todo filed cardless (postToFeed:false, the bulk-filing
+     hatch) would otherwise share with no card on the target's list_feed.
+     The todo:<id> dedupe key makes the post a no-op when the card exists. */
+  const { shareFeedItem, postFeed } = await import("./feed.js");
+  const { item: card } = postFeed({
+    type: "todo",
+    sessionId: t.sessionId ?? undefined,
+    title: t.title,
+    body: t.notes,
+    importance: t.priority === "normal" ? "normal" : t.priority,
+    data: { todoId: t.id },
+    dedupeKey: `todo:${t.id}`,
+  });
+  shareFeedItem(card.id, sessionId);
   const next = getTodo(id)!;
   broadcast(next);
   return next;

@@ -326,6 +326,65 @@ test("ownership: a foreign session's edit files an approval card (deduped); REST
   assert.ok(missing.text.includes("no such todo: no-such-todo"));
 });
 
+test("todo view-share: list_todos surfaces shared todos; sharing a cardless todo posts+shares its card; share route maps 404 vs 409", async () => {
+  assert.ok(agentA && agentB, "agents created by the file_todo test");
+  /* a CARDLESS todo of A's (postToFeed:false — the bulk-filing hatch) */
+  const filed = await call("file_todo", { title: "shared from A", notes: "view me", postToFeed: false }, agentA);
+  assert.equal(filed.isError, false, filed.text);
+  const todoId = filed.data.id as string;
+  assert.ok(!(await api("/api/feed")).body.items.some((i: Ev) => i.data?.todoId === todoId), "no card before the share");
+
+  /* B's default list_todos does NOT see it yet */
+  const before = await call("list_todos", {}, agentB);
+  assert.ok(!before.data.some((t: Ev) => t.id === todoId), "unshared foreign todo stays hidden");
+
+  /* the user shares it to B over REST */
+  const share = await post(`/api/todos/${todoId}/share`, { sessionId: agentB, note: "have a look" });
+  assert.equal(share.status, 200, JSON.stringify(share.body));
+  assert.ok(share.body.todo.sharedWith.includes(agentB));
+
+  /* the issue-#26 MCP slice: B's default list_todos now surfaces it (view ≠ edit) */
+  const after = await call("list_todos", {}, agentB);
+  assert.ok(after.data.some((t: Ev) => t.id === todoId), "a todo shared to the session shows up in its default list_todos");
+  assert.ok(
+    after.data.every((t: Ev) => t.sessionId === agentB || t.sharedWith.includes(agentB)),
+    "default view is exactly own + shared-to-me",
+  );
+  /* …but view sharing grants no edit: B's edit still files the approval card */
+  const edit = await call("update_todo", { id: todoId, title: "edited by viewer" }, agentB);
+  assert.ok(String(edit.data?.pending).includes("approval requested"), "view ≠ edit — the approval gate still holds");
+
+  /* the share posted the missing card (dedupe-keyed) and shared it too */
+  const card = (await api("/api/feed")).body.items.find((i: Ev) => i.dedupeKey === `todo:${todoId}`);
+  assert.ok(card, "sharing a cardless todo posts its card (the link back)");
+  assert.ok(card.sharedWith.includes(agentB), "…and shares it to the target session");
+  const bFeed = await call("list_feed", {}, agentB);
+  assert.ok(bFeed.data.some((i: Ev) => i.id === card.id), "B's list_feed sees the shared card");
+
+  /* idempotent: re-sharing neither duplicates the card nor the roster */
+  const again = await post(`/api/todos/${todoId}/share`, { sessionId: agentB });
+  assert.equal(again.status, 200);
+  const cards = (await api("/api/feed")).body.items.filter((i: Ev) => i.dedupeKey === `todo:${todoId}`);
+  assert.equal(cards.length, 1, "re-share stays one card");
+  assert.equal(again.body.todo.sharedWith.filter((s: string) => s === agentB).length, 1, "roster stays deduped");
+
+  /* share route status mapping: ghosts are 404, a real-but-dead session is 409 */
+  const ghostTodo = await post(`/api/todos/no-such-todo/share`, { sessionId: agentB });
+  assert.equal(ghostTodo.status, 404, "unknown todo → 404");
+  const ghostSession = await post(`/api/todos/${todoId}/share`, { sessionId: "no-such-session" });
+  assert.equal(ghostSession.status, 404, "unknown session → 404");
+
+  /* a real session that is stopped AND non-resumable (harness_ref nulled —
+     the fake pi may carry a resumable ref) reports a state conflict, not 404 */
+  const dead = await mkSession("mcp-dead");
+  await call("close_session", { id: dead });
+  const { store } = await import("../src/db.js");
+  store.run(`UPDATE sessions SET harness_ref = NULL WHERE id = ?`, dead);
+  const conflict = await post(`/api/todos/${todoId}/share`, { sessionId: dead });
+  assert.equal(conflict.status, 409, JSON.stringify(conflict.body));
+  assert.ok(String(conflict.body.error).includes("harness process not running"), String(conflict.body.error));
+});
+
 test("post_feed + list_feed: cards land in the user's inbox; list_feed only shows cards shared to the caller", async () => {
   assert.ok(agentA && agentB);
   const report = await call(

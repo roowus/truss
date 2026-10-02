@@ -645,7 +645,10 @@ app.post("/api/todos/:id/share", async (req, reply) => {
   try {
     return { todo: await shareTodo(id, sessionId, note) };
   } catch (err) {
-    return reply.code(404).send({ error: String(err instanceof Error ? err.message : err) });
+    const msg = String(err instanceof Error ? err.message : err);
+    /* "no such …" → 404; a real-but-stopped session (or any other failure)
+       is a state conflict, not a missing resource */
+    return reply.code(msg.startsWith("no such") ? 404 : 409).send({ error: msg });
   }
 });
 
