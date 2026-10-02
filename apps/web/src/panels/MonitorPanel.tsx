@@ -4,7 +4,7 @@ import { useApp, useNow } from "@/lib/store";
 import { ago } from "@/lib/format";
 import { Btn, Empty, Icon, Spinner } from "@/components/ui";
 import { Spark } from "./Inspectors";
-import { fmtSize, procCell } from "@/lib/format";
+import { fmtSize, procCell, fmtUptime } from "@/lib/format";
 import type { HostMetrics, MonitorData } from "@/lib/proto";
 import { cn } from "@/utils/cn";
 
@@ -16,15 +16,6 @@ import { cn } from "@/utils/cn";
  */
 
 const GAUGE_C = (pct: number) => (pct > 90 ? "var(--t-red)" : pct > 70 ? "var(--t-amber)" : "var(--t-teal)");
-
-function fmtUptime(sec: number): string {
-  const d = Math.floor(sec / 86400);
-  const h = Math.floor((sec % 86400) / 3600);
-  const m = Math.floor((sec % 3600) / 60);
-  if (d > 0) return `${d}d ${h}h`;
-  if (h > 0) return `${h}h ${m}m`;
-  return `${m}m`;
-}
 
 export function MonitorPanel(_props: IDockviewPanelProps) {
   const be = useApp((s) => s.backend);
