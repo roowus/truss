@@ -62,6 +62,7 @@ interface TimelineModule {
   timelineBars(calls: CallLike[], scale: Scale, now: number): Bar[];
   timelineLanes(bars: Bar[]): number;
   rulerTicks(scale: Scale, maxTicks: number): { t: number; pct: number }[];
+  callIsError(c: Pick<CallLike, "done" | "status">): boolean;
 }
 
 async function load(): Promise<TimelineModule | null> {
@@ -171,4 +172,20 @@ test("rulerTicks: nice steps, inside the span, bounded count", async () => {
 
   const tiny = tl.rulerTicks({ t0: T0, tEnd: T0 + 3000, spanMs: 3000 }, 8);
   assert.ok(tiny.length <= 8 && tiny.length >= 2, "tiny spans still tick");
+});
+
+/* pins the audit fix: the timeline bars used to paint red on status >= 400
+   alone, while the table's rule is done && status outside 2xx — one shared
+   predicate keeps a 3xx row and an in-flight call from diverging */
+test("callIsError: one error semantics for table and timeline — done and status outside 2xx", async () => {
+  const tl = await load();
+  assert.ok(tl && typeof tl.callIsError === "function", "requestTimeline must export callIsError so table and bars share one rule");
+  const c = (done: boolean, status?: number): CallLike => ({ callId: "x", at: T0, done, status });
+  assert.equal(tl.callIsError(c(true, 200)), false);
+  assert.equal(tl.callIsError(c(true, 299)), false);
+  assert.equal(tl.callIsError(c(true, 300)), true, "a 3xx row is red in the table, so its bar is red too");
+  assert.equal(tl.callIsError(c(true, 199)), true);
+  assert.equal(tl.callIsError(c(true, 500)), true);
+  assert.equal(tl.callIsError(c(false, 500)), false, "an in-flight call is never red, status or not");
+  assert.equal(tl.callIsError(c(true, undefined)), false, "no status → no error");
 });

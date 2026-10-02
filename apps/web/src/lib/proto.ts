@@ -8,6 +8,9 @@ export interface Capabilities {
   subagents: boolean;
   streaming: boolean;
   queueWhileRunning: boolean;
+  /** the harness consumes a session's reasoning effort (issue #27); absent
+     means it doesn't, so the header hides the effort selector */
+  effort?: boolean;
 }
 
 export interface HarnessInfo {
@@ -44,6 +47,8 @@ export interface SessionMeta {
   project?: string;
   state: SessionState;
   archived?: number;
+  /** set while the session sits in the 30-day trash (raw rows from /api/trash) */
+  deleted_at?: string | number | null;
   created_at: string | number;
   updated_at: string | number;
   live: boolean;
@@ -155,7 +160,7 @@ export interface HostMetrics {
   disks: { device: string; mount: string; fs: string; total: number; used: number; pct: number }[];
   net: { iface: string; rxBps: number; txBps: number }[];
   temps: { label: string; c: number }[];
-  procs: { pid: number; cmd: string; cpu: number; rssMb: number; state: string; user: string; memPct: number; threads: number; ageSec: number }[];
+  procs: { pid: number; cmd: string; cpu: number; rssMb: number; state: string; user?: string; memPct?: number; threads?: number; ageSec?: number }[];
 }
 export interface HistPoint { t: number; cpu: number; mem: number; rx: number; tx: number }
 export interface MonitorEntry { hostname: string; metrics: HostMetrics; history: HistPoint[] }

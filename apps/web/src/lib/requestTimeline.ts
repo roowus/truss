@@ -29,6 +29,12 @@ export interface TimelineBar {
 
 const endOf = (c: TimelineCall, now: number) => (c.done && c.latencyMs != null ? c.at + c.latencyMs : now);
 
+/** the ONE error semantics, shared by the calls table and the timeline bars:
+    a call is an error once finished with a status outside 2xx (an in-flight
+    call is never red, whatever status it already carries) */
+export const callIsError = (c: Pick<TimelineCall, "done" | "status">) =>
+  c.done && c.status != null && (c.status < 200 || c.status >= 300);
+
 /** first start → latest end (in-flight calls end at now, so the axis grows live) */
 export function timelineScale(calls: TimelineCall[], now: number): TimelineScale | null {
   if (calls.length === 0) return null;

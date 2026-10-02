@@ -149,3 +149,27 @@ test("clean rejections: unknown item, unknown session", async () => {
     cleanup();
   }
 });
+
+/* pins the new failure semantics: validation passed but the prompt itself
+   blew up — the share must NOT be recorded (no phantom sharedWith) */
+test("shareFeedToSession: a failed prompt leaves sharedWith untouched", async () => {
+  const { db, cleanup } = await freshServer("share-failprompt");
+  try {
+    const sessions = await import("../src/sessions.js");
+    const feed = (await import("../src/feed.js")) as any;
+    const boom = fakeAdapter("fake-boom" as never, { sent: [] });
+    boom.send = () => {
+      throw new Error("harness died mid-send");
+    };
+    sessions.registerAdapter("fake-boom" as never, boom);
+    const target = await sessions.createSession({ harness: "fake-boom" as never, cwd: "/tmp", title: "doomed session" });
+
+    const item = feed.postFeed({ type: "error", title: "build broke", dedupeKey: `test4-${Date.now()}` }).item;
+    await assert.rejects(() => feed.shareFeedToSession(item.id, target.id, "handle this"), /harness died mid-send/, "the prompt error surfaces");
+    assert.ok(!feed.getFeedItem(item.id).sharedWith.includes(target.id), "failed share records no phantom sharedWith");
+
+    sessions.unregisterAdapter("fake-boom" as never);
+  } finally {
+    cleanup();
+  }
+});

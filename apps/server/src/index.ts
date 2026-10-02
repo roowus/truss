@@ -46,7 +46,7 @@ import { startFeedAutopost } from "./feed-autopost.js";
 import { composePractices, getGlobalPractices, saveGlobalPractices } from "./practices.js";
 import { createHost, deleteHost, listHosts, rotateHostToken, setHostRevoked, verifyAgentToken } from "./hosts.js";
 import { netInfo, taildropToPeer, tailscalePeers, tailscaleServe } from "./net.js";
-import { mintPairing, redeemPairing } from "./pairing.js";
+import { mintPairing, redeemPairing, redeemRateOk } from "./pairing.js";
 import { agentBundleError, ensureAgentBundle, standaloneInstallScript, installScript } from "./agentbundle.js";
 import { registerMcpPerms } from "./mcp-perms.js";
 import { importDshSessions } from "./import-dsh.js";
@@ -277,6 +277,11 @@ app.post("/api/hosts/:id/taildrop", async (req, reply) => {
 
 /* the pairing-code endpoint: redeem once, get the standalone script */
 app.get("/i/:code", async (req, reply) => {
+  /* rate-limited per client (issue #1): the code keyspace is small by design,
+     so guessing it must cost real time */
+  if (!redeemRateOk(req.ip)) {
+    return reply.code(429).type("text/plain").send("too many install-code tries — wait a minute, then retry\n");
+  }
   const { code } = req.params as { code: string };
   const entry = redeemPairing(code);
   if (!entry) return reply.code(410).type("text/plain").send("that install code is used up or expired — mint a fresh one from the Truss add-host wizard\n");
@@ -450,6 +455,7 @@ app.post("/api/sessions/:id/upload", { bodyLimit: 34 * 1024 * 1024 }, async (req
 app.post("/api/sessions/:id/effort", async (req, reply) => {
   const { id } = req.params as { id: string };
   const { effort } = (req.body ?? {}) as { effort?: string | null };
+  if (effort != null && typeof effort !== "string") return reply.code(400).send({ error: "effort must be a string or null" });
   try {
     return await setSessionEffort(id, effort ?? null);
   } catch (err) {
@@ -531,9 +537,11 @@ app.post("/api/sessions/:id/purge", async (req, reply) => {
 });
 
 app.post("/api/sessions/bulk-delete", async (req, reply) => {
-  const { ids } = (req.body ?? {}) as { ids?: string[] };
+  const { ids } = (req.body ?? {}) as { ids?: unknown };
   if (!Array.isArray(ids)) return reply.code(400).send({ error: "ids[] required" });
-  return { deleted: deleteSessions(ids) };
+  /* non-string entries are malformed, not stale — drop them before they hit
+     the sqlite binding (which would TypeError into a 500) */
+  return { deleted: deleteSessions(ids.filter((x): x is string => typeof x === "string")) };
 });
 
 app.delete("/api/sessions/:id", async (req, reply) => {
@@ -651,7 +659,10 @@ app.post("/api/todos/:id/share", async (req, reply) => {
   try {
     return { todo: await shareTodo(id, sessionId, note) };
   } catch (err) {
-    return reply.code(404).send({ error: String(err instanceof Error ? err.message : err) });
+    const msg = String(err instanceof Error ? err.message : err);
+    /* "no such …" → 404; a real-but-stopped session (or any other failure)
+       is a state conflict, not a missing resource */
+    return reply.code(msg.startsWith("no such") ? 404 : 409).send({ error: msg });
   }
 });
 

@@ -124,3 +124,28 @@ test("a rename works on an exited-but-listed shell (its ghost tab stays renamabl
     terminal.closeTerminal(t.id);
   }
 });
+
+test("a client whose send throws (vanished mid-write) does not fail the rename nor starve later clients", () => {
+  const t = terminal.createTerminal({ shell: "/bin/sh", cwd: "/tmp" });
+  try {
+    assert.equal(typeof terminal.renameTerminal, "function", "renameTerminal must exist (see rename test)");
+    /* a socket that dies after attach, then a live one — the out/exit frames
+       guard this same race with try/catch; the title frame must too */
+    let gone = false;
+    const dead = { send: () => { if (gone) throw new Error("socket closed"); }, on: () => {}, close: () => {} };
+    const { frames, socket } = fakeSocket();
+    assert.equal(terminal.attachTerminal(t.id, dead), true);
+    assert.equal(terminal.attachTerminal(t.id, socket), true);
+    gone = true;
+    frames.length = 0;
+
+    const r = terminal.renameTerminal!(t.id, "survived");
+    assert.equal(r.title, "survived", "the rename succeeds despite the dead client");
+    const titleFrame = frames.find((f) => f.type === "title");
+    assert.ok(titleFrame, "clients after the dead one still get the title frame");
+    assert.equal(titleFrame.title, "survived");
+    assert.equal(terminal.listTerminals().find((x) => x.id === t.id)?.title, "survived");
+  } finally {
+    terminal.closeTerminal(t.id);
+  }
+});

@@ -5,7 +5,7 @@ import { openPanel } from "@/lib/workspace";
 import { Icon, IconBtn } from "./ui";
 import { TabPicker } from "./TabPicker";
 import { cn } from "@/utils/cn";
-import { TAB_DRAG_MIME, isTabDrag, resolveTabDrop } from "@/lib/tabDnd";
+import { TAB_DRAG_MIME, dragLeftChip, isTabDrag, resolveTabDrop } from "@/lib/tabDnd";
 
 export function DesktopStrip() {
   const spaces = useDesktops((s) => s.spaces);
@@ -60,7 +60,11 @@ export function DesktopStrip() {
                 setDragOver(space.id);
               }
             }}
-            onDragLeave={() => setDragOver((d) => (d === space.id ? null : d))}
+            onDragLeave={(e) => {
+              /* dragleave bubbles off the chip's inner buttons — ignore it
+                 while the pointer is still inside the chip (no flicker) */
+              if (dragLeftChip(e.currentTarget, e.relatedTarget)) setDragOver((d) => (d === space.id ? null : d));
+            }}
             onDrop={(e) => {
               setDragOver(null);
               const decision = resolveTabDrop(e.dataTransfer.getData(TAB_DRAG_MIME), space.id, spaces);

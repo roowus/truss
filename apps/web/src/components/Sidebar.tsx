@@ -1,7 +1,7 @@
 import { useMemo, useState, useEffect, type ReactNode } from "react";
 import { store, useApp, useNow } from "@/lib/store";
 import { desktops, useDesktops } from "@/lib/desktops";
-import { ago, shortPath } from "@/lib/format";
+import { ago, daysLeftInTrash, shortPath } from "@/lib/format";
 import { openAgentShell, openDailyDriver, openFreeShell, openPanel, openSession } from "@/lib/workspace";
 import { HarnessMark, Icon, IconBtn, StateDot, TrussLogo, Spinner, STATE_META } from "./ui";
 import type { SessionMeta } from "@/lib/proto";
@@ -250,12 +250,16 @@ function SessionRow({ s, now, archived, trashView }: { s: SessionMeta; now: numb
     return () => clearTimeout(t);
   }, [confirm]);
   const dead = s.state === "closed" || s.state === "error";
+  /* trash rows don't open a chat panel: the session is not in the live list,
+     so the panel would only claim it no longer exists. Restore is the way
+     back in (issue #5). */
+  const openable = !trashView;
   return (
     <div
-      onClick={() => openSession(s.id)}
-      onDoubleClick={() => openDailyDriver(s.id)}
-      className={cn("group relative mx-0.5 flex items-center gap-2 px-2 t-session-row rounded-md cursor-pointer transition-colors", focused ? "bg-[var(--t-bg2)]" : "hover:bg-white/[0.03]")}
-      title={`${s.title}\n${s.harness}${s.model ? ` · ${s.model}` : ""}\n${shortPath(s.cwd)}\n${STATE_META[s.state]?.hint ?? s.state}${archived ? "\narchived — hidden from the main list" : ""}\n(double-click: chat + trajectory + context)`}
+      onClick={openable ? () => openSession(s.id) : undefined}
+      onDoubleClick={openable ? () => openDailyDriver(s.id) : undefined}
+      className={cn("group relative mx-0.5 flex items-center gap-2 px-2 t-session-row rounded-md transition-colors", openable ? "cursor-pointer" : "cursor-default", focused ? "bg-[var(--t-bg2)]" : "hover:bg-white/[0.03]")}
+      title={`${s.title}\n${s.harness}${s.model ? ` · ${s.model}` : ""}\n${shortPath(s.cwd)}\n${STATE_META[s.state]?.hint ?? s.state}${archived ? "\narchived — hidden from the main list" : ""}${openable ? "\n(double-click: chat + trajectory + context)" : ""}`}
     >
       {focused && <span className="absolute left-0 top-2 bottom-2 w-[2px] rounded-full bg-[var(--t-amber)]" />}
       <HarnessMark harness={s.harness} size={17} className={dead ? "opacity-45" : ""} />
@@ -264,7 +268,13 @@ function SessionRow({ s, now, archived, trashView }: { s: SessionMeta; now: numb
         <span className="shrink-0 inline-grid place-items-center w-4 h-4 rounded-full bg-[var(--t-amber)] text-[#1b1305] text-[9.5px] font-bold t-pulse-soft" title="Permission waiting">{pending}</span>
       )}
       <span className="group-hover:hidden flex items-center gap-1.5 shrink-0">
-        <span className="text-[10px] text-[var(--t-dim)] tabular-nums">{ago(+new Date(s.updated_at) || Date.parse(String(s.updated_at)), now)}</span>
+        {trashView && s.deleted_at != null ? (
+          <span className="text-[10px] text-[var(--t-dim)] tabular-nums" title="Days before this chat is purged">
+            {daysLeftInTrash(+new Date(s.deleted_at) || Date.parse(String(s.deleted_at)), now)}d left
+          </span>
+        ) : (
+          <span className="text-[10px] text-[var(--t-dim)] tabular-nums">{ago(+new Date(s.updated_at) || Date.parse(String(s.updated_at)), now)}</span>
+        )}
         <StateDot state={s.state} size={6} />
       </span>
       <span className="hidden group-hover:flex items-center shrink-0" onClick={(e) => e.stopPropagation()}>

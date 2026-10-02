@@ -47,6 +47,14 @@ export interface AdapterHandle {
   readonly sessionId: string;
   /** the harness's own session id, when known — persisted for resume */
   harnessRef?: string;
+  /**
+   * Set by sessions.boundedSpawn when the spawn budget gave up on this
+   * handle and it landed anyway. Its dispose must free local state but keep
+   * its hands off the harness session: on a resume that session is the one
+   * a retry is bringing back, and closing it there fails the retry's first
+   * turn.
+   */
+  abandoned?: boolean;
 }
 
 export interface HarnessAdapter {
@@ -57,6 +65,10 @@ export interface HarnessAdapter {
     streaming: boolean;
     /** can accept a new prompt while a turn is running (pi: followUp queue) */
     queueWhileRunning: boolean;
+    /** consumes SessionOpts.effort (issue #27). Absent or false means the
+       harness discards it, so the UI hides the effort selector rather than
+       offering a level that only restarts the session to no effect. */
+    effort?: boolean;
   };
   /** models this adapter can offer right now (for the composer model chip) */
   listModels(): Promise<{ provider: string; model: string; label: string }[]>;

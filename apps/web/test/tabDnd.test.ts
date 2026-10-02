@@ -41,6 +41,7 @@ interface TabDndModule {
   decodeTabDrag(raw: string | null | undefined): { from: string; panelId: string } | null;
   isTabDrag(types: readonly string[]): boolean;
   resolveTabDrop(raw: string | null | undefined, targetSpaceId: string, spaces: SpaceLike[]): DropDecision;
+  dragLeftChip(chip: Pick<Element, "contains"> | null, related: unknown): boolean;
 }
 
 async function load(): Promise<TabDndModule | null> {
@@ -102,4 +103,17 @@ test("resolveTabDrop: source workspace, archived targets, unknown targets, and j
   assert.equal(dnd.resolveTabDrop(raw, "desk-ghost", SPACES), null, "unknown workspace id");
   assert.equal(dnd.resolveTabDrop("garbage", "desk-2", SPACES), null, "undecodable payload");
   assert.equal(dnd.resolveTabDrop(null, "desk-2", SPACES), null, "no payload at all");
+});
+
+test("dragLeftChip: clears the chip highlight only when the pointer truly left the chip", async () => {
+  const dnd = await load();
+  assert.ok(dnd, "tabDnd module must exist (see MIME test)");
+  /* dragleave BUBBLES off the chip's inner buttons — relatedTarget still
+     inside the chip means the highlight must stay (no flicker) */
+  const inner = {};
+  const chip = { contains: (n: unknown) => n === inner };
+  assert.equal(dnd.dragLeftChip(chip, inner), false, "leaving into a child button is NOT leaving the chip");
+  assert.equal(dnd.dragLeftChip(chip, { unrelated: true }), true, "relatedTarget outside the chip clears the highlight");
+  assert.equal(dnd.dragLeftChip(chip, null), true, "null relatedTarget = the drag left the window");
+  assert.equal(dnd.dragLeftChip(null, inner), true, "no chip → always clear");
 });

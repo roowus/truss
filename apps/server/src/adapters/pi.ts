@@ -86,6 +86,9 @@ interface PiHandle extends AdapterHandle {
   /** set when the user aborts — suppresses the error pair pi emits afterwards */
   aborting: boolean;
   disposed: boolean;
+  /** the get_state handshake timeout — dispose() cancels it so the deferred
+      effort write can't fire into a dead pipe */
+  stateTimer: ReturnType<typeof setTimeout> | null;
 }
 
 /** Minimal push-based async queue feeding the events() iterable. */
@@ -148,7 +151,7 @@ export function readPiModels(): { provider: string; model: string; label: string
 
 export const piAdapter: HarnessAdapter = {
   id: "pi",
-  capabilities: { permissions: false, subagents: false, streaming: true, queueWhileRunning: true },
+  capabilities: { permissions: false, subagents: false, streaming: true, queueWhileRunning: true, effort: true },
 
   async listModels() {
     return readPiModels();
@@ -204,6 +207,7 @@ export const piAdapter: HarnessAdapter = {
       retryOf: new Map(),
       aborting: false,
       disposed: false,
+      stateTimer: null,
     };
 
     const emit = (ev: ProtoEvent) => h.queue.push(ev);
@@ -213,6 +217,10 @@ export const piAdapter: HarnessAdapter = {
       emit({ type: "session.state", sessionId: sid, state: "error", detail: String(err) });
       h.queue.close();
     });
+    /* a write into a dead stdin (pi exited, or dispose() already ended it)
+       emits EPIPE / ERR_STREAM_WRITE_AFTER_END on this stream — with no
+       listener that is an uncaught exception and takes the server down */
+    proc.stdin!.on("error", () => {});
     proc.on("exit", (code) => {
       if (!h.disposed) {
         /* settle the open turn BEFORE the error state (issue #29): an
@@ -276,13 +284,12 @@ export const piAdapter: HarnessAdapter = {
 
     /* learn pi's own session id for restart-resume (get_state is the rpc handshake for it) */
     const stateReqId = `truss-state-${Date.now()}`;
-    let stateTimer: ReturnType<typeof setTimeout>;
     const stateRec = new Promise<PiRecord | null>((res) => {
       h.pending.set(stateReqId, (rec) => {
-        clearTimeout(stateTimer); // answered — don't hold the loop open for 8s
+        clearTimeout(h.stateTimer!); // answered — don't hold the loop open for 8s
         res(rec);
       });
-      stateTimer = setTimeout(() => {
+      h.stateTimer = setTimeout(() => {
         h.pending.delete(stateReqId);
         res(null);
       }, 8000);
@@ -294,8 +301,10 @@ export const piAdapter: HarnessAdapter = {
         const sessionId = (rec?.data as { sessionId?: string } | undefined)?.sessionId;
         if (sessionId) h.harnessRef = sessionId;
         /* the session's reasoning effort, if set (issue #27) — pi levels
-           align with effort names (low/medium/high/max; "off" clears) */
-        if (opts.effort) {
+           align with effort names (low/medium/high/max; "off" clears).
+           Never after dispose(): stdin is already ended, and the write would
+           land in a dead pipe. */
+        if (!h.disposed && opts.effort) {
           proc.stdin!.write(JSON.stringify({ type: "set_thinking_level", level: opts.effort }) + "\n");
         }
       })
@@ -350,6 +359,7 @@ export const piAdapter: HarnessAdapter = {
   dispose(handle: AdapterHandle) {
     const h = handle as PiHandle;
     h.disposed = true;
+    if (h.stateTimer) clearTimeout(h.stateTimer);
     try {
       h.proc.stdin!.end(); // orderly shutdown per rpc.md
     } catch {

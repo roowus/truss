@@ -3,8 +3,8 @@ import assert from "node:assert/strict";
 
 /* SPEC-TESTS for a richer Monitor process table — https://github.com/roowus/truss/issues/10
    ("The monitor table should have more data — reference: monitor.rewis on
-   this device"). These FAIL on purpose today: they pin the contract a fix
-   must satisfy.
+   this device"). These pin the contract the issue demanded; the fix landed
+   with them, so they pass.
 
    The reference (fetched from https://monitor.rewis/api/stats on this device)
    shows per process: pid · user · st · cpu% · mem% · rss · thr · age ·
@@ -69,6 +69,16 @@ test("parsePasswd: uid → login name", () => {
   assert.equal(byUid.get(0), "root");
   assert.equal(byUid.get(1000), "ubuntu");
   assert.equal(byUid.get(999999), undefined, "unknown uid → caller falls back to the numeric id");
+});
+
+test("parsePasswd: a malformed uid field never becomes uid 0", () => {
+  /* Number("") is 0, so "svc:x::1000:…" would register svc for root's uid and
+     label every root-owned process "svc" in the user column */
+  const hostile = ["svc:x::1000:Svc:/srv:/bin/false", "root:x:0:0:root:/root:/bin/bash", "bin:x:1:1:bin:/bin:/usr/sbin/nologin"].join("\n");
+  const byUid: Map<number, string> = metrics.parsePasswd(hostile);
+  assert.equal(byUid.get(0), "root", "root keeps its own login");
+  assert.equal(byUid.get(1), "bin");
+  assert.equal(byUid.size, 2, "the malformed line registers nothing at all");
 });
 
 test("procAgeSec: uptime minus start ticks, hz-aware, floored at 0", () => {

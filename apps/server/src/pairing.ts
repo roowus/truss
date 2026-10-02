@@ -46,3 +46,24 @@ export function redeemPairing(code: string, now = Date.now()): PairingEntry | un
   if (p.expiresAt <= now) return undefined;
   return p.entry;
 }
+
+/* ── redeem rate limiting (issue #1: "the redeem endpoint must be
+   rate-limited; short codes have a small keyspace by design") — a per-client
+   attempt budget, so brute-forcing the ~887M keyspace costs real time ── */
+export const REDEEM_RATE_WINDOW_MS = 60_000;
+export const REDEEM_RATE_MAX = 10; // attempts per window per client
+
+const attempts = new Map<string, { count: number; resetAt: number }>();
+
+/** one attempt against the client's budget — false means answer 429 */
+export function redeemRateOk(client: string, now = Date.now()): boolean {
+  const a = attempts.get(client);
+  if (!a || a.resetAt <= now) {
+    /* lazy sweep, same pattern as mintPairing — no timers */
+    for (const [k, v] of attempts) if (v.resetAt <= now) attempts.delete(k);
+    attempts.set(client, { count: 1, resetAt: now + REDEEM_RATE_WINDOW_MS });
+    return true;
+  }
+  a.count += 1;
+  return a.count <= REDEEM_RATE_MAX;
+}

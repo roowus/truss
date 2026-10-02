@@ -37,6 +37,33 @@ export function ago(t: number, now = Date.now()) {
   if (s < 86400) return `${Math.floor(s / 3600)}h`;
   return `${Math.floor(s / 86400)}d`;
 }
+export const TRASH_RETENTION_DAYS = 30;
+/** days a trashed chat has left before it is purged (issue #5): the delete
+   stamp plus the retention window, never below 0 once the window has passed */
+export function daysLeftInTrash(deletedAt: number, now = Date.now(), retentionDays = TRASH_RETENTION_DAYS) {
+  return Math.max(0, Math.ceil((deletedAt + retentionDays * 86_400_000 - now) / 86_400_000));
+}
+/** countdown twin of ago(): future timestamps, past clamps to "now" */
+export function until(t: number, now = Date.now()) {
+  const s = Math.max(0, Math.round((t - now) / 1000));
+  if (s < 5) return "now";
+  if (s < 60) return `${s}s`;
+  if (s < 3600) return `${Math.floor(s / 60)}m`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h`;
+  return `${Math.floor(s / 86400)}d`;
+}
+/* Host/process uptime, read as "Xd Xh" / "Xh Xm" / "Xm". Takes an optional
+   number because a procs row can come from a node-agent still on an older
+   bundle that does not send ageSec. */
+export function fmtUptime(sec?: number) {
+  if (sec === undefined || sec === null || !Number.isFinite(sec)) return "—";
+  const d = Math.floor(sec / 86400);
+  const h = Math.floor((sec % 86400) / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  if (d > 0) return `${d}d ${h}h`;
+  if (h > 0) return `${h}h ${m}m`;
+  return `${m}m`;
+}
 export function fmtSize(n: number): string {
   const r = Math.round(n);
   if (r < 1024) return `${r} B`;
@@ -46,6 +73,13 @@ export function fmtSize(n: number): string {
   return `${(n / 1024 ** 4).toFixed(1)} TB`;
 }
 export const shortPath = (p: string) => p.replace(/^\/home\/[^/]+/, "~").replace(/^\/Users\/[^/]+/, "~");
+
+/** proc-table cell: user/memPct/threads/ageSec arrived with issue #10, so a
+   pre-upgrade node-agent (or the demo fixture) omits them — dash, not a
+   blank or NaN */
+export function procCell(v: string | number | undefined | null): string {
+  return v === undefined || v === null || v === "" ? "—" : String(v);
+}
 
 export function argSummary(args: unknown): string {
   if (args === null || args === undefined) return "";

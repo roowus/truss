@@ -84,7 +84,16 @@ export function renameTerminal(id: string, title: string): { id: string; title: 
   if (!clean) throw new Error("title must not be empty");
   if (clean.length > 64) throw new Error("title too long (64 characters max)");
   t.title = clean;
-  for (const c of t.clients) c.send(JSON.stringify({ type: "title", title: clean }));
+  const frame = JSON.stringify({ type: "title", title: clean });
+  for (const c of t.clients) {
+    try {
+      c.send(frame);
+    } catch {
+      /* client vanished mid-write — same guard as the out/exit frames: a
+         throw here must not fail a rename that already happened nor starve
+         the remaining clients of the title frame */
+    }
+  }
   return { id, title: clean };
 }
 

@@ -187,6 +187,34 @@ test("model switch over HTTP: live mode, row updated, transcript note, next turn
   assert.equal(bad.status, 400, "missing model rejected");
 });
 
+test("effort over HTTP: a non-string level is a 400, a real one restarts and persists (issue #27)", async () => {
+  const c = await api("/api/sessions", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ harness: "pi", cwd: "/tmp", title: "loop-effort", provider: "test-prov", model: "m-fast" }),
+  });
+  const id = c.body.session.id;
+
+  const bad = await api(`/api/sessions/${id}/effort`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ effort: 5 }),
+  });
+  assert.equal(bad.status, 400, "a non-string level is rejected at the route, not as a 409 TypeError from normalizeEffort");
+  assert.equal(bad.body.error, "effort must be a string or null");
+
+  const ok = await api(`/api/sessions/${id}/effort`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ effort: "high" }),
+  });
+  assert.equal(ok.status, 200);
+  assert.equal(ok.body.mode, "restart", "pi has no live effort hook, so a live session respawns");
+
+  const meta = await api(`/api/sessions/${id}`);
+  assert.equal(meta.body.session.effort, "high", "the row carries the new level");
+});
+
 test("closed session resumes on prompt with the stored harness ref (server-restart path)", async () => {
   const c = await api("/api/sessions", {
     method: "POST",
@@ -272,6 +300,54 @@ test("archive hides from the default list; hard delete removes row + events", as
   /* ghosts */
   assert.equal((await api(`/api/sessions/ghost/purge`, { method: "POST" })).status, 404);
   assert.equal((await api(`/api/sessions/ghost/restore`, { method: "POST" })).status, 404);
+  /* same for DELETE ?hard=1 — deleteSession throws on a ghost, the route says 404, not 500 */
+  const ghostDel = await api(`/api/sessions/ghost?hard=1`, { method: "DELETE" });
+  assert.equal(ghostDel.status, 404);
+  assert.ok(String(ghostDel.body.error).includes("no such session"));
+  /* plain DELETE only closes and stays idempotent, ghost or not */
+  assert.equal((await api(`/api/sessions/ghost`, { method: "DELETE" })).status, 200);
+});
+
+test("bulk delete over HTTP: counts, skips stale ids, trash-not-destroy (issue #4)", async () => {
+  const mk = async (title: string) => {
+    const r = await api("/api/sessions", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ harness: "pi", cwd: "/tmp", title }),
+    });
+    return r.body.session.id as string;
+  };
+  const a = await mk("bulk a");
+  const b = await mk("bulk b");
+  const keep = await mk("bulk keep");
+
+  const bad = await api("/api/sessions/bulk-delete", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({}) });
+  assert.equal(bad.status, 400, "ids[] required");
+
+  /* malformed entries (a client bug sending objects/numbers) are dropped,
+     not handed to the sqlite binding to TypeError into a 500 */
+  const c = await mk("bulk junk");
+  const junk = await api("/api/sessions/bulk-delete", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ ids: [c, 42, {}, null] }),
+  });
+  assert.equal(junk.status, 200, "junk entries don't 500 the batch");
+  assert.equal(junk.body.deleted, 1, "only the real id counted");
+
+  const r = await api("/api/sessions/bulk-delete", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ ids: [a, b, "ghost", a] }),
+  });
+  assert.equal(r.status, 200);
+  assert.equal(r.body.deleted, 2, "ghost skipped, dup counts once");
+
+  const trash = await api("/api/trash");
+  assert.ok(trash.body.sessions.some((t: Ev) => t.id === a) && trash.body.sessions.some((t: Ev) => t.id === b), "both in trash");
+  const k = await api(`/api/sessions/${keep}`);
+  assert.equal(k.body.session.deleted_at, null, "outside the batch: untouched");
+  assert.ok((await api(`/api/sessions/${a}/events`)).body.events.length > 0, "history survives the bulk move");
 });
 
 test("bulk delete over HTTP: counts, skips stale ids, trash-not-destroy (issue #4)", async () => {

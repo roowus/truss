@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { store, useApp } from "@/lib/store";
-import { ago } from "@/lib/format";
+import { ago, until } from "@/lib/format";
 import { defaultTailscaleReturn, peerAlreadyAdded } from "@/lib/device";
 import { buildInstallCommand } from "@/lib/installCommand";
 import type { TailscalePeer } from "@/lib/proto";
@@ -276,7 +276,7 @@ export function AddHostWizard({ onClose }: { onClose: () => void }) {
             {pairCmd && (
               <div className="rounded-lg border border-[var(--t-line)] bg-[var(--t-bg0)] px-3 py-2">
                 <div className="font-mono text-[12px] text-[var(--t-fg)] break-all select-all">{pairCmd.command}</div>
-                <div className="mt-0.5 text-[10px] text-[var(--t-dim)]">code <span className="font-mono text-[var(--t-amber)]">{pairCmd.code}</span> · single-use · expires {ago(pairCmd.expiresAt)} — after that the code is dead, mint another</div>
+                <div className="mt-0.5 text-[10px] text-[var(--t-dim)]">code <span className="font-mono text-[var(--t-amber)]">{pairCmd.code}</span> · single-use · expires in {until(pairCmd.expiresAt)} — after that the code is dead, mint another</div>
               </div>
             )}
             <div className="flex justify-end gap-2 pt-1">

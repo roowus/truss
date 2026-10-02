@@ -8,11 +8,27 @@ import {
   fmtMs,
   fmtTokens,
   fmtCost,
+  fmtUptime,
   ago,
+  daysLeftInTrash,
+  TRASH_RETENTION_DAYS,
+  until,
   fmtSize,
   shortPath,
   argSummary,
+  procCell,
 } from "../src/lib/format";
+
+test("procCell: missing columns from a pre-upgrade node-agent render a dash, not a blank or NaN", () => {
+  /* issue #10 added user/memPct/threads/ageSec; older agents and the demo
+     fixture omit them — the Monitor table must stay readable */
+  assert.equal(procCell(undefined), "—");
+  assert.equal(procCell(null), "—");
+  assert.equal(procCell(""), "—");
+  assert.equal(procCell(0), "0", "zero is real data, not missing");
+  assert.equal(procCell(3.5), "3.5");
+  assert.equal(procCell("root"), "root");
+});
 
 test("baseHarness / hostOf split id@host", () => {
   assert.equal(baseHarness("pi"), "pi");
@@ -70,6 +86,17 @@ test("fmtCost: dash, zero, tiny, normal", () => {
   assert.equal(fmtCost(25), "$25.00");
 });
 
+test("fmtUptime: dash for an absent age, then m / h+m / d+h", () => {
+  // a procs row can come from a node-agent still on an older bundle, which
+  // does not send ageSec — it must degrade to the placeholder, not "NaNm"
+  assert.equal(fmtUptime(undefined), "—");
+  assert.equal(fmtUptime(NaN), "—");
+  assert.equal(fmtUptime(0), "0m");
+  assert.equal(fmtUptime(59), "0m"); // sub-minute rounds down to a whole minute, as before
+  assert.equal(fmtUptime(11_100), "3h 5m");
+  assert.equal(fmtUptime(90_061), "1d 1h");
+});
+
 test("ago: now, s, m, h, d, future clamps to now", () => {
   const now = 1_700_000_000_000;
   assert.equal(ago(now, now), "now");
@@ -81,6 +108,31 @@ test("ago: now, s, m, h, d, future clamps to now", () => {
   assert.equal(ago(now - 2 * 3_600_000, now), "2h");
   assert.equal(ago(now - 2 * 86_400_000, now), "2d");
   assert.equal(ago(now + 60_000, now), "now"); // future timestamps clamp via Math.max(0, ...)
+});
+
+test("daysLeftInTrash: the purge countdown a trash row shows (issue #5 asks for days-remaining, not time-since-delete)", () => {
+  const now = 1_700_000_000_000;
+  const day = 86_400_000;
+  assert.equal(TRASH_RETENTION_DAYS, 30, "same window as the server's TRASH_RETENTION_MS");
+  assert.equal(daysLeftInTrash(now, now), 30, "just deleted: the full window left");
+  assert.equal(daysLeftInTrash(now - day, now), 29);
+  assert.equal(daysLeftInTrash(now - 29 * day, now), 1);
+  assert.equal(daysLeftInTrash(now - 29 * day - 3_600_000, now), 1, "23h left still reads 1 — the last day never rounds to 0 early");
+  assert.equal(daysLeftInTrash(now - 30 * day, now), 0, "at the window it is purged");
+  assert.equal(daysLeftInTrash(now - 45 * day, now), 0, "long past the window clamps at 0");
+});
+
+test("until: countdown twin of ago — future reads as time LEFT, past clamps to now", () => {
+  const now = 1_700_000_000_000;
+  /* the pairing-code bug: expiresAt is 10 minutes AHEAD, and ago() clamped
+     that to "now" — the caption always read "expires now" */
+  assert.equal(until(now + 10 * 60_000, now), "10m");
+  assert.equal(until(now + 30_000, now), "30s");
+  assert.equal(until(now + 4_400, now), "now");
+  assert.equal(until(now + 2 * 3_600_000, now), "2h");
+  assert.equal(until(now + 2 * 86_400_000, now), "2d");
+  assert.equal(until(now, now), "now");
+  assert.equal(until(now - 60_000, now), "now"); // past timestamps clamp via Math.max(0, ...)
 });
 
 test("fmtSize: B rounding, KB decimals, MB/GB/TB boundaries", () => {
