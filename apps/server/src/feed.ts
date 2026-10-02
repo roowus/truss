@@ -118,12 +118,18 @@ export function postFeed(input: {
     const dup = store.get<FeedRow>(`SELECT * FROM feed_items WHERE dedupe_key = ?`, input.dedupeKey);
     if (dup) return { item: camel(dup), created: false };
   }
+  /* issue #36, second half: the route guards the MCP caller, but postFeed is
+     also reachable from internal callers — a stale/typo'd session id must not
+     land a ghost card attributed to a nonexistent session. Coalesce to null
+     (unattributed) instead of throwing: a system card (crash, context) is
+     still worth filing even if its session just went away. */
+  const sessionId = input.sessionId && store.getSession(input.sessionId) ? input.sessionId : null;
   const now = Date.now();
   const id = randomUUID().slice(0, 8);
   store.run(
     `INSERT INTO feed_items (id, type, session_id, title, body, importance, data, state, shared_with, dedupe_key, created_at, updated_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    id, input.type, input.sessionId ?? null, input.title, input.body ?? "",
+    id, input.type, sessionId, input.title, input.body ?? "",
     input.importance ?? "normal", JSON.stringify(input.data ?? {}),
     input.state ?? "unread", JSON.stringify(input.sharedWith ?? []),
     input.dedupeKey ?? null, now, now,
