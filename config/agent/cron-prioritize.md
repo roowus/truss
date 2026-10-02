@@ -31,7 +31,13 @@ issue right now, and if so, which one. Cheap and deterministic: no wandering.
    config/agent/work-session.md), on a new branch `fix/<n>-<slug>` or
    `feat/<n>-<slug>`. Update the project board item to in-progress:
    `gh project item-edit ...` (see docs/pr-audit.md for the PAT setup).
-6. Post one line to the feed: which issue started and why it won.
+6. Record the mapping so the developer can watch the worker: append
+   `{"issue": <n>, "session": "<the work session's id>", "since": "<iso>",
+   "state": "working"}` to `~/.local/state/truss-sessions.json` (a JSON
+   array; create if missing). The work session keeps its own entry current
+   (config/agent/work-session.md phase 1 step 0).
+7. Post one line to the feed: which issue started, why it won, and the
+   session id that owns it.
 
 If nothing qualifies, do nothing and end the turn. A quiet pass is a
 success, not a failure.

@@ -28,6 +28,12 @@ When you are handed a PR you did not make (the developer commented
 
 ## Phase 1 — implement
 
+0. **Make yourself visible first.** Set your session title to
+   `work: PR #<n> — <slug>` so the developer can spot you in the DSH session
+   list, and note your own id (`echo $DSH_SESSION_ID`) — you will publish it
+   with the PR in phase 2. The cron that started you records the mapping in
+   `~/.local/state/truss-sessions.json`; if it didn't, append your own entry:
+   `{"pr": <n>, "session": "<id>", "since": "<iso>", "state": "working"}`.
 1. Read the issue fully, including its suggested tests.
 2. Branch: `git fetch origin main && git checkout -b fix/<n>-<slug>` (or
    feat/) from `origin/main` — NEVER from another PR's branch. Cumulative
@@ -49,9 +55,10 @@ When you are handed a PR you did not make (the developer commented
 `gh pr create` with:
 - Title: conventional-commit format, ≤70 chars, what the PR does now.
 - Body: 1-3 plain sentences first (what was broken, what the PR does),
-  then `Fixes #<n>`, then details. Include this marker line verbatim at the
-  end so the local watcher knows this PR has a live session:
-  `agent-session: <a short name for this session>`
+  then `Fixes #<n>`, then details. End with the visibility block, verbatim:
+  `agent-session: <your $DSH_SESSION_ID>` — the developer watches you in the
+  DSH session list under your `work: PR #<n>` title, and the watcher routes
+  your audit reports by this id.
 - Apply the `audit` label: `gh pr edit <pr> --add-label audit`.
   The label is the audit switch: while it is applied, every push re-audits.
 - Add the PR to the project board, linked to the issue
