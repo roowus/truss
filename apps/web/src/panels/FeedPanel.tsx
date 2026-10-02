@@ -74,8 +74,8 @@ export function FeedPanel(_props: IDockviewPanelProps) {
             <Icon name="search" size={10} className="text-[var(--t-dim)]" />
             <input value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => e.key === "Escape" && setQ("")} placeholder="search" className="w-24 bg-transparent text-[11.5px] outline-none text-[var(--t-fg)] placeholder:text-[var(--t-dim)]" />
           </div>
-          <Select width={118} ariaLabel="Sort" value={sort} onChange={(v) => setSort(v as never)} options={[{ value: "recent", label: "most recent" }, { value: "importance", label: "importance" }]} />
-          <Select width={104} ariaLabel="State" value={stateFilter} onChange={(v) => setStateFilter(v as never)} options={[
+          <Select size="bar" width={118} ariaLabel="Sort" value={sort} onChange={(v) => setSort(v as never)} options={[{ value: "recent", label: "most recent" }, { value: "importance", label: "importance" }]} />
+          <Select size="bar" width={104} ariaLabel="State" value={stateFilter} onChange={(v) => setStateFilter(v as never)} options={[
             { value: "inbox", label: "inbox" }, { value: "unread", label: "unread" }, { value: "saved", label: "saved" },
             { value: "done", label: "done" }, { value: "dismissed", label: "dismissed" }, { value: "all", label: "all" },
           ]} />

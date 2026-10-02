@@ -138,6 +138,11 @@ body {
 }
 .t-grid-bg { background-blend-mode: normal; }
 
+/* layered: component styles must lose to width/height utilities. Unlayered
+   t-input used to silently win over every width or height utility a caller
+   set — the model picker at 170px became 100% and several form widths were
+   dead. */
+@layer components {
 .t-input {
   width: 100%;
   height: 34px;
@@ -151,6 +156,7 @@ body {
 }
 .t-input:focus { border-color: var(--t-mute); }
 select.t-input { appearance: auto; }
+}
 
 /* ---------------- chat typography ---------------- */
 .t-md p { margin: 0 0 0.6em; }

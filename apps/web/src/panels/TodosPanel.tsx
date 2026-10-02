@@ -117,7 +117,7 @@ export function TodosPanel(_props: IDockviewPanelProps) {
           <input value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => e.key === "Escape" && setQ("")} placeholder="search" className="w-28 bg-transparent text-[11.5px] outline-none text-[var(--t-fg)] placeholder:text-[var(--t-dim)]" />
         </div>
         {view === "list" && (
-          <Select width={118} ariaLabel="Group by" value={groupBy} onChange={(v) => setGroupBy(v as GroupBy)} options={[
+          <Select size="bar" width={118} ariaLabel="Group by" value={groupBy} onChange={(v) => setGroupBy(v as GroupBy)} options={[
             { value: "project", label: "by project" }, { value: "folder", label: "by folder" }, { value: "agent", label: "by agent" }, { value: "label", label: "by label" }, { value: "none", label: "flat" },
           ]} />
         )}

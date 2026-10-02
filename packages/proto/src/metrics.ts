@@ -18,7 +18,17 @@ export interface HostMetrics {
   disks: { device: string; mount: string; fs: string; total: number; used: number; pct: number }[];
   net: { iface: string; rxBps: number; txBps: number }[];
   temps: { label: string; c: number }[];
-  procs: { pid: number; cmd: string; cpu: number; rssMb: number; state: string }[];
+  procs: {
+    pid: number;
+    cmd: string; // full cmdline (args included); kernel threads show [comm]
+    cpu: number;
+    rssMb: number;
+    state: string;
+    user: string; // login name (uid resolved via /etc/passwd)
+    memPct: number; // 1-dp percent of total memory
+    threads: number;
+    ageSec: number;
+  }[];
 }
 
 const read = (p: string) => {
@@ -141,26 +151,119 @@ function temps(): HostMetrics["temps"] {
   return out;
 }
 
-interface ProcSnap { pid: number; cmd: string; state: string; rss: number; busy: number }
+interface ProcSnap {
+  pid: number;
+  cmd: string;
+  state: string;
+  rss: number;
+  busy: number;
+  user: string;
+  threads: number;
+  startTicks: number;
+}
+
+/* ── pure parsers (unit-tested with fixtures — see test/metrics-procs) ── */
+
+/** /proc/<pid>/stat — comm survives spaces/parens (split at the LAST close
+   paren); field numbers per proc(5): state=3, utime=14, stime=15,
+   num_threads=20, starttime=22 */
+export function parseProcPidStat(line: string): {
+  pid: number;
+  comm: string;
+  state: string;
+  utimeTicks: number;
+  stimeTicks: number;
+  threads: number;
+  startTicks: number;
+} | null {
+  const open = line.indexOf("(");
+  const close = line.lastIndexOf(")");
+  if (open === -1 || close === -1 || close < open) return null;
+  const pid = Number(line.slice(0, open).trim());
+  if (!Number.isInteger(pid)) return null;
+  const comm = line.slice(open + 1, close);
+  const f = line.slice(close + 2).split(" "); // f[0] = field 3 (state)
+  return {
+    pid,
+    comm,
+    state: f[0] ?? "?",
+    utimeTicks: Number(f[11] ?? 0),
+    stimeTicks: Number(f[12] ?? 0),
+    threads: Number(f[17] ?? 0),
+    startTicks: Number(f[19] ?? 0),
+  };
+}
+
+/** /proc/<pid>/cmdline is NUL-joined with a trailing NUL; empty for kernel threads */
+export function parseProcCmdline(raw: string): string | null {
+  const parts = raw.split("\0").filter((x) => x.length > 0);
+  return parts.length ? parts.join(" ") : null;
+}
+
+/** /etc/passwd text → uid → login */
+export function parsePasswd(text: string): Map<number, string> {
+  const out = new Map<number, string>();
+  for (const ln of text.split("\n")) {
+    const parts = ln.split(":");
+    if (parts.length < 3) continue;
+    const uid = Number(parts[2]);
+    if (Number.isInteger(uid)) out.set(uid, parts[0]);
+  }
+  return out;
+}
+
+/** process age from its starttime ticks vs host uptime, floored at 0 */
+export function procAgeSec(startTicks: number, uptimeSec: number, hz: number): number {
+  return Math.max(0, Math.floor(uptimeSec - startTicks / hz));
+}
+
+/** rss as a 1-dp percent of total memory; total 0 → 0 (no divide-by-zero) */
+export function procMemPct(rssBytes: number, totalBytes: number): number {
+  if (totalBytes <= 0) return 0;
+  return Math.round((rssBytes / totalBytes) * 1000) / 10;
+}
+
+/* clock ticks/sec — getconf CLK_TCK once (basically always 100 on Linux) */
+let _hz = 0;
+function clockTicks(): number {
+  if (_hz) return _hz;
+  try {
+    _hz = Number(execFileSync("getconf", ["CLK_TCK"], { timeout: 2000 }).toString().trim()) || 100;
+  } catch {
+    _hz = 100;
+  }
+  return _hz;
+}
+
+/* uid → login, read once per process (the collector module is per-process) */
+let _passwd: Map<number, string> | null = null;
+function passwdMap(): Map<number, string> {
+  if (!_passwd) _passwd = parsePasswd(read("/etc/passwd"));
+  return _passwd;
+}
 
 function procSnap(): { map: Map<number, ProcSnap>; totalBusy: number; totalAll: number } {
   const map = new Map<number, ProcSnap>();
   const { total } = cpuTimes();
+  const passwd = passwdMap();
   for (const d of readdirSync("/proc")) {
     if (!/^\d+$/.test(d)) continue;
     try {
-      const stat = read(`/proc/${d}/stat`);
-      const close = stat.lastIndexOf(")");
-      const comm = stat.slice(stat.lastIndexOf("(") + 1, close);
-      const f = stat.slice(close + 2).split(" ");
+      const st = parseProcPidStat(read(`/proc/${d}/stat`));
+      if (!st) continue;
       const status = read(`/proc/${d}/status`);
       const rss = Number(status.match(/VmRSS:\s+(\d+)/)?.[1] ?? 0) * 1024;
-      map.set(Number(d), {
-        pid: Number(d),
-        cmd: comm,
-        state: f[0],
+      const uid = Number(status.match(/Uid:\s+(\d+)/)?.[1] ?? 0);
+      const full = parseProcCmdline(read(`/proc/${d}/cmdline`));
+      map.set(st.pid, {
+        pid: st.pid,
+        cmd: full ?? `[${st.comm}]`, // kernel thread fallback
+        state: st.state,
         rss,
-        busy: Number(f[11]) + Number(f[12]), // utime + stime (clock ticks)
+        busy: st.utimeTicks + st.stimeTicks,
+        user: passwd.get(uid) ?? String(uid),
+        threads: st.threads,
+        startTicks: st.startTicks,
       });
     } catch {
       /* raced exit */
@@ -192,11 +295,24 @@ export async function collectMetrics(): Promise<HostMetrics> {
 
   const procsNow = procSnap();
   const ticksDelta = Math.max(1, allOf(cpu.total) - (prevProcs?.totalAll ?? allOf(cpu.total)));
+  const memTotal = meminfo().MemTotal ?? 0;
+  const uptimeNow = Number(read("/proc/uptime").split(" ")[0] ?? 0);
+  const hz = clockTicks();
   const top: HostMetrics["procs"] = [];
   for (const [pid, p] of procsNow.map) {
     const prev = prevProcs?.map.get(pid);
     const cpuPct = prev ? Math.round(((p.busy - prev.busy) / ticksDelta) * 1000) / 10 : 0;
-    top.push({ pid, cmd: p.cmd, cpu: cpuPct, rssMb: Math.round(p.rss / 1048576), state: p.state });
+    top.push({
+      pid,
+      cmd: p.cmd,
+      cpu: cpuPct,
+      rssMb: Math.round(p.rss / 1048576),
+      state: p.state,
+      user: p.user,
+      memPct: procMemPct(p.rss, memTotal),
+      threads: p.threads,
+      ageSec: procAgeSec(p.startTicks, uptimeNow, hz),
+    });
   }
   top.sort((a, b) => b.cpu - a.cpu || b.rssMb - a.rssMb);
 
@@ -236,6 +352,6 @@ export async function collectMetrics(): Promise<HostMetrics> {
     disks: disks(),
     net: net.list,
     temps: temps(),
-    procs: top.slice(0, 10),
+    procs: top.slice(0, 25), // the reference monitor's top-25
   };
 }

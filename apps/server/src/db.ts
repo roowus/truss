@@ -50,6 +50,11 @@ if (!sessionCols.some((c) => c.name === "archived")) {
 if (!sessionCols.some((c) => c.name === "provider")) {
   db.exec(`ALTER TABLE sessions ADD COLUMN provider TEXT`);
 }
+/* migration: deleted_at = the 30-day trash stamp (issue #5). Row + event
+   log survive a delete; purge is the only true delete. */
+if (!sessionCols.some((c) => c.name === "deleted_at")) {
+  db.exec(`ALTER TABLE sessions ADD COLUMN deleted_at INTEGER`);
+}
 
 /* server-level key-value store (layout persistence, future settings) */
 db.exec(`
@@ -73,6 +78,7 @@ export interface SessionRow {
   updated_at: number;
   harness_ref: string | null;
   archived: number;
+  deleted_at: number | null;
 }
 
 const insertSession = db.prepare(`
@@ -106,9 +112,18 @@ const insertEvent = db.prepare(`
   INSERT INTO events (session_id, type, payload, at) VALUES (@session_id, @type, @payload, @at)
 `);
 
-/* closed sessions stay listed — their transcripts remain replayable history */
+/* closed sessions stay listed — their transcripts remain replayable history;
+   trashed ones leave the list until restored (issue #5) */
 const listSessionsStmt = db.prepare(`
-  SELECT * FROM sessions ORDER BY updated_at DESC
+  SELECT * FROM sessions WHERE deleted_at IS NULL ORDER BY updated_at DESC
+`);
+
+const listDeletedSessionsStmt = db.prepare(`
+  SELECT * FROM sessions WHERE deleted_at IS NOT NULL ORDER BY deleted_at DESC
+`);
+
+const knownHarnessRefsStmt = db.prepare(`
+  SELECT harness_ref FROM sessions WHERE harness_ref IS NOT NULL
 `);
 
 const getSessionStmt = db.prepare(`SELECT * FROM sessions WHERE id = ?`);
@@ -240,6 +255,21 @@ export const store = {
 
   listSessions(): SessionRow[] {
     return listSessionsStmt.all() as SessionRow[];
+  },
+
+  /** the 30-day trash (issue #5): stamped rows, newest first */
+  listDeletedSessions(): SessionRow[] {
+    return listDeletedSessionsStmt.all() as SessionRow[];
+  },
+
+  /** every harness_ref ever seen, trashed rows included — import dedupe must
+     not lose a ref just because its session is in the trash (issue #5) */
+  knownHarnessRefs(): string[] {
+    return (knownHarnessRefsStmt.all() as { harness_ref: string }[]).map((r) => r.harness_ref);
+  },
+
+  setDeletedAt(id: string, at: number | null) {
+    db.prepare(`UPDATE sessions SET deleted_at = ?, updated_at = ? WHERE id = ?`).run(at, Date.now(), id);
   },
 
   /** Persist one proto event. Returns the assigned rowid (monotonic per session). */

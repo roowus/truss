@@ -4,6 +4,7 @@ import { store, useApp, useNow, capsOf, type Msg, type ToolRun, type Perm, type 
 import { argSummary, fmtMs, harnessStyle, shortPath, baseHarness } from "@/lib/format";
 import { deviceLabel } from "@/lib/device";
 import { buildModelOptions, modelValue, splitModelValue } from "@/lib/models";
+import { planHeaderFit } from "@/lib/headerFit";
 import { openPanel, openAgentShell, renameSessionPanels } from "@/lib/workspace";
 import { Btn, Empty, HarnessMark, Icon, IconBtn, Select, Spinner, StateDot, STATE_META } from "@/components/ui";
 import { Markdown } from "./Markdown";
@@ -71,6 +72,15 @@ function ChatHeader({ id }: { id: string }) {
     .filter(Boolean)
     .join("\n");
 
+  /* overflow planning (issue #3): the right cluster must never get clipped
+     by the pane edge. The planner (lib/headerFit) collapses rightmost-first
+     into the ⋯ menu; Stop and the menu trigger never collapse. Measured:
+     header width via ResizeObserver, left cluster via a ref, the title gets
+     a 56px reservation (it truncates beyond that). */
+  const headerRef = useRef<HTMLDivElement>(null);
+  const leftRef = useRef<HTMLSpanElement>(null);
+  const [plan, setPlan] = useState<{ visible: string[]; overflow: string[] }>({ visible: ["model", "stop", "trajectory", "more"], overflow: [] });
+
   /* which device this session runs on: bare harness id = this server,
      harness@hostId = that remote host (labeled from the registry) */
   const hostId = meta.harness.includes("@") ? meta.harness.split("@")[1] : undefined;
@@ -85,24 +95,48 @@ function ChatHeader({ id }: { id: string }) {
     if (v && v !== currentValue) void store.switchModel(id, model, provider).catch(() => {});
   };
 
+  const hasModel = modelOptions.length > 0;
+  useEffect(() => {
+    const el = headerRef.current;
+    if (!el) return;
+    const items = [
+      ...(hasModel ? [{ id: "model", width: 170 }] : []),
+      ...(busy ? [{ id: "stop", width: 58, essential: true }] : []),
+      { id: "trajectory", width: 28 },
+      { id: "more", width: 28, essential: true },
+    ];
+    const measure = () => {
+      const leftW = leftRef.current?.getBoundingClientRect().width ?? 200;
+      const available = el.clientWidth - leftW - 56 /* title reservation */ - 24 /* paddings */;
+      setPlan(planHeaderFit(items, Math.max(0, available), { triggerWidth: 28, gap: 6 }));
+    };
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    if (leftRef.current) ro.observe(leftRef.current);
+    measure();
+    return () => ro.disconnect();
+  }, [hasModel, busy, device, meta.state]);
+
   return (
-    <div className="relative shrink-0 flex items-center gap-2 px-3 h-10 border-b border-[var(--t-line)]">
-      <HarnessMark harness={meta.harness} size={18} />
-      <span className="min-w-0 truncate text-[13px] font-medium text-[var(--t-fg)]" title={tooltip}>{meta.title}</span>
-      <span
-        className="shrink-0 inline-flex items-center gap-1 h-5 px-1.5 rounded border border-[var(--t-line)] text-[10px] font-mono text-[var(--t-mute)]"
-        title={`session runs on ${device}`}
-      >
-        <Icon name="host" size={10} className={hostId ? "text-[var(--t-teal)]" : "text-[var(--t-dim)]"} />
-        {device}
+    <div ref={headerRef} className="relative shrink-0 flex items-center gap-2 px-3 h-10 border-b border-[var(--t-line)]">
+      <span ref={leftRef} className="flex items-center gap-2 shrink-0">
+        <HarnessMark harness={meta.harness} size={18} />
+        <span
+          className="shrink-0 inline-flex items-center gap-1 h-5 px-1.5 rounded border border-[var(--t-line)] text-[10px] font-mono text-[var(--t-mute)]"
+          title={`session runs on ${device}`}
+        >
+          <Icon name="host" size={10} className={hostId ? "text-[var(--t-teal)]" : "text-[var(--t-dim)]"} />
+          {device}
+        </span>
+        <span className="flex items-center gap-1.5 shrink-0" title={STATE_META[meta.state]?.hint}>
+          <StateDot state={meta.state} size={6} />
+          {abnormal && <span className="text-[11px] text-[var(--t-mute)]">{STATE_META[meta.state].label}</span>}
+          {(busy || meta.state === "spawning") && since && <span className="text-[11px] text-[var(--t-amber)] tabular-nums">{fmtMs(now - since)}</span>}
+        </span>
       </span>
-      <span className="flex items-center gap-1.5 shrink-0" title={STATE_META[meta.state]?.hint}>
-        <StateDot state={meta.state} size={6} />
-        {abnormal && <span className="text-[11px] text-[var(--t-mute)]">{STATE_META[meta.state].label}</span>}
-        {(busy || meta.state === "spawning") && since && <span className="text-[11px] text-[var(--t-amber)] tabular-nums">{fmtMs(now - since)}</span>}
-      </span>
-      <div className="ml-auto flex items-center gap-1.5">
-        {modelOptions.length > 0 && (
+      <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-[var(--t-fg)]" title={tooltip}>{meta.title}</span>
+      <div className="ml-auto flex items-center gap-1.5 shrink-0">
+        {hasModel && plan.visible.includes("model") && (
           <Select
             value={currentValue}
             options={modelOptions}
@@ -114,13 +148,33 @@ function ChatHeader({ id }: { id: string }) {
         {busy && (
           <Btn variant="danger" size="xs" icon="stop" onClick={() => store.interrupt(id)} title="Interrupt (Esc in composer)">Stop</Btn>
         )}
-        <IconBtn icon="wave" label="Trajectory" onClick={() => openPanel("trajectory", { sessionId: id })} />
+        {plan.visible.includes("trajectory") && (
+          <IconBtn icon="wave" label="Trajectory" onClick={() => openPanel("trajectory", { sessionId: id })} />
+        )}
         <IconBtn icon="dots" label="More panels" active={menu} onClick={() => setMenu((m) => !m)} />
       </div>
       {menu && (
         <>
           <div className="fixed inset-0 z-40" onClick={() => setMenu(false)} />
           <div className="absolute right-2 top-[42px] z-50 w-52 rounded-lg bg-[var(--t-bg2)] border border-[var(--t-line2)] shadow-2xl py-1 t-pop">
+            {plan.overflow.includes("model") && (
+              <div className="px-2 py-1.5" onClick={(e) => e.stopPropagation()}>
+                <Select
+                  value={currentValue}
+                  options={modelOptions}
+                  onChange={(v) => { onModelPick(v); }}
+                  ariaLabel="Switch model"
+                  className="w-full !h-7 !text-[11.5px] font-mono"
+                />
+              </div>
+            )}
+            {plan.overflow.includes("trajectory") && (
+              <button onClick={() => { setMenu(false); openPanel("trajectory", { sessionId: id }); }} className="w-full flex items-center gap-2.5 px-3 h-8 text-left text-[12.5px] text-[var(--t-fg2)] hover:bg-white/[0.05]">
+                <Icon name="wave" size={13} className="text-[var(--t-mute)]" />
+                Trajectory
+              </button>
+            )}
+            {plan.overflow.length > 0 && <div className="my-1 border-t border-[var(--t-line)]" />}
             {[
               { icon: "gauge", label: "Context usage", run: () => openPanel("context", { sessionId: id }) },
               ...(caps?.subagents ? [{ icon: "tree", label: "Subagent team", run: () => openPanel("team", { sessionId: id }) }] : []),

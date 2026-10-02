@@ -11,6 +11,7 @@ import {
   sendPrompt,
   setProjectArchived,
   setSessionArchived,
+  purgeSession,
 } from "./sessions.js";
 import { closeTerminal, createTerminal, listTerminals } from "./terminal.js";
 import { listAgents } from "./remote.js";
@@ -128,7 +129,7 @@ const TOOLS = [
   },
   {
     name: "delete_session",
-    description: "Delete a session. hard=true also deletes its transcript history.",
+    description: "Move a session to the trash (recoverable for 30 days). hard=true purges it forever, transcript included — that cannot be undone.",
     inputSchema: {
       type: "object",
       properties: { id: { type: "string" }, hard: { type: "boolean" } },
@@ -403,9 +404,15 @@ async function callTool(name: string, a: Record<string, any>, callerId?: string)
     case "close_session":
       closeSession(String(a.id));
       return { ok: true };
-    case "delete_session":
+    case "delete_session": {
+      /* honor the hard flag (it was ignored — everything hard-deleted) */
+      if (a.hard === true) {
+        purgeSession(String(a.id));
+        return { ok: true, purged: true };
+      }
       deleteSession(String(a.id));
-      return { ok: true, hard: true };
+      return { ok: true, trashed: true, recoverableForDays: 30 };
+    }
     case "send_prompt":
       await sendPrompt(String(a.id), String(a.text ?? ""));
       return { ok: true };

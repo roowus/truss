@@ -89,6 +89,22 @@ export function reconcileOnBoot() {
       settleOrphanedPerms(s.id);
     }
   }
+  /* trash sweep at boot + daily (issue #5): anything past the retention
+     window is really, finally gone */
+  try {
+    const purged = purgeExpiredTrash();
+    if (purged.length) console.log(`[trash] purged ${purged.length} expired session(s)`);
+  } catch (err) {
+    console.error("[trash] boot sweep failed", err);
+  }
+  const daily = setInterval(() => {
+    try {
+      purgeExpiredTrash();
+    } catch (err) {
+      console.error("[trash] daily sweep failed", err);
+    }
+  }, 24 * 60 * 60 * 1000);
+  daily.unref();
 }
 
 /** cancel every unanswered permission card — a dead harness can't be answered */
@@ -464,17 +480,57 @@ export function setProjectArchived(project: string, archived: boolean): number {
   return rows.length;
 }
 
-/** close (if live) + delete the row and its entire event log */
+/** exactly 30 days — the number in the feature's name (issue #5) */
+export const TRASH_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+
+/**
+ * Delete is a 30-day TRASH move, not destruction: the live process is
+ * disposed exactly as before, the row keeps its full event log with a
+ * deleted_at stamp, and it leaves the main list. Restore with
+ * restoreSession; only purgeSession / purgeExpiredTrash truly destroy.
+ */
 export function deleteSession(sessionId: string) {
+  const row = store.getSession(sessionId);
+  if (!row) throw new Error(`no such session: ${sessionId}`);
   closeSession(sessionId);
-  store.deleteSession(sessionId);
+  if (row.deleted_at) return; // already trashed — idempotent
+  store.setDeletedAt(sessionId, Date.now());
   /* every connected client drops it from the sidebar immediately. The event
-     can't be persisted (the FK cascade removes the log with the row), so
-     offline clients catch up via the reconnect resync's session refetch. */
-  broadcastFn({
-    seq: 0,
-    ev: { type: "session.deleted", sessionId },
-  });
+     stays broadcast-only (the log survives now, but session.deleted was never
+     persisted — clients replaying the transcript don't need it). */
+  broadcastFn({ seq: 0, ev: { type: "session.deleted", sessionId } });
+}
+
+/** un-trash: the chat returns to the list with its full history */
+export function restoreSession(sessionId: string) {
+  const row = store.getSession(sessionId);
+  if (!row) throw new Error(`no such session: ${sessionId}`);
+  if (!row.deleted_at) throw new Error(`session ${sessionId} is not in the trash`);
+  store.setDeletedAt(sessionId, null);
+  /* an empty session.updated tells every client its metadata changed (the
+     web patches the row in place; the sidebar re-lists it) */
+  sink({ type: "session.updated", sessionId });
+}
+
+/** "delete forever" from the trash view — immediate, regardless of age */
+export function purgeSession(sessionId: string) {
+  const row = store.getSession(sessionId);
+  if (!row) throw new Error(`no such session in the trash: ${sessionId}`);
+  closeSession(sessionId);
+  store.deleteSession(sessionId); // the hard-delete primitive: row + cascaded log
+  broadcastFn({ seq: 0, ev: { type: "session.deleted", sessionId } });
+}
+
+/** hard-delete trash past the retention window; returns the purged ids */
+export function purgeExpiredTrash(now = Date.now()): string[] {
+  const cutoff = now - TRASH_RETENTION_MS;
+  const expired = store.listDeletedSessions().filter((r) => (r.deleted_at ?? 0) < cutoff);
+  for (const r of expired) {
+    closeSession(r.id);
+    store.deleteSession(r.id);
+    broadcastFn({ seq: 0, ev: { type: "session.deleted", sessionId: r.id } });
+  }
+  return expired.map((r) => r.id);
 }
 
 export function listHarnesses() {
