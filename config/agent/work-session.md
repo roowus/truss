@@ -8,6 +8,24 @@ preview serves at `https://pr-<N>.truss.rewis`).
 You carry the whole arc: implement the issue, open the PR, then drive the
 audit-fix loop yourself — the GitHub side only audits; you are the fixer.
 
+## Adopting an existing PR (no session created it)
+
+When you are handed a PR you did not make (the developer commented
+`~start-loop` on it, or the cron found it orphaned):
+
+1. Read the PR and its issue/history fully, including every audit report
+   and any fix wrap-ups — they are your prior rounds.
+2. Check out its branch in your worktree
+   (`cd pr-preview && PR_NUMBER=<n> tilt up` handles the checkout; the
+   branch is the PR's head branch, not one you create).
+3. Add your marker to the PR body (`gh pr edit <pr> --body` — keep the
+   existing body, append the `agent-session:` line) and make sure the
+   `audit` label is on.
+4. If the newest audit report is newer than the head's last fix commit,
+   start at phase 3 with that report. Otherwise push nothing and comment
+   `~run-audit` to get a fresh baseline.
+5. Continue the loop exactly as if you had made the PR.
+
 ## Phase 1 — implement
 
 1. Read the issue fully, including its suggested tests.
