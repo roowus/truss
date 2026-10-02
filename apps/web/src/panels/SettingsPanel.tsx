@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { desktops, useDesktops, type UiSettings } from "@/lib/desktops";
 import { useApp } from "@/lib/store";
 import { Btn, Icon, Select } from "@/components/ui";
+import { SETTINGS_REGISTRY, SETTINGS_SECTIONS, searchSettings, type SettingField } from "@/lib/settingsRegistry";
 import { cn } from "@/utils/cn";
 import type { NetInfo } from "@/lib/proto";
 
@@ -10,10 +11,7 @@ export function SettingsPanel() {
   const saveStatus = useDesktops((s) => s.saveStatus);
   const spaces = useDesktops((s) => s.spaces);
   const mode = useApp((s) => s.backend?.mode);
-  const [cwd, setCwd] = useState(settings.defaultCwd);
-  const [error, setError] = useState("");
-
-  useEffect(() => setCwd(settings.defaultCwd), [settings.defaultCwd]);
+  const [q, setQ] = useState("");
   const change = <K extends keyof UiSettings>(key: K, value: UiSettings[K]) => desktops.updateSettings({ [key]: value });
 
   return (
@@ -33,40 +31,30 @@ export function SettingsPanel() {
           {saveStatus === "error" && <Btn variant="outline" size="xs" icon="retry" onClick={() => desktops.retrySave()}>Retry</Btn>}
         </div>
 
-        <section className="mt-9">
-          <SectionTitle>Appearance</SectionTitle>
-          <Row label="Density" description="How much space navigation and tabs use.">
-            <Toggle options={[{ id: "comfortable", name: "Comfortable" }, { id: "compact", name: "Compact" }]} value={settings.density} onChange={(v) => change("density", v as UiSettings["density"])} />
-          </Row>
-          <Row label="Terminal font size" description="Applies to all shell tabs. Code and terminal keep their monospace font.">
-            <Select
-              ariaLabel="Terminal font size"
-              className="!w-[150px]"
-              value={String(settings.terminalFontSize)}
-              onChange={(v) => change("terminalFontSize", Number(v))}
-              options={[11, 12, 13, 14, 16].map((n) => ({ value: String(n), label: `${n} px` }))}
-            />
-          </Row>
-        </section>
-
-        <section className="mt-8">
-          <SectionTitle>Sessions</SectionTitle>
-          <Row label="Open sessions" description="What happens when you click a session in the sidebar.">
-            <Toggle options={[{ id: "chat", name: "Chat" }, { id: "daily", name: "Full view" }]} value={settings.openMode} onChange={(v) => change("openMode", v as UiSettings["openMode"])} />
-          </Row>
-          <div className="py-3 border-b border-[var(--t-line)]">
-            <div className="text-[12.5px] text-[var(--t-fg)]">Default working directory</div>
-            <p className="mt-0.5 mb-2 text-[11.5px] text-[var(--t-dim)]">Prefills new sessions when a host has no specific default.</p>
-            <div className="flex gap-2">
-              <input aria-label="Default working directory" className="t-input font-code flex-1" value={cwd} onChange={(e) => { setCwd(e.target.value); setError(""); }} placeholder="Use most recent session" />
-              <Btn variant="outline" onClick={() => {
-                if (cwd.trim() && !cwd.trim().startsWith("/")) { setError("Use an absolute path."); return; }
-                change("defaultCwd", cwd.trim());
-              }}>Save</Btn>
-            </div>
-            {error && <div role="alert" className="mt-1 text-[11.5px] text-[var(--t-red)]">{error}</div>}
-          </div>
-        </section>
+        {/* registry-driven settings (issue #30): one control family, every
+            field labeled + explained, searchable; bespoke sections follow */}
+        <div className="mt-6 mb-2">
+          <input
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder={`search ${SETTINGS_REGISTRY.length} settings…`}
+            aria-label="Search settings"
+            className="t-input w-full font-mono text-[11.5px]"
+          />
+        </div>
+        {SETTINGS_SECTIONS.map((sec) => {
+          const fields = fieldsBySection(sec.id, q);
+          if (!fields.length) return null;
+          return (
+            <section key={sec.id} className="mt-8">
+              <SectionTitle>{sec.label}</SectionTitle>
+              {sec.description && <p className="text-[11.5px] text-[var(--t-dim)] -mt-1 mb-1">{sec.description}</p>}
+              {fields.map((f) => (
+                <RegistryRow key={f.id} field={f} settings={settings} change={change} />
+              ))}
+            </section>
+          );
+        })}
 
         <section className="mt-8">
           <SectionTitle>Workspaces</SectionTitle>
@@ -77,7 +65,7 @@ export function SettingsPanel() {
             <span className="text-[12px] text-[var(--t-fg2)]">{spaces.length} workspace{spaces.length === 1 ? "" : "s"}</span>
             <Btn variant="outline" icon="plus" className="ml-auto" onClick={() => desktops.create()}>New workspace</Btn>
           </div>
-          <p className="mt-2 text-[11.5px] text-[var(--t-dim)]">Switch in the bar above, or with Alt+1–9. Right-click a tab to copy or move it to another desktop.</p>
+          <p className="mt-2 text-[11.5px] text-[var(--t-dim)]">Switch in the bar above, or with Alt+1–9. Drag a tab onto a workspace chip to move it there, or right-click for copy/move.</p>
           {spaces.some((sp) => sp.archived) && (
             <div className="mt-3">
               <div className="text-[10.5px] font-medium uppercase tracking-[0.08em] text-[var(--t-dim)] mb-1.5">Archived</div>
@@ -90,31 +78,6 @@ export function SettingsPanel() {
               ))}
             </div>
           )}
-        </section>
-
-        <section className="mt-8">
-          <SectionTitle>Feed</SectionTitle>
-          <p className="text-[12px] text-[var(--t-mute)] leading-relaxed mb-1">
-            Which system events post a card to your inbox. Agents can always post explicitly (post_feed) regardless.
-          </p>
-          {([
-            ["permissions", "Decisions", "A session pauses on a permission request"],
-            ["workDone", "Work finished", "A running turn settles (one card per turn)"],
-            ["taskRuns", "Task-board runs", "A Tasks-board run finishes"],
-            ["errors", "Errors", "A harness crashes"],
-            ["context", "Context pressure", "A session crosses 85% of its window"],
-          ] as const).map(([key, label, desc]) => (
-            <Row key={key} label={label} description={desc}>
-              <button
-                role="switch"
-                aria-checked={settings.feedSources[key]}
-                onClick={() => change("feedSources", { ...settings.feedSources, [key]: !settings.feedSources[key] })}
-                className={cn("w-8 h-4.5 rounded-full relative transition-colors h-[18px]", settings.feedSources[key] ? "bg-[var(--t-teal)]/70" : "bg-[var(--t-line2)]")}
-              >
-                <span className={cn("absolute top-0.5 w-3.5 h-3.5 rounded-full bg-white transition-all", settings.feedSources[key] ? "left-4" : "left-0.5")} />
-              </button>
-            </Row>
-          ))}
         </section>
 
         <NetworkSection />
@@ -253,12 +216,60 @@ function Row({ label, description, children }: { label: string; description: str
   );
 }
 
-function Toggle({ options, value, onChange }: { options: { id: string; name: string }[]; value: string; onChange: (v: string) => void }) {
+
+/* ── registry rendering (issue #30) ── */
+
+function fieldsBySection(section: string, q: string): SettingField[] {
+  return searchSettings(q).filter((f) => f.section === section);
+}
+
+/** one control family: switch (boolean), select, text, number — all auto-save */
+function RegistryRow({ field, settings, change }: { field: SettingField; settings: UiSettings; change: <K extends keyof UiSettings>(key: K, value: UiSettings[K]) => void }) {
+  const top = field.id as keyof UiSettings;
+  const isFeed = field.id.startsWith("feedSources.");
+  const feedKey = isFeed ? field.id.split(".")[1] as keyof UiSettings["feedSources"] : null;
+  const value = isFeed ? settings.feedSources[feedKey!] : (settings as unknown as Record<string, unknown>)[field.id];
+
   return (
-    <div className="inline-flex gap-0.5 rounded-md border border-[var(--t-line2)] p-0.5" role="group">
-      {options.map((o) => (
-        <button key={o.id} onClick={() => onChange(o.id)} aria-pressed={value === o.id} className={cn("h-7 px-2.5 rounded text-[11.5px] transition-colors", value === o.id ? "bg-[var(--t-bg3)] text-[var(--t-fg)]" : "text-[var(--t-dim)] hover:text-[var(--t-fg2)]")}>{o.name}</button>
-      ))}
-    </div>
+    <Row label={field.label} description={field.description}>
+      {field.type === "switch" ? (
+        <button
+          role="switch"
+          aria-checked={!!value}
+          aria-label={field.label}
+          onClick={() => isFeed ? change("feedSources", { ...settings.feedSources, [feedKey!]: !value }) : change(top, !value as never)}
+          className={cn("rounded-full relative transition-colors w-[32px] h-[18px]", value ? "bg-[var(--t-teal)]/70" : "bg-[var(--t-line2)]")}
+        >
+          <span className={cn("absolute top-0.5 w-3.5 h-3.5 rounded-full bg-white transition-all", value ? "left-4" : "left-0.5")} />
+        </button>
+      ) : field.type === "select" || field.type === "toggle" ? (
+        <Select
+          size="bar"
+          ariaLabel={field.label}
+          className="!w-[170px]"
+          value={String(value ?? field.default)}
+          onChange={(v) => change(top, v as never)}
+          options={(field.options ?? []).map((o) => ({ value: o.value, label: o.label }))}
+        />
+      ) : field.type === "number" ? (
+        <input
+          type="number"
+          aria-label={field.label}
+          className="t-input !w-[110px] font-mono text-[11.5px]"
+          value={String(value ?? field.default)}
+          onChange={(e) => {
+            const n = Number(e.target.value);
+            if (Number.isFinite(n) && n > 0) change(top, n as never);
+          }}
+        />
+      ) : (
+        <input
+          aria-label={field.label}
+          className="t-input font-mono text-[11.5px]"
+          value={String(value ?? field.default)}
+          onChange={(e) => change(top, e.target.value as never)}
+        />
+      )}
+    </Row>
   );
 }

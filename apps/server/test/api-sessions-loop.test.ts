@@ -392,3 +392,13 @@ test("unknown sessions reject cleanly everywhere", async () => {
   assert.equal(p.status, 409);
   assert.ok(String(p.body.error).includes("no such session"));
 });
+
+test("DELETE /api/sessions/:id on an unknown id is a 404, not a 500 (pr-audit B5)", async () => {
+  /* deleteSession throws "no such session" on an unknown id — the route
+     must map that to 404 (an unmapped throw bubbles into a 500) */
+  const hard = await api("/api/sessions/nope-nope?hard=1", { method: "DELETE" });
+  assert.equal(hard.status, 404, "hard trash of an unknown id → 404");
+  assert.ok(String(hard.body.error).includes("no such session"));
+  const soft = await api("/api/sessions/nope-nope", { method: "DELETE" });
+  assert.notEqual(soft.status, 500, "soft close of an unknown id never 500s");
+});

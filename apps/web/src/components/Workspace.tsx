@@ -27,8 +27,8 @@ import { MonitorPanel } from "@/panels/MonitorPanel";
 import { HostPanel } from "@/panels/HostPanel";
 import { SettingsPanel } from "@/panels/SettingsPanel";
 import { DesktopStrip } from "./DesktopStrip";
-import { crampedForTab, crampedVerdict, TAB_CHROME_PX, tabCloseBehavior, ultraVerdict } from "@/lib/tabClose";
-import { layoutTabStrip, STANDARD_TAB_WIDTH, type TabSpec } from "@/lib/tabStrip";
+import { TAB_CHROME_PX, tabCloseBehavior } from "@/lib/tabClose";
+import { decideStrip } from "@/lib/tabSizing";
 import { TAB_DRAG_MIME, encodeTabDrag } from "@/lib/tabDnd";
 import { TabPicker } from "./TabPicker";
 import { Btn, Icon, StateDot, TrussLogo } from "./ui";
@@ -83,97 +83,102 @@ function TrussTab({ api, params }: IDockviewPanelHeaderProps<{ sessionId?: strin
   const meta = useApp((s) => (sid ? s.sessions[sid] : undefined));
   const pending = useApp((s) => (sid ? s.views[sid]?.pending.length ?? 0 : 0));
   const color = meta ? harnessStyle(meta.harness).color : undefined;
-  /* Space-aware close button: inline + always visible when the tab has room;
-     a hover popup only when the strip is overcrowded and has squeezed the tab
-     below its natural width. The probe row below is out-of-flow and never
-     compressed, so it reports the natural content width regardless of the
-     strip's squeeze — no measurement oscillation when the X flips modes. */
+  /* the tab size manager (issue #34): ONE pure function owns widths +
+     verdicts (lib/tabSizing.ts). The component layer is thin and
+     self-healing: element targets are re-resolved on EVERY event (a replaced
+     strip never goes stale — that was the "breaks until reload" class), and
+     widths re-apply idempotently so a re-created shell corrects itself. */
   const rootRef = useRef<HTMLDivElement>(null);
   const probeRef = useRef<HTMLSpanElement>(null);
   const [cramped, setCramped] = useState(false);
   const [ultra, setUltra] = useState(false);
+  const verdictRef = useRef({ cramped: false, ultra: false });
   useEffect(() => {
     const tab = rootRef.current?.closest(".dv-tab") as HTMLElement | null;
     const probe = probeRef.current;
     if (!tab || !probe) return;
-    /* Strip-level verdict, Chrome-style: overcrowded ⇔ every tab at its
+
+    /* narrow triggers, re-resolved per pass (self-healing): the strip itself
+       for tab add/remove, its parent for strip REPLACEMENT — childList only,
+       never subtree. A subtree observer on the dock root re-measured every
+       tab on every DOM mutation anywhere (chat streaming, terminal output)
+       with forced-layout reads each — O(tabs) layout thrash per frame.
+       Strip-level verdict, Chrome-style: overcrowded ⇔ every tab at its
        natural width (probe, never compressed) PLUS an inline X each would
        overflow the strip. Mode-independent (computed from probes, not live
        tabs) so it can't oscillate; uniform across the strip like Chrome.
-       The strip is re-resolved on every measure and the observers re-attach
-       when the tab is dragged/transferred to another strip — otherwise the
-       verdict goes stale (the "works for some tabs" bug).
        Ultra (<64px) ⇒ the hover X centers on the sliver (16px, the
        "overlay-center" placement in tabClose.ts) — a right-edge X would
        overhang into the left neighbor and eat its clicks. */
-    let ro: ResizeObserver | null = null;
-    let mo: MutationObserver | null = null;
-    let observed: Element | null = null;
+    const mo = new MutationObserver(() => measure());
+    let moTargets: Element[] = [];
+    let roStrip: Element | null = null;
+    const ro: ResizeObserver | null = new ResizeObserver(() => measure());
+    const dockRoot = tab.closest(".truss-dock") ?? document.body;
+    ro.observe(dockRoot as Element); // workspace resizes
+    ro.observe(probe); // title/content growth
     const measure = () => {
+      /* re-resolve EVERY time — never trust an element captured earlier */
       const strip = tab.closest(".dv-tabs-container");
       if (!strip) return;
-      /* uniform tab widths (issue #23): probe each tab's natural width, then
-         layout the strip — roomy = all exactly STANDARD; crowded = the
-         active tab fully displayed, inactives compress uniformly above the
-         floor. Widths apply to the dockview shells imperatively (they own
-         the flex row). */
-      const specs: { spec: TabSpec; shell: HTMLElement }[] = [];
-      for (const probe of strip.querySelectorAll(".truss-tab-probe")) {
-        const shell = (probe as HTMLElement).closest(".dv-tab") as HTMLElement | null;
+      if (strip !== roStrip) {
+        ro.observe(strip); // splitter drags resize the strip, not the dock root
+        roStrip = strip;
+      }
+      const next = [strip, strip.parentElement].filter((x): x is Element => !!x);
+      if (next.length !== moTargets.length || next.some((x, i) => x !== moTargets[i])) {
+        mo.disconnect();
+        for (const t of next) mo.observe(t, { childList: true });
+        moTargets = next;
+      }
+      const entries: { shell: HTMLElement; naturalWidth: number; active: boolean }[] = [];
+      for (const p of strip.querySelectorAll(".truss-tab-probe")) {
+        const shell = (p as HTMLElement).closest(".dv-tab") as HTMLElement | null;
         if (!shell) continue;
-        specs.push({
-          spec: {
-            id: shell.getAttribute("data-tab-panel-id") ?? String(specs.length),
-            /* probe (title) + per-tab chrome (X, gaps, paddings) = natural
-               width — TAB_CHROME_PX keeps the constant in tabClose.ts */
-            naturalWidth: (probe as HTMLElement).offsetWidth + TAB_CHROME_PX,
-            active: shell.classList.contains("dv-active-tab"),
-          },
+        entries.push({
           shell,
+          /* probe (title) + per-tab chrome (X, gaps, paddings) = natural
+             width — TAB_CHROME_PX keeps the constant in tabClose.ts */
+          naturalWidth: (p as HTMLElement).offsetWidth + TAB_CHROME_PX,
+          active: shell.classList.contains("dv-active-tab"),
         });
       }
-      const widths = new Map(layoutTabStrip({ stripWidth: strip.clientWidth, tabs: specs.map((x) => x.spec) }).map((w) => [w.id, w.width]));
-      for (const { spec, shell } of specs) {
-        const w = widths.get(spec.id);
-        if (w) {
+      /* the caller's tab is matched by ELEMENT IDENTITY (decideStrip) — a
+         data-tab-panel-id attribute nothing sets used to make `mine` always
+         null, so the verdicts never reached this component */
+      const { widths, verdict } = decideStrip({
+        stripWidth: strip.clientWidth,
+        tabs: entries,
+        mine: tab,
+        prev: verdictRef.current,
+      });
+      for (const { shell, width: w } of widths) {
+        /* idempotent re-apply — a re-created shell gets its width back on
+           the next pass instead of waiting for a reload */
+        if (w && (shell.style.width !== `${w}px` || shell.style.flex !== "0 0 auto")) {
           shell.style.width = `${w}px`;
           shell.style.flex = "0 0 auto";
         }
       }
-      /* sticky verdicts (issue #21); the active tab never compresses, so it
-         composes roomy regardless (its X stays inline+always — #23 rule).
-         crampedForTab takes `active` as input — see its doc: the verdict
-         must flip the moment the focused tab changes (audit B4) */
-      const myWidth = tab.getBoundingClientRect().width;
-      const natural = specs.length * STANDARD_TAB_WIDTH;
-      setCramped((prev) => crampedForTab(prev, natural, strip.clientWidth, active));
-      setUltra((prev) => {
-        if (!crampedVerdict(prev, natural, strip.clientWidth)) return false;
-        return ultraVerdict(prev, myWidth);
-      });
-    };
-    const attach = () => {
-      const strip = tab.closest(".dv-tabs-container");
-      if (strip === observed) return;
-      ro?.disconnect();
-      mo?.disconnect();
-      observed = strip;
-      if (strip) {
-        ro = new ResizeObserver(measure);
-        ro.observe(strip);
-        ro.observe(probe);
-        mo = new MutationObserver(() => {
-          if (tab.closest(".dv-tabs-container") !== observed) attach();
-          measure();
-        });
-        mo.observe(strip, { childList: true });
+      /* sticky verdicts (issue #21), computed INSIDE the pure decision
+         (computeTabStrip via decideStrip); the active tab never compresses,
+         so it composes roomy regardless (its X stays inline+always — #23
+         rule). `active` is an INPUT to the decision, not captured state —
+         the verdict flips the moment the focused tab changes (audit B4) */
+      if (verdict) {
+        verdictRef.current = verdict;
+        setCramped(verdict.cramped);
+        setUltra(verdict.ultra);
       }
-      measure();
     };
-    attach();
+
+    const onVis = () => measure();
+    document.addEventListener("visibilitychange", onVis);
+    measure();
     return () => {
       ro?.disconnect();
-      mo?.disconnect();
+      mo.disconnect();
+      document.removeEventListener("visibilitychange", onVis);
     };
     /* `active` IS a dependency (audit B4): the observers see resizes and
        childList changes, but dockview's dv-active-tab class flip is an

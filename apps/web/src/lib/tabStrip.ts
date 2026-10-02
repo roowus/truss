@@ -7,7 +7,14 @@
  */
 
 export const STANDARD_TAB_WIDTH = 180;
-export const MIN_TAB_WIDTH = 64; // == the ultra threshold — past it a tab is a sliver
+/* == the ultra threshold (ULTRA_ENTER_PX) — past it a tab is a sliver.
+   Decision (audit B4): the floor EQUALS the enter threshold, so the ultra
+   verdict is unreachable from layoutTabStrip — intentionally: the strip
+   scrolls (disableTabsOverflowList) instead of squeezing tabs below the
+   floor, so the sliver state can never be entered at runtime. The ultra
+   rules stay in tabClose.ts because #21's spec tests pin them; lowering
+   this floor instead would break #23's pinned minimum. */
+export const MIN_TAB_WIDTH = 64;
 
 export interface TabSpec {
   id: string;
