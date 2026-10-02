@@ -5,6 +5,12 @@ issue right now, and if so, which one. Cheap and deterministic: no wandering.
 
 ## Steps
 
+0. **Orphaned PRs first.** Read
+   `~/.local/state/truss-audit-spool/ORPHANS.txt` (the audit watcher
+   maintains it): PRs labeled `audit` with no `agent-session:` marker have
+   an armed audit loop but nobody fixing. If any are listed, hand the
+   oldest one to a work session (config/agent/work-session.md — the
+   adoption path covers existing PRs) before picking a new issue below.
 1. List candidates:
    `gh issue list --repo roowus/truss --state open --json number,title,labels,createdAt`
 2. Drop anything that:

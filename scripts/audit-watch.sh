@@ -60,3 +60,11 @@ state[sys.argv[2]] = int(sys.argv[3])
 json.dump(state, open(sys.argv[1], "w"))
 EOF
   done
+
+# orphans: labeled for audit but no session marker — nobody is driving the
+# fix loop on them. List them in a file the prioritize cron reads.
+gh pr list -R "$REPO" --state open --label audit --json number,title,body \
+  --jq '.[] | select(.body | test("(agent|truss)-session:") | not) | "#\(.number) \(.title)"' \
+  > "$SPOOL/ORPHANS.txt" 2>/dev/null
+[ -s "$SPOOL/ORPHANS.txt" ] && \
+  echo "$(date -Is) orphan audit-labeled PRs (no session): $(paste -sd'; ' "$SPOOL/ORPHANS.txt")"

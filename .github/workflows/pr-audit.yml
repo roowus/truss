@@ -71,9 +71,11 @@ jobs:
           PR_LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
         run: |
           fire=false; via=""
-          if [ "$EVENT" = "issue_comment" ] && [ "$IS_PR" = "true" ] && [ "$COMMENT_AUTHOR" = "OWNER" ] \
-             && case "$COMMENT_BODY" in *"~run-audit"*) true;; *) false;; esac; then
-            fire=true; via=comment
+          if [ "$EVENT" = "issue_comment" ] && [ "$IS_PR" = "true" ] && [ "$COMMENT_AUTHOR" = "OWNER" ]; then
+            case "$COMMENT_BODY" in
+              *"~start-loop"*) fire=true; via=start-loop ;;
+              *"~run-audit"*)  fire=true; via=comment ;;
+            esac
           elif [ "$EVENT" = "pull_request" ] && [ "$SAME_REPO" = "true" ]; then
             if [ "$ACTION" = "labeled" ] && [ "$LABEL" = "audit" ]; then
               fire=true; via=label
@@ -129,7 +131,18 @@ jobs:
           print(f"provider={'fireworks' if stale else 'zai'}")
           EOF
 
-          if [ "$via" = "comment" ]; then
+          # start-loop: switch the label on so pushes re-audit, and flag the
+          # PR as needing a work session when no agent-session marker exists
+          if [ "$via" = "start-loop" ]; then
+            gh pr edit "$PR_NUM" --repo "${{ github.repository }}" --add-label audit
+            BODY=$(gh pr view "$PR_NUM" --repo "${{ github.repository }}" --json body --jq .body)
+            if ! printf '%s' "$BODY" | grep -qE '(agent|truss)-session:'; then
+              gh pr comment "$PR_NUM" --repo "${{ github.repository }}" --body \
+                "🔁 Loop armed: the \`audit\` label is on, and an audit is running. No \`agent-session:\` marker in the PR body — this PR has no work session driving fixes. Start one with \`config/agent/work-session.md\` (the adoption path covers existing PRs) or the report just sits here."
+            fi
+          fi
+
+          if [ "$via" = "comment" ] || [ "$via" = "start-loop" ]; then
             gh api "repos/${{ github.repository }}/issues/comments/${{ github.event.comment.id }}/reactions" \
               -f content=eyes || true
             SHORT="$(jq -r .headRefOid "$RUNNER_TEMP/pr.json" | cut -c1-7)"
