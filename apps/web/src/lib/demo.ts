@@ -7,6 +7,7 @@ import type {
   Frame,
   HarnessesResp,
   ModelInfo,
+  MonitorEntry,
   ProtoEvent,
   SessionMeta,
   SkillInfo,
@@ -727,7 +728,10 @@ export function createDemoBackend(): Backend {
     deleteHost: async () => ({ ok: true }),
     metrics: async () => {
       const t = Date.now();
-      const mk = (host: string, cpuBase: number): never => {
+      /* typed as the real shape: the monitor table renders this fixture with
+         no normalization, so a field missing here prints blank (or "NaNm")
+         in exactly the mode a newcomer sees first */
+      const mk = (host: string, cpuBase: number): MonitorEntry => {
         const cores = 4;
         const perCore = Array.from({ length: cores }, () => Math.round((cpuBase + Math.random() * 18) * 10) / 10);
         const total = 16e9, used = 6.4e9 + Math.random() * 3e8;
@@ -745,13 +749,13 @@ export function createDemoBackend(): Backend {
             net: [{ iface: "enp0s6", rxBps: 320e3, txBps: 210e3 }],
             temps: [{ label: "cpu", c: 47.5 }],
             procs: [
-              { pid: 1051, cmd: "node", cpu: 8.4, rssMb: 721, state: "S" },
-              { pid: 402, cmd: "postgres", cpu: 2.1, rssMb: 318, state: "S" },
-              { pid: 88, cmd: "systemd", cpu: 0.1, rssMb: 44, state: "S" },
+              { pid: 1051, cmd: "node", cpu: 8.4, rssMb: 721, state: "S", user: "dev", memPct: 4.4, threads: 32, ageSec: 427 },
+              { pid: 402, cmd: "postgres", cpu: 2.1, rssMb: 318, state: "S", user: "postgres", memPct: 1.9, threads: 12, ageSec: 259_200 },
+              { pid: 88, cmd: "systemd", cpu: 0.1, rssMb: 44, state: "S", user: "root", memPct: 0.3, threads: 1, ageSec: 367_000 },
             ],
           },
           history,
-        } as never;
+        };
       };
       return { local: mk("devbox", 9), agents: { atlas: mk("atlas", 34) } };
     },
