@@ -28,6 +28,7 @@ import { HostPanel } from "@/panels/HostPanel";
 import { SettingsPanel } from "@/panels/SettingsPanel";
 import { DesktopStrip } from "./DesktopStrip";
 import { isOvercrowded, tabCloseBehavior } from "@/lib/tabClose";
+import { TAB_DRAG_MIME, encodeTabDrag } from "@/lib/tabDnd";
 import { TabPicker } from "./TabPicker";
 import { Btn, Icon, StateDot, TrussLogo } from "./ui";
 import { harnessStyle } from "@/lib/format";
@@ -146,9 +147,27 @@ function TrussTab({ api, params }: IDockviewPanelHeaderProps<{ sessionId?: strin
       onMouseDown={(e) => {
         if (e.button === 1) { e.preventDefault(); api.close(); }
       }}
-      title={`${title}\nRight-click to copy or move to another workspace\n(middle-click closes)`}
+      title={`${title}\nDrag the icon onto a workspace above to move it there\nRight-click to copy or move to another workspace\n(middle-click closes)`}
     >
-      <span style={{ color: kind === "chat" ? color : undefined }} className={cn("shrink-0", kind === "chat" ? "" : "opacity-70")}>
+      {/* cross-workspace drag (issue #9): dockview's native drag can't leave
+          its instance, so the tab carries an HTML5 payload for the workspace
+          strip — scoped to THIS icon handle. `draggable` on the whole tab
+          would make the browser's native drag cancel the pointer events
+          dockview's in-strip reorder relies on (pointercancel on dragstart);
+          the rest of the tab stays dockview's, the handle owns the strip
+          transfer. */}
+      <span
+        style={{ color: kind === "chat" ? color : undefined }}
+        className={cn("shrink-0 cursor-grab", kind === "chat" ? "" : "opacity-70")}
+        draggable
+        onDragStart={(e) => {
+          const from = desktops.spaceOfPanel(api.id);
+          if (!from) return;
+          e.dataTransfer.setData(TAB_DRAG_MIME, encodeTabDrag({ from, panelId: api.id }));
+          e.dataTransfer.effectAllowed = "move";
+        }}
+        title="Drag onto a workspace above to move it there"
+      >
         <Icon name={KIND_ICON[kind] ?? "layout"} size={12} />
       </span>
       <span className="truncate min-w-0 max-w-[200px]">{title}</span>
