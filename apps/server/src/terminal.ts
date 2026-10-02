@@ -103,6 +103,8 @@ export function renameTerminal(id: string, title: string): { id: string; title: 
   if (!clean) throw new Error("title must not be empty");
   if (clean.length > 64) throw new Error("title too long (64 characters max)");
   t.title = clean;
+  /* guard like the onData/onExit loops: a half-open socket whose close event
+     hasn't fired must not abort the rename between the mutation and emitUp */
   const frame = JSON.stringify({ type: "title", title: clean });
   for (const c of t.clients) {
     try {

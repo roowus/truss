@@ -146,15 +146,17 @@ export function openDailyDriver(sessionId: string) {
 function openWhenReady(kind: "terminal", panelOpts: OpenPanelOptions, title: string) {
   let tries = 0;
   const t = window.setInterval(() => {
-    const panel = openPanel(kind, panelOpts);
-    if (panel) {
-      window.clearInterval(t);
+    /* poll readiness SILENTLY — openPanel toasts on every not-ready call, so
+       calling it from the interval spams a toast stack at 4/second */
+    if (!desktops.isReady(panelOpts.spaceId) || !getDockApi(panelOpts.spaceId)) {
+      if (++tries > 40) {
+        window.clearInterval(t);
+        store.toast("info", "Shell is ready", `${title} is in the shells list — open it when the workspace finishes loading`);
+      }
       return;
     }
-    if (++tries > 40) {
-      window.clearInterval(t);
-      store.toast("info", "Shell is ready", `${title} is in the shells list — open it when the workspace finishes loading`);
-    }
+    window.clearInterval(t);
+    openPanel(kind, panelOpts);
   }, 250);
 }
 
