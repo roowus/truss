@@ -37,7 +37,7 @@ export interface UiSettings {
   feedSources: FeedSourceSettings;
   /** monitor poll interval ms (issue #30) */
   monitorRefreshMs?: number;
-  /** declared in the registry; the server's purge reads its own constant for now */
+  /** trash retention window in days — the server's trash purge reads this (issue #30) */
   trashRetentionDays?: number;
 }
 
@@ -58,13 +58,33 @@ interface SavedDocument {
   settings: UiSettings;
 }
 
+/* number-setting bounds — mirrored by the registry fields' min/max so the
+   page clamps on input and parseSaved clamps on load (a hand-edited or stale
+   layout doc can't smuggle in a 999999-day trash window) */
+export const SETTING_BOUNDS = {
+  terminalFontSize: { min: 8, max: 32, fallback: 13 },
+  monitorRefreshMs: { min: 500, max: 60_000, fallback: 3000 },
+  trashRetentionDays: { min: 1, max: 365, fallback: 30 },
+} as const;
+
+function clampInt(v: unknown, min: number, max: number, fallback: number): number {
+  return typeof v === "number" && Number.isFinite(v) ? Math.min(Math.max(Math.round(v), min), max) : fallback;
+}
+
+function boundArgs(key: keyof typeof SETTING_BOUNDS): [number, number, number] {
+  const b = SETTING_BOUNDS[key];
+  return [b.min, b.max, b.fallback];
+}
+
 const defaultSettings: UiSettings = {
   density: "comfortable",
   openMode: "chat",
-  terminalFontSize: 13,
+  terminalFontSize: SETTING_BOUNDS.terminalFontSize.fallback,
   defaultCwd: "",
   groupMode: "project",
   feedSources: { permissions: true, workDone: true, taskRuns: true, errors: true, context: true },
+  monitorRefreshMs: SETTING_BOUNDS.monitorRefreshMs.fallback,
+  trashRetentionDays: SETTING_BOUNDS.trashRetentionDays.fallback,
 };
 
 function freshState(): DesktopState {
@@ -77,7 +97,8 @@ function freshState(): DesktopState {
   };
 }
 
-function parseSaved(raw: string): DesktopState {
+/** exported for the persistence round-trip tests (issue #30 audit) */
+export function parseSaved(raw: string): DesktopState {
   const data: unknown = JSON.parse(raw);
   if (!data || typeof data !== "object") throw new Error("layout is not an object");
   const doc = data as Record<string, any>;
@@ -102,7 +123,9 @@ function parseSaved(raw: string): DesktopState {
     settings: {
       density: cfg.density === "compact" ? "compact" : "comfortable",
       openMode: cfg.openMode === "daily" ? "daily" : "chat",
-      terminalFontSize: [11, 12, 13, 14, 16].includes(cfg.terminalFontSize) ? cfg.terminalFontSize : 13,
+      /* any integer in range — the registry's number input is free-form, so
+         the whitelist [11,12,13,14,16] used to silently snap e.g. 15 back */
+      terminalFontSize: clampInt(cfg.terminalFontSize, ...boundArgs("terminalFontSize")),
       defaultCwd: typeof cfg.defaultCwd === "string" ? cfg.defaultCwd : "",
       groupMode: cfg.groupMode === "folder" ? "folder" : "project",
       feedSources: {
@@ -112,6 +135,10 @@ function parseSaved(raw: string): DesktopState {
         errors: cfg.feedSources?.errors !== false,
         context: cfg.feedSources?.context !== false,
       },
+      /* carried through — snapshot() saves settings wholesale, so without
+         these two lines both silently reset to defaults on every reload */
+      monitorRefreshMs: clampInt(cfg.monitorRefreshMs, ...boundArgs("monitorRefreshMs")),
+      trashRetentionDays: clampInt(cfg.trashRetentionDays, ...boundArgs("trashRetentionDays")),
     },
     saveStatus: "idle",
   };

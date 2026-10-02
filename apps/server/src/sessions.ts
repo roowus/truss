@@ -563,8 +563,28 @@ export function setProjectArchived(project: string, archived: boolean): number {
   return rows.length;
 }
 
-/** exactly 30 days — the number in the feature's name (issue #5) */
+/** the default window — exactly 30 days, the number in the feature's name
+   (issue #5). The user's trashRetentionDays setting (issue #30) overrides it. */
 export const TRASH_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+
+/**
+ * The live retention window: the settings page's "Keep deleted chats for
+ * (days)" is saved into the layout doc's settings (same home as the feed
+ * sources, see feed.ts feedSources()); an unset/invalid value falls back to
+ * the 30-day default. Clamped to [1, 365] days like the web control.
+ */
+export function trashRetentionMs(): number {
+  try {
+    const raw = store.getKv("dockview-layout");
+    const days: unknown = raw ? JSON.parse(raw)?.settings?.trashRetentionDays : undefined;
+    if (typeof days === "number" && Number.isFinite(days) && days >= 1) {
+      return Math.min(Math.round(days), 365) * 24 * 60 * 60 * 1000;
+    }
+  } catch {
+    /* unreadable layout doc — the default below applies */
+  }
+  return TRASH_RETENTION_MS;
+}
 
 /**
  * Delete is a 30-day TRASH move, not destruction: the live process is
@@ -628,7 +648,7 @@ export function purgeSession(sessionId: string) {
 
 /** hard-delete trash past the retention window; returns the purged ids */
 export function purgeExpiredTrash(now = Date.now()): string[] {
-  const cutoff = now - TRASH_RETENTION_MS;
+  const cutoff = now - trashRetentionMs();
   const expired = store.listDeletedSessions().filter((r) => (r.deleted_at ?? 0) < cutoff);
   for (const r of expired) {
     closeSession(r.id);

@@ -42,11 +42,22 @@ export function SettingsPanel() {
             className="t-input w-full font-mono text-[11.5px]"
           />
         </div>
+        {/* TOC / deep links (issue #30): every section has an anchor id, so
+            #settings-section-<id> jumps straight to it */}
+        {!q.trim() && (
+          <nav aria-label="Settings sections" className="flex flex-wrap gap-x-3 gap-y-1 mb-2">
+            {TOC_SECTIONS.map((s) => (
+              <a key={s.id} href={`#settings-section-${s.id}`} className="text-[11.5px] text-[var(--t-sky)] hover:underline">
+                {s.label}
+              </a>
+            ))}
+          </nav>
+        )}
         {SETTINGS_SECTIONS.map((sec) => {
           const fields = fieldsBySection(sec.id, q);
           if (!fields.length) return null;
           return (
-            <section key={sec.id} className="mt-8">
+            <section key={sec.id} id={`settings-section-${sec.id}`} className="mt-8 scroll-mt-4">
               <SectionTitle>{sec.label}</SectionTitle>
               {sec.description && <p className="text-[11.5px] text-[var(--t-dim)] -mt-1 mb-1">{sec.description}</p>}
               {fields.map((f) => (
@@ -56,7 +67,7 @@ export function SettingsPanel() {
           );
         })}
 
-        <section className="mt-8">
+        <section id="settings-section-workspaces" className="mt-8 scroll-mt-4">
           <SectionTitle>Workspaces</SectionTitle>
           <p className="text-[12px] text-[var(--t-mute)] leading-relaxed mb-3">
             Think of workspaces as desktops. Each keeps its own tab groups and layout; the same session can appear in several.
@@ -96,6 +107,15 @@ function SectionTitle({ children }: { children: React.ReactNode }) {
   return <h2 className="text-[11px] uppercase tracking-[0.1em] font-medium text-[var(--t-dim)] mb-1">{children}</h2>;
 }
 
+/* the registry sections plus the bespoke ones below them — every entry is a
+   deep-linkable anchor on the page */
+const TOC_SECTIONS = [
+  ...SETTINGS_SECTIONS.map((s) => ({ id: s.id, label: s.label })),
+  { id: "workspaces", label: "Workspaces" },
+  { id: "network", label: "Network" },
+  { id: "practices", label: "Practices" },
+];
+
 /** Network — how other devices and remote hosts reach this server. */
 function NetworkSection() {
   const be = useApp((s) => s.backend);
@@ -106,7 +126,7 @@ function NetworkSection() {
   useEffect(() => { void load(); }, [be]);
   if (!net) return null;
   return (
-    <section className="mt-8">
+    <section id="settings-section-network" className="mt-8 scroll-mt-4">
       <SectionTitle>Network</SectionTitle>
       <p className="text-[12px] text-[var(--t-mute)] leading-relaxed mb-2">
         Addresses other devices (and remote node agents) can reach this server on. Everything on the same private network stays in sync.
@@ -183,7 +203,7 @@ function PracticesSection() {
 
   if (text === null) return null;
   return (
-    <section className="mt-8">
+    <section id="settings-section-practices" className="mt-8 scroll-mt-4">
       <SectionTitle>Practices — TRUSS.md</SectionTitle>
       <p className="text-[12px] text-[var(--t-mute)] leading-relaxed mb-2">
         House rules for every harness Truss hosts — coding practices AND posting practices (when to file todos, post reports, how to prioritize). Layers: <span className="font-mono">~/.truss/TRUSS.md</span> (this file) → <span className="font-mono">~/.truss/projects/&lt;project&gt;.md</span> → any <span className="font-mono">TRUSS.md</span> in the session's folder chain (edit those in a Files tab).
@@ -250,7 +270,7 @@ function RegistryRow({ field, settings, change }: { field: SettingField; setting
         >
           <span className={cn("absolute top-0.5 w-3.5 h-3.5 rounded-full bg-white transition-all", value ? "left-4" : "left-0.5")} />
         </button>
-      ) : field.type === "select" || field.type === "toggle" ? (
+      ) : field.type === "select" ? (
         <Select
           size="bar"
           ariaLabel={field.label}
@@ -263,11 +283,17 @@ function RegistryRow({ field, settings, change }: { field: SettingField; setting
         <input
           type="number"
           aria-label={field.label}
+          min={field.min}
+          max={field.max}
           className="t-input !w-[110px] font-mono text-[11.5px]"
           value={String(value ?? field.default)}
           onChange={(e) => {
             const n = Number(e.target.value);
-            if (Number.isFinite(n) && n > 0) change(top, n as never);
+            if (!Number.isFinite(n) || n <= 0) return;
+            /* clamp to the field's declared range — parseSaved clamps the
+               same way on load, so a value never silently snaps back */
+            const clamped = Math.min(Math.max(Math.round(n), field.min ?? 1), field.max ?? Number.MAX_SAFE_INTEGER);
+            change(top, clamped as never);
           }}
         />
       ) : (

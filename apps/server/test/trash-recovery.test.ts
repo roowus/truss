@@ -213,3 +213,42 @@ test("restore/purge of unknown ids fail cleanly, not with a crash or silent no-o
     cleanup();
   }
 });
+
+test("purgeExpiredTrash honors the saved trashRetentionDays setting (issue #30 audit, finding B2)", async () => {
+  /* the settings page's "Keep deleted chats for (days)" used to be a placebo:
+     the purge read only the hardcoded TRASH_RETENTION_MS. Now the sweep reads
+     the value saved in the layout doc's settings (same home as the feed
+     sources), falling back to the 30-day default when unset or invalid. */
+  const { db, sessions, cwd, cleanup } = await setup("trash-retention", "fake-trash-retention");
+  try {
+    const old = await sessions.createSession({ harness: "fake-trash-retention" as never, cwd, title: "old trash" });
+    const recent = await sessions.createSession({ harness: "fake-trash-retention" as never, cwd, title: "fresh trash" });
+    sessions.deleteSession(old.id);
+    sessions.deleteSession(recent.id);
+
+    assert.equal(typeof (sessions as any).trashRetentionMs, "function", "sessions.ts must export trashRetentionMs() — the setting-driven window");
+    assert.equal((sessions as any).trashRetentionMs(), THIRTY_DAYS, "no saved setting → the 30-day default");
+
+    /* a 10-day window saved by the settings page */
+    db.store.setKv("dockview-layout", JSON.stringify({ version: 2, settings: { trashRetentionDays: 10 } }));
+    assert.equal((sessions as any).trashRetentionMs(), 10 * 24 * 60 * 60 * 1000);
+
+    const now = Date.now();
+    db.store.run(`UPDATE sessions SET deleted_at = ? WHERE id = ?`, now - 15 * 24 * 60 * 60 * 1000, old.id);
+    db.store.run(`UPDATE sessions SET deleted_at = ? WHERE id = ?`, now - 5 * 24 * 60 * 60 * 1000, recent.id);
+
+    const purged: string[] = (sessions as any).purgeExpiredTrash(now);
+    assert.ok(purged.includes(old.id), "15-day-old trash is past a 10-day window — purged");
+    assert.ok(!purged.includes(recent.id), "5-day-old trash survives a 10-day window");
+    assert.equal(db.store.getSession(old.id), undefined, "purged row really gone");
+    assert.ok(db.store.getSession(recent.id), "fresh trash retained");
+
+    /* nonsense saved values never shrink the window to zero */
+    db.store.setKv("dockview-layout", JSON.stringify({ version: 2, settings: { trashRetentionDays: 0 } }));
+    assert.equal((sessions as any).trashRetentionMs(), THIRTY_DAYS, "0 days is nonsense — the default applies");
+    db.store.setKv("dockview-layout", "not json{");
+    assert.equal((sessions as any).trashRetentionMs(), THIRTY_DAYS, "an unreadable layout doc — the default applies");
+  } finally {
+    cleanup();
+  }
+});

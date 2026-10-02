@@ -18,10 +18,13 @@ export interface SettingField {
   section: string;
   label: string;
   description: string;
-  type: "switch" | "toggle" | "select" | "text" | "number";
+  type: "switch" | "select" | "text" | "number";
   options?: { value: string; label: string }[];
   default: unknown;
   keywords?: string[];
+  /** number fields only: input + persistence clamp (mirrored in desktops.ts SETTING_BOUNDS) */
+  min?: number;
+  max?: number;
 }
 
 export const SETTINGS_SECTIONS: SettingSection[] = [
@@ -89,6 +92,8 @@ export const SETTINGS_REGISTRY: SettingField[] = [
     description: "Pixel size of the monospace text in shell tabs.",
     type: "number",
     default: 13,
+    min: 8,
+    max: 32,
     keywords: ["font", "size", "terminal", "shell", "text"],
   },
   {
@@ -143,6 +148,8 @@ export const SETTINGS_REGISTRY: SettingField[] = [
     description: "How often the Monitor tab refreshes device vitals. Lower is fresher, higher is gentler on the tunnel.",
     type: "number",
     default: 3000,
+    min: 500,
+    max: 60000,
     keywords: ["monitor", "poll", "refresh", "vitals", "metrics"],
   },
   {
@@ -152,6 +159,8 @@ export const SETTINGS_REGISTRY: SettingField[] = [
     description: "How long the trash keeps a deleted chat recoverable before it's purged forever.",
     type: "number",
     default: 30,
+    min: 1,
+    max: 365,
     keywords: ["trash", "delete", "recover", "retention", "days"],
   },
 ];
