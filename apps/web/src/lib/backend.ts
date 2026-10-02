@@ -38,6 +38,8 @@ export interface TerminalHandlers {
   onOut: (data: string) => void;
   onExit?: (code: number) => void;
   onError?: (msg: string) => void;
+  /** live rename (issue #31): server pushes {type:"title"} to attached clients */
+  onTitle?: (title: string) => void;
 }
 
 export interface TerminalConn {
@@ -71,6 +73,7 @@ export interface Backend {
   archiveSession(id: string, archived: boolean): Promise<unknown>;
   archiveProject(project: string, archived: boolean): Promise<unknown>;
   listTerminals(): Promise<{ terminals: TerminalInfo[] }>;
+  renameTerminal(id: string, title: string): Promise<{ id: string; title: string }>;
   createTerminal(body: { cwd?: string; title?: string }): Promise<{ terminal: TerminalInfo }>;
   deleteTerminal(id: string): Promise<unknown>;
   skills(cwd: string): Promise<{ skills: SkillInfo[] }>;
@@ -205,6 +208,7 @@ export function createLiveBackend(): Backend {
       const r = await req<any>("GET", "/api/terminals");
       return { terminals: r.terminals ?? r ?? [] };
     },
+    renameTerminal: (id: string, title: string) => req("POST", `/api/terminals/${encodeURIComponent(id)}/rename`, { title }),
     createTerminal: async (b) => {
       const r = await req<any>("POST", "/api/terminals", b);
       return { terminal: r.terminal ?? r };
@@ -332,6 +336,7 @@ export function createLiveBackend(): Backend {
       ws.onmessage = (m) => {
         try {
           const f = JSON.parse(m.data as string);
+          if (f.type === "title") h.onTitle?.(f.title);
           if (f.type === "hello") h.onHello?.({ title: f.title, alive: !!f.alive });
           else if (f.type === "out") h.onOut(f.data);
           else if (f.type === "exit") h.onExit?.(f.code);

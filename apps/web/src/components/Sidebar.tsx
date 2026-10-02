@@ -19,6 +19,7 @@ export function Sidebar({ onNew }: { onNew: () => void }) {
   const groupMode = useDesktops((s) => s.settings.groupMode);
   const [q, setQ] = useState("");
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+  const [renamingShell, setRenamingShell] = useState<string | null>(null);
   const now = useNow(15_000);
 
   /* group sessions by project tag, or by workspace folder (cwd);
@@ -155,7 +156,34 @@ export function Sidebar({ onNew }: { onNew: () => void }) {
             terminals.map((t) => (
               <div key={t.id} className="group flex items-center gap-2 mx-0.5 px-2 h-7 rounded-md hover:bg-white/[0.03] cursor-pointer" onClick={() => openPanel("terminal", { terminalId: t.id, title: t.title })} title={t.cwd ? shortPath(t.cwd) : undefined}>
                 <Icon name="term" size={12} className={t.alive === false ? "text-[var(--t-red)]" : "text-[var(--t-dim)]"} />
-                <span className="text-[12px] text-[var(--t-fg2)] truncate">{t.title ?? t.id}</span>
+                {/* double-click renames (issue #31); the open tab renames live */}
+                {renamingShell === t.id ? (
+                  <input
+                    autoFocus
+                    defaultValue={t.title ?? ""}
+                    aria-label="Shell name"
+                    className="text-[12px] bg-[var(--t-bg0)] border border-[var(--t-line2)] rounded px-1 py-0 min-w-0 flex-1 outline-none focus:border-[var(--t-mute)]"
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        void store.renameTerminal(t.id, (e.target as HTMLInputElement).value);
+                        setRenamingShell(null);
+                      } else if (e.key === "Escape") setRenamingShell(null);
+                    }}
+                    onBlur={() => setRenamingShell(null)}
+                    onClick={(e) => e.stopPropagation()}
+                  />
+                ) : (
+                  <span
+                    className="text-[12px] text-[var(--t-fg2)] truncate"
+                    onDoubleClick={(e) => {
+                      e.stopPropagation();
+                      setRenamingShell(t.id);
+                    }}
+                    title={`${t.cwd ? shortPath(t.cwd) + " · " : ""}double-click to rename`}
+                  >
+                    {t.title ?? t.id}
+                  </span>
+                )}
                 <button
                   onClick={(e) => {
                     e.stopPropagation();

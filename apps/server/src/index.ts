@@ -27,7 +27,7 @@ import {
   restoreSession,
   type EventFrame,
 } from "./sessions.js";
-import { attachTerminal, closeTerminal, createTerminal, listTerminals } from "./terminal.js";
+import { attachTerminal, closeTerminal, createTerminal, listTerminals, renameTerminal } from "./terminal.js";
 import { createSkill, listSkills, setSkillDisabled, trashSkill } from "./skills.js";
 import {
   createPath as createWorkspacePath,
@@ -546,6 +546,16 @@ app.post("/api/terminals", async (req) => {
   const body = (req.body ?? {}) as { cwd?: string; shell?: string; title?: string };
   const t = createTerminal(body);
   return t;
+});
+
+app.post("/api/terminals/:id/rename", async (req, reply) => {
+  const { id } = req.params as { id: string };
+  const { title } = (req.body ?? {}) as { title?: string };
+  try {
+    return renameTerminal(id, String(title ?? ""));
+  } catch (err) {
+    return reply.code(400).send({ error: String(err instanceof Error ? err.message : err) });
+  }
 });
 
 app.delete("/api/terminals/:id", async (req) => {
