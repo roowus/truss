@@ -1,13 +1,15 @@
 import { useEffect, useMemo, useState, Fragment } from "react";
 import type { IDockviewPanelProps } from "dockview-react";
 import { store, useApp, useNow, type Call, type SessionView } from "@/lib/store";
-import { rulerTicks, timelineBars, timelineLanes, timelineScale, TIMELINE_MIN_WIDTH_PCT } from "@/lib/requestTimeline";
+import { callIsError, rulerTicks, timelineBars, timelineLanes, timelineScale, TIMELINE_MIN_WIDTH_PCT } from "@/lib/requestTimeline";
 import { argSummary, fmtCost, fmtMs, fmtTokens, harnessStyle } from "@/lib/format";
 import { Empty, HarnessMark, Icon, Spinner } from "@/components/ui";
 import { cn } from "@/utils/cn";
 
 type P = { sessionId: string };
-const isErr = (c: Call) => c.done && c.status != null && (c.status < 200 || c.status >= 300);
+/* one error semantics for the whole panel — table rows, stats, filters, and
+   timeline bars all go through callIsError (src/lib/requestTimeline.ts) */
+const isErr = callIsError;
 const COLS = "grid-cols-[34px_22px_minmax(90px,1.2fr)_48px_62px_64px_54px_54px_62px_minmax(120px,2fr)]";
 
 export function TrajectoryPanel({ params }: IDockviewPanelProps<P>) {
@@ -84,8 +86,14 @@ function Trajectory({ id, view }: { id: string; view: SessionView }) {
           now={now}
           color={h.color}
           onJump={(callId) => {
+            /* the timeline shows every call, but a filtered-out target has no
+               row to open or scroll to — widen back to "all" so the jump lands */
+            if (!shown.some((c) => c.callId === callId)) setFilter("all");
             setOpen((o) => ({ ...o, [callId]: true }));
-            document.querySelector(`[data-call-id="${callId}"]`)?.scrollIntoView({ block: "center", behavior: "smooth" });
+            /* defer past the re-render so a just-unfiltered row exists in the DOM */
+            requestAnimationFrame(() =>
+              document.querySelector(`[data-call-id="${callId}"]`)?.scrollIntoView({ block: "center", behavior: "smooth" }),
+            );
           }}
         />
       )}
@@ -227,7 +235,7 @@ function RequestTimeline({ calls, now, color, onJump }: { calls: Call[]; now: nu
         ))}
         {bars.map((b) => {
           const c = byId[b.callId];
-          const err = c.status !== undefined && c.status >= 400;
+          const err = callIsError(c);
           return (
             <button
               key={b.callId}
