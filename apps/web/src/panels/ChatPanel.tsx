@@ -684,7 +684,6 @@ function Composer({ id }: { id: string }) {
 }
 
 
-<<<<<<< HEAD
 /* ---------------- draggable chat column width (issue #6) ---------------- */
 
 /* one width state shared by the timeline and the composer (same axis), with
@@ -786,7 +785,7 @@ function ChatWidthProvider({ timeline, composer, perms }: { timeline: ReactNode;
 }
 
 const ChatColumnCtx = createContext<number>(CHAT_WIDTH_DEFAULT);
-=======
+
 /* ---------------- the turn rail (issue #7) ---------------- */
 
 /* scroll-spy: active mark = last user-row top at/above the read line (30%
@@ -842,4 +841,3 @@ function TurnRail({ items, active, scroller }: { items: { id: string; index: num
     </div>
   );
 }
->>>>>>> 811e811 (feat #7: the turn rail)
