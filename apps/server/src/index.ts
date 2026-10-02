@@ -44,8 +44,9 @@ import { listFeed, setFeedBroadcaster, setFeedState, shareFeedItem } from "./fee
 import { startFeedAutopost } from "./feed-autopost.js";
 import { composePractices, getGlobalPractices, saveGlobalPractices } from "./practices.js";
 import { createHost, deleteHost, listHosts, rotateHostToken, setHostRevoked, verifyAgentToken } from "./hosts.js";
-import { netInfo, tailscalePeers, tailscaleServe } from "./net.js";
-import { agentBundleError, ensureAgentBundle, installScript } from "./agentbundle.js";
+import { netInfo, taildropToPeer, tailscalePeers, tailscaleServe } from "./net.js";
+import { mintPairing, redeemPairing, redeemRateOk } from "./pairing.js";
+import { agentBundleError, ensureAgentBundle, standaloneInstallScript, installScript } from "./agentbundle.js";
 import { registerMcpPerms } from "./mcp-perms.js";
 import { importDshSessions } from "./import-dsh.js";
 import { registerMcpTruss } from "./mcp-truss.js";
@@ -227,6 +228,58 @@ app.get("/agent/install.sh", async (req, reply) => {
     return reply.header("Content-Type", "text/x-shellscript; charset=utf-8").send(script);
   } catch (e: any) {
     return reply.code(400).type("text/plain").send(`error: ${e.message ?? e}\n`);
+  }
+});
+
+/* ── installer delivery (issue #1): taildrop the standalone script to the
+   picked tailnet device, or mint a short single-use pairing code for the
+   typeable `curl /i/<code> | sh` fallback ── */
+app.post("/api/hosts/:id/pair", async (req, reply) => {
+  const { id } = req.params as { id: string };
+  const { token, serverUrl } = (req.body ?? {}) as { token?: string; serverUrl?: string };
+  if (!token || !serverUrl) return reply.code(400).send({ error: "token and serverUrl are required" });
+  /* the wizard holds the plaintext once; verify it matches this host's hash
+     before minting a code that stands for it */
+  if (!verifyAgentToken(id, token, "")) return reply.code(403).send({ error: "token doesn't match this host" });
+  const { code, expiresAt } = mintPairing({ hostId: id, token, serverUrl });
+  return { code, expiresAt, url: `${serverUrl}/i/${code}`, command: `curl -fsSL ${serverUrl}/i/${code} | sh` };
+});
+
+app.post("/api/hosts/:id/taildrop", async (req, reply) => {
+  const { id } = req.params as { id: string };
+  const { peer, token, serverUrl } = (req.body ?? {}) as { peer?: string; token?: string; serverUrl?: string };
+  if (!peer || !token || !serverUrl) return reply.code(400).send({ error: "peer, token and serverUrl are required" });
+  if (!verifyAgentToken(id, token, "")) return reply.code(403).send({ error: "token doesn't match this host" });
+  const { writeFileSync, mkdtempSync, rmSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const dir = mkdtempSync(join(tmpdir(), "truss-taildrop-"));
+  try {
+    const file = join(dir, `truss-install-${id}.sh`);
+    writeFileSync(file, standaloneInstallScript(id, serverUrl, token), { mode: 0o700 });
+    await taildropToPeer(peer, [file]);
+    return { ok: true, file: `truss-install-${id}.sh` };
+  } catch (err) {
+    return reply.code(502).send({ error: String(err instanceof Error ? err.message : err) });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+/* the pairing-code endpoint: redeem once, get the standalone script */
+app.get("/i/:code", async (req, reply) => {
+  /* rate-limited per client (issue #1): the code keyspace is small by design,
+     so guessing it must cost real time */
+  if (!redeemRateOk(req.ip)) {
+    return reply.code(429).type("text/plain").send("too many install-code tries — wait a minute, then retry\n");
+  }
+  const { code } = req.params as { code: string };
+  const entry = redeemPairing(code);
+  if (!entry) return reply.code(410).type("text/plain").send("that install code is used up or expired — mint a fresh one from the Truss add-host wizard\n");
+  try {
+    return reply.header("Content-Type", "text/x-shellscript; charset=utf-8").send(standaloneInstallScript(entry.hostId, entry.serverUrl, entry.token));
+  } catch (err) {
+    return reply.code(400).type("text/plain").send(`error: ${err instanceof Error ? err.message : err}\n`);
   }
 });
 

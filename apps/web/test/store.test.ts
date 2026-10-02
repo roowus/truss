@@ -290,6 +290,36 @@ test("session.updated for an unknown session refreshes the trash list too (resto
   }
 });
 
+test("session.updated for an UNKNOWN session (a restore from another device) refreshes sessions AND the trash list", async () => {
+  /* regression: a restore broadcasts session.updated; the handler re-listed
+     the main sessions but never refreshed the trash, so this device kept the
+     restored chat under "recently deleted" until the next deletion event */
+  const s = store as unknown as {
+    onFrame: (f: { seq: number; ev: unknown }) => void;
+    refreshSessionsSoon: () => void;
+    refreshTrash: () => Promise<void>;
+  };
+  let soonCalls = 0;
+  let trashCalls = 0;
+  s.refreshSessionsSoon = () => {
+    soonCalls++;
+  };
+  s.refreshTrash = () => {
+    trashCalls++;
+    return Promise.resolve();
+  };
+  try {
+    assert.ok(!store.state.sessions["ghost-restore"], "not a session this device knows");
+    s.onFrame({ seq: 20, ev: { type: "session.updated", sessionId: "ghost-restore", title: "back from trash" } as never });
+    assert.equal(soonCalls, 1, "re-lists the main sessions so the row appears");
+    assert.equal(trashCalls, 1, "and the trash list drops it here too, immediately");
+  } finally {
+    /* restore the prototype methods (the spies were own properties) */
+    delete (s as Record<string, unknown>).refreshSessionsSoon;
+    delete (s as Record<string, unknown>).refreshTrash;
+  }
+});
+
 test("msg.start attachments ride onto the message (transcript chips survive reload); absent stays absent", () => {
   const atts = [{ name: "error.log", path: ".truss-uploads/error.log", size: 1234, mime: "text/plain" }];
   let v = emptyView();

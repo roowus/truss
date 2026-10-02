@@ -139,3 +139,15 @@ export async function tailscaleServe(on: boolean, port: number): Promise<NetInfo
   }
   return (await netInfo(port)).tailscale;
 }
+
+/** push files to a tailnet device via Taildrop (`tailscale file cp`).
+   Used by the add-host wizard's "Send to device" — both ends are on the
+   tailnet, so the installer can travel directly. Validates before touching
+   the CLI; CLI failures reject with the CLI's own message (never hangs —
+   execFile timeout — and never fakes success). */
+export async function taildropToPeer(peer: string, files: string[]): Promise<void> {
+  const target = (peer ?? "").trim();
+  if (!target) throw new Error("no target device (peer) given");
+  if (!Array.isArray(files) || files.length === 0) throw new Error("no files to send");
+  await sh("tailscale", ["file", "cp", ...files, `${target}:`]);
+}
