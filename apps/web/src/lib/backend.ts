@@ -123,6 +123,8 @@ export interface Backend {
   feed(state?: string): Promise<{ items: FeedItem[] }>;
   setFeedState(id: string, state: string): Promise<{ item: FeedItem }>;
   shareFeed(id: string, sessionId: string, note?: string): Promise<{ item: FeedItem }>;
+  /** view-share a todo to a session (issue #26): prompts the session too */
+  shareTodo(id: string, sessionId: string, note?: string): Promise<{ todo: TodoItem }>;
   /** Practices (TRUSS.md) */
   practices(): Promise<{ text: string; path: string }>;
   savePractices(text: string): Promise<unknown>;
@@ -251,6 +253,7 @@ export function createLiveBackend(): Backend {
     feed: (state) => req("GET", `/api/feed${state ? `?state=${encodeURIComponent(state)}` : ""}`),
     setFeedState: (id, state) => req("POST", `/api/feed/${encodeURIComponent(id)}/state`, { state }),
     shareFeed: (id, sessionId, note) => req("POST", `/api/feed/${encodeURIComponent(id)}/share`, { sessionId, note }),
+    shareTodo: (id, sessionId, note) => req("POST", `/api/todos/${encodeURIComponent(id)}/share`, { sessionId, note }),
     practices: () => req("GET", "/api/practices"),
     savePractices: (text) => req("PUT", "/api/practices", { text }),
     composePractices: (cwd, project) => req("GET", `/api/practices/compose?cwd=${encodeURIComponent(cwd)}${project ? `&project=${encodeURIComponent(project)}` : ""}`),

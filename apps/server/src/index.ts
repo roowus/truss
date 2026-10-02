@@ -39,7 +39,7 @@ import {
 import { saveUpload } from "./uploads.js";
 import { gitBranches, gitDiff, gitGraph, gitStatus, gitSwitch } from "./git.js";
 import { createTask, deleteTask, listTasks, runTask, updateTask, type TaskStatus } from "./tasks.js";
-import { createTodo, listTodos, resolveTodoAccess, setTodoBroadcaster, userUpdateTodo } from "./todos.js";
+import { createTodo, listTodos, resolveTodoAccess, setTodoBroadcaster, userUpdateTodo, createUserTodo, shareTodo, backfillTodoFeedCards } from "./todos.js";
 import { listFeed, setFeedBroadcaster, setFeedState, shareFeedItem, shareFeedToSession, getFeedItem } from "./feed.js";
 import { startFeedAutopost } from "./feed-autopost.js";
 import { composePractices, getGlobalPractices, saveGlobalPractices } from "./practices.js";
@@ -86,6 +86,14 @@ startFeedAutopost();
 
 /* pi processes from a previous server run are gone — close their sessions. */
 reconcileOnBoot();
+
+/* legacy todos get their feed cards once (issue #26) */
+try {
+  const backfilled = backfillTodoFeedCards();
+  if (backfilled) app.log.info(`backfilled ${backfilled} todo feed cards`);
+} catch (err) {
+  app.log.warn(`todo feed backfill failed: ${err}`);
+}
 
 /* build the downloadable node-agent bundle in the background (the add-host
    wizard serves it at /agent/install.sh) */
@@ -617,7 +625,7 @@ app.post("/api/todos", async (req, reply) => {
   const b = (req.body ?? {}) as any;
   try {
     if (!b.title) throw new Error("missing title");
-    return { todo: createTodo({ ...b, createdBy: "user", postToFeed: false }) };
+    return { todo: createUserTodo(b) }; /* user todos always post (issue #26) */
   } catch (e: any) {
     return reply.code(400).send({ error: e.message ?? String(e) });
   }
@@ -630,6 +638,20 @@ app.patch("/api/todos/:id", async (req, reply) => {
     return reply.code(400).send({ error: e.message ?? String(e) });
   }
 });
+app.post("/api/todos/:id/share", async (req, reply) => {
+  const { id } = req.params as { id: string };
+  const { sessionId, note } = (req.body ?? {}) as { sessionId?: string; note?: string };
+  if (!sessionId) return reply.code(400).send({ error: "sessionId required" });
+  try {
+    return { todo: await shareTodo(id, sessionId, note) };
+  } catch (err) {
+    const msg = String(err instanceof Error ? err.message : err);
+    /* "no such …" → 404; a real-but-stopped session (or any other failure)
+       is a state conflict, not a missing resource */
+    return reply.code(msg.startsWith("no such") ? 404 : 409).send({ error: msg });
+  }
+});
+
 app.post("/api/todos/:id/access", async (req, reply) => {
   const { id } = req.params as { id: string };
   const { requesterId, approve } = (req.body ?? {}) as { requesterId?: string; approve?: boolean };

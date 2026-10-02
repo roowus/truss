@@ -62,6 +62,7 @@ function camel(r: FeedRow): FeedItem {
     data: JSON.parse(r.data || "{}"),
     state: r.state as FeedState,
     sharedWith: JSON.parse(r.shared_with || "[]"),
+    dedupeKey: r.dedupe_key ?? undefined,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
   };

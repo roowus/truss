@@ -321,7 +321,9 @@ function CardAction({ icon, label, tooltip, onClick, active, ref }: {
 }
 
 /* share popover: pick a session → chat message + agent-visible share */
-function SharePop({ anchor, item, onClose }: { anchor: HTMLElement; item: FeedItem; onClose: () => void }) {
+/** the share popover, generalized for todos too (issue #26): onShare gets
+   (sessionId, note?) */
+export function SharePop({ anchor, item, onClose, onShare }: { anchor: HTMLElement; item: FeedItem; onClose: () => void; onShare?: (sessionId: string, note?: string) => Promise<unknown> }) {
   const order = useApp((s) => s.order);
   const sessions = useApp((s) => s.sessions);
   const [q, setQ] = useState("");
@@ -357,7 +359,8 @@ function SharePop({ anchor, item, onClose }: { anchor: HTMLElement; item: FeedIt
               key={s.id}
               onClick={() => {
                 onClose();
-                void store.be?.shareFeed(item.id, s.id, note.trim() || undefined).then(
+                const noteText = note.trim() || undefined;
+                void (onShare ? onShare(s.id, noteText) : store.be!.shareFeed(item.id, s.id, noteText)).then(
                   () => store.toast("ok", "Shared", `sent to ${s.title}`),
                   (e) => store.toast("error", "Share failed", e.message),
                 );

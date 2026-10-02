@@ -27,6 +27,7 @@ interface TodoRow {
   created_by: string;
   shared_editors: string;
   denied_editors: string;
+  shared_with: string;
   created_at: number;
   updated_at: number;
 }
@@ -56,6 +57,12 @@ function table() {
     );
     CREATE INDEX IF NOT EXISTS idx_todos_status ON todos(status, updated_at DESC);
   `);
+  /* view-sharing roster (issue #26) — distinct from shared_editors:
+     view ≠ edit; edits still need the approval card */
+  const cols = store.all<{ name: string }>(`PRAGMA table_info(todos)`);
+  if (!cols.some((c) => c.name === "shared_with")) {
+    store.exec(`ALTER TABLE todos ADD COLUMN shared_with TEXT NOT NULL DEFAULT '[]'`);
+  }
   ready = true;
 }
 
@@ -76,6 +83,7 @@ function camel(r: TodoRow): TodoItem {
     createdBy: r.created_by as "user" | "agent",
     sharedEditors: JSON.parse(r.shared_editors || "[]"),
     deniedEditors: JSON.parse(r.denied_editors || "[]"),
+    sharedWith: JSON.parse(r.shared_with || "[]"),
     createdAt: r.created_at,
     updatedAt: r.updated_at,
   };
@@ -185,6 +193,69 @@ export function createTodo(input: {
     });
   }
   return todo;
+}
+
+/** the user-sovereign creation path (issue #26): ALWAYS posts the linked
+   feed card — the user's own todos were the silent ones (the panel route
+   passed postToFeed:false). Agents keep the postToFeed escape hatch for
+   deliberate bulk filing. */
+export function createUserTodo(input: Parameters<typeof createTodo>[0]): TodoItem {
+  return createTodo({ ...input, createdBy: "user", postToFeed: true });
+}
+
+/** every legacy todo gets its card, once (the todo:<id> dedupe key guards) */
+export function backfillTodoFeedCards(): number {
+  table();
+  let n = 0;
+  for (const t of listTodos()) {
+    const before = postFeed({
+      type: "todo",
+      sessionId: t.sessionId ?? undefined,
+      title: t.title,
+      body: t.notes,
+      importance: t.priority === "normal" ? "normal" : t.priority,
+      data: { todoId: t.id },
+      dedupeKey: `todo:${t.id}`,
+    });
+    if (before.created) n++;
+  }
+  return n;
+}
+
+/** view-share a todo to a session (issue #26): the todo's sharedWith roster,
+   its feed card's sharedWith too, and the target gets prompted with the
+   title + the optional note (composition per #24). View ≠ edit — edits still
+   need the approval card. */
+export async function shareTodo(id: string, sessionId: string, note?: string): Promise<TodoItem> {
+  table();
+  const t = getTodo(id);
+  if (!t) throw new Error(`no such todo: ${id}`);
+  if (!store.getSession(sessionId)) throw new Error(`no such session: ${sessionId}`);
+  const { composeShareMessage } = await import("./feed.js");
+  const { sendPrompt } = await import("./sessions.js");
+  await sendPrompt(sessionId, composeShareMessage({ title: `Todo: ${t.title}`, body: t.notes }, note));
+
+  if (!t.sharedWith.includes(sessionId)) {
+    store.run(`UPDATE todos SET shared_with = ?, updated_at = ? WHERE id = ?`, JSON.stringify([...t.sharedWith, sessionId]), Date.now(), id);
+  }
+  /* the card goes too (it's the link back) — POST it rather than only
+     finding it: a todo filed cardless (postToFeed:false, the bulk-filing
+     hatch) would otherwise share with no card on the target's list_feed.
+     The todo:<id> dedupe key makes the post a no-op when the card exists. */
+  const { shareFeedItem, postFeed } = await import("./feed.js");
+  const { item: card } = postFeed({
+    type: "todo",
+    sessionId: t.sessionId ?? undefined,
+    title: t.title,
+    body: t.notes,
+    importance: t.priority === "normal" ? "normal" : t.priority,
+    data: { todoId: t.id },
+    dedupeKey: `todo:${t.id}`,
+  });
+  shareFeedItem(card.id, sessionId);
+  const next = getTodo(id)!;
+  broadcast(next);
+  return next;
 }
 
 /* ── agent-facing edits with ownership enforcement ── */
