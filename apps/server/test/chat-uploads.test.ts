@@ -1,15 +1,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
 import { freshServer } from "./helpers.js";
 import type { AdapterHandle, HarnessAdapter, SessionOpts } from "../src/adapters/types.js";
 
-/* SPEC-TESTS for chat file upload — https://github.com/roowus/truss/issues/2
-   ("Chat sessions should allow file upload"). These FAIL on purpose today:
-   they pin the contract a fix must satisfy. The composer, prompt route,
-   sendPrompt, adapter interface, and proto msg events are all text-only right
-   now; nothing can attach a file to a session.
+/* Tests for chat file upload — https://github.com/roowus/truss/issues/2
+   ("Chat sessions should allow file upload"). Written as spec-tests against
+   the contract below; the fix has landed and they now pin it.
 
    The contract, two pieces:
 
@@ -131,6 +129,29 @@ test("saveUpload enforces maxBytes and leaves nothing behind on reject", async (
       "oversize rejected with a useful message (composer shows it)",
     );
     assert.deepEqual(walkFiles(root), before, "a rejected upload must not leak partial files");
+  } finally {
+    cleanup();
+  }
+});
+
+test("saveUpload refuses a .truss-uploads symlink that escapes the workspace (issue #2 security notes)", async () => {
+  const { root, cleanup } = await setup("up-symlink");
+  try {
+    const uploads = await loadUploads();
+    assert.ok(uploads, "src/uploads.ts must exist (see storage test)");
+
+    /* the harness runs code inside the workspace and can plant the upload dir
+       as a symlink out; the unsandboxed server must not write through it */
+    const outside = join(root, "..", "outside-up-symlink");
+    mkdirSync(outside, { recursive: true });
+    symlinkSync(outside, join(root, ".truss-uploads"), "dir");
+
+    assert.throws(
+      () => uploads!.saveUpload(root, "loot.txt", Buffer.from("x")),
+      /escapes|symlink/i,
+      "a symlinked upload dir pointing outside the workspace is refused",
+    );
+    assert.deepEqual(readdirSync(outside), [], "nothing written through the symlink");
   } finally {
     cleanup();
   }

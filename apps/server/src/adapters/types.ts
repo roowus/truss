@@ -47,6 +47,14 @@ export interface AdapterHandle {
   readonly sessionId: string;
   /** the harness's own session id, when known — persisted for resume */
   harnessRef?: string;
+  /**
+   * Set by sessions.boundedSpawn when the spawn budget gave up on this
+   * handle and it landed anyway. Its dispose must free local state but keep
+   * its hands off the harness session: on a resume that session is the one
+   * a retry is bringing back, and closing it there fails the retry's first
+   * turn.
+   */
+  abandoned?: boolean;
 }
 
 export interface HarnessAdapter {

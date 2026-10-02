@@ -7,6 +7,7 @@ import {
   AcpClient,
   beginAcpTurn,
   busyNote,
+  disposeAcpSession,
   handleAcpUpdate,
   makeSessionState,
   settleAcpTurn,
@@ -60,7 +61,10 @@ function loadDshEnv(): Record<string, string> {
   return out;
 }
 
-const client = new AcpClient({
+/** the shared dsh ACP client — exported so tests can pin how this adapter
+    calls it (the turn call's budget wiring); TRUSS_DSH_BIN lets tests/ops
+    point at a different dsh binary */
+export const client = new AcpClient({
   command: process.env.TRUSS_DSH_BIN ?? "dsh",
   args: ["--profile", "acp", "--patch", PATCH],
   /* DSH_HOME pins the session store — without it a systemd-launched server
@@ -178,7 +182,9 @@ export const dshAdapter: HarnessAdapter = {
 
     const h = makeSessionState(opts.sessionId, res.sessionId, model);
     h.harnessRef = res.sessionId;
-    client.onSession(res.sessionId, (rec) => handleServerMessage(h, rec));
+    h.resumed = Boolean(opts.resumeRef);
+    h.onFrame = (rec) => handleServerMessage(h, rec);
+    client.onSession(res.sessionId, h.onFrame);
     h.queue.push({ type: "session.state", sessionId: opts.sessionId, state: "idle" });
     return h;
   },
@@ -194,10 +200,17 @@ export const dshAdapter: HarnessAdapter = {
     beginAcpTurn(h);
 
     void client
-      .call("session/prompt", {
-        sessionId: h.acpSessionId,
-        prompt: [{ type: "text", text }],
-      })
+      .call(
+        "session/prompt",
+        {
+          sessionId: h.acpSessionId,
+          prompt: [{ type: "text", text }],
+        },
+        /* the turn call resolves only when the whole agent turn settles, so it
+           carries no per-request budget — a turn past the budget must finish,
+           not fail and lose its output (issue #12 budgets the spawn phase) */
+        0,
+      )
       .then(() => settleAcpTurn(h, { ok: true }))
       .catch((err: Error) => settleAcpTurn(h, { ok: false, detail: err.message }));
   },
@@ -220,9 +233,7 @@ export const dshAdapter: HarnessAdapter = {
   },
 
   dispose(handle: AdapterHandle) {
-    const h = handle as AcpSessionState;
-    client.offSession(h.acpSessionId);
-    void client.call("session/close", { sessionId: h.acpSessionId }).catch(() => undefined);
-    h.queue.close();
+    /* the ownership guard both ACP adapters share — see disposeAcpSession */
+    disposeAcpSession(client, handle as AcpSessionState);
   },
 } as HarnessAdapter & { resolve(handle: AdapterHandle, requestId: string, choice: string): void };

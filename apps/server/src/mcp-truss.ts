@@ -285,7 +285,8 @@ const TOOLS = [
   },
   {
     name: "list_todos",
-    description: "List todos. Defaults to YOUR session's todos; mine:false lists everything.",
+    description:
+      "List todos. Defaults to YOUR session's todos plus todos shared to your session (view ≠ edit); mine:false lists everything.",
     inputSchema: {
       type: "object",
       properties: {
@@ -514,7 +515,11 @@ async function callTool(name: string, a: Record<string, any>, callerId?: string)
     }
     case "list_todos": {
       let rows = listTodos();
-      if (a.mine !== false && callerId) rows = rows.filter((t) => t.sessionId === callerId);
+      /* default view: own todos + todos view-shared to this session (issue
+         #26 — view ≠ edit; edits still need the approval card). mine:false
+         lists everything. */
+      if (a.mine !== false && callerId)
+        rows = rows.filter((t) => t.sessionId === callerId || t.sharedWith.includes(callerId));
       if (a.status) rows = rows.filter((t) => t.status === a.status);
       return rows;
     }

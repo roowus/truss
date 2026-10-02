@@ -4,10 +4,11 @@ import { store, useApp, useNow, capsOf, type Msg, type ToolRun, type Perm, type 
 import { argSummary, fmtMs, harnessStyle, shortPath, baseHarness } from "@/lib/format";
 import { deviceLabel } from "@/lib/device";
 import { buildModelOptions, modelValue, splitModelValue } from "@/lib/models";
-import { planHeaderFit } from "@/lib/headerFit";
+import { planHeaderFit, HEADER_CLUSTER, HEADER_GAP } from "@/lib/headerFit";
+import { CHAT_WIDTH_DEFAULT, commitChatWidth, dragDisplayWidth, readChatWidthPref, resolveChatWidth, writeChatWidthPref } from "@/lib/chatWidth";
+import { filesFromTransfer, isFileDrag } from "@/lib/attach";
 import { formatSessionRef } from "@/lib/sessionRef";
 import { RAIL_INSET, activeRailIndex, railIndexAtOffset, railMarkTop, railNaturalHeight, turnRailItems } from "@/lib/turnRail";
-import { CHAT_WIDTH_DEFAULT, dragChatWidth, readChatWidthPref, resolveChatWidth, writeChatWidthPref } from "@/lib/chatWidth";
 import { openPanel, openAgentShell, renameSessionPanels } from "@/lib/workspace";
 import { Btn, Empty, HarnessMark, Icon, IconBtn, Select, Spinner, StateDot, STATE_META } from "@/components/ui";
 import { Markdown } from "./Markdown";
@@ -87,11 +88,12 @@ function ChatHeader({ id }: { id: string }) {
   /* overflow planning (issue #3): the right cluster must never get clipped
      by the pane edge. The planner (lib/headerFit) collapses rightmost-first
      into the ⋯ menu; Stop and the menu trigger never collapse. Measured:
-     header width via ResizeObserver, left cluster via a ref, the title gets
-     a 56px reservation (it truncates beyond that). */
+     header width via ResizeObserver, left cluster via a ref (the device chip
+     caps at 8rem, so a long remote label cannot inflate the measurement),
+     the title gets a 56px reservation (it truncates beyond that). */
   const headerRef = useRef<HTMLDivElement>(null);
   const leftRef = useRef<HTMLSpanElement>(null);
-  const [plan, setPlan] = useState<{ visible: string[]; overflow: string[] }>({ visible: ["model", "stop", "trajectory", "more"], overflow: [] });
+  const [plan, setPlan] = useState<{ visible: string[]; overflow: string[] }>({ visible: ["select", "stop", "trajectory", "more"], overflow: [] });
 
   /* which device this session runs on: bare harness id = this server,
      harness@hostId = that remote host (labeled from the registry) */
@@ -120,17 +122,15 @@ function ChatHeader({ id }: { id: string }) {
   useEffect(() => {
     const el = headerRef.current;
     if (!el) return;
-    const items = [
-      ...(hasModel ? [{ id: "model", width: 170 }] : []),
-      ...(showEffort ? [{ id: "effort", width: 118 }] : []),
-      ...(busy ? [{ id: "stop", width: 58, essential: true }] : []),
-      { id: "trajectory", width: 28 },
-      { id: "more", width: 28, essential: true },
-    ];
+    /* the model Select only when there is a catalog, Stop only while running */
+    const items = HEADER_CLUSTER.filter((it) => (it.id === "select" ? hasModel : it.id === "stop" ? busy : true));
     const measure = () => {
       const leftW = leftRef.current?.getBoundingClientRect().width ?? 200;
       const available = el.clientWidth - leftW - 56 /* title reservation */ - 24 /* paddings */;
-      setPlan(planHeaderFit(items, Math.max(0, available), { triggerWidth: 28, gap: 6 }));
+      /* triggerWidth 0: the ⋯ trigger is priced once, as the essential `more`
+         item — it is rendered on every plan, so collapsing adds nothing to
+         the row for it to reserve */
+      setPlan(planHeaderFit(items, Math.max(0, available), { triggerWidth: 0, gap: HEADER_GAP }));
     };
     const ro = new ResizeObserver(measure);
     ro.observe(el);
@@ -144,11 +144,11 @@ function ChatHeader({ id }: { id: string }) {
       <span ref={leftRef} className="flex items-center gap-2 shrink-0">
         <HarnessMark harness={meta.harness} size={18} />
         <span
-          className="shrink-0 inline-flex items-center gap-1 h-5 px-1.5 rounded border border-[var(--t-line)] text-[10px] font-mono text-[var(--t-mute)]"
+          className="shrink-0 min-w-0 max-w-[8rem] inline-flex items-center gap-1 h-5 px-1.5 rounded border border-[var(--t-line)] text-[10px] font-mono text-[var(--t-mute)]"
           title={`session runs on ${device}`}
         >
           <Icon name="host" size={10} className={hostId ? "text-[var(--t-teal)]" : "text-[var(--t-dim)]"} />
-          {device}
+          <span className="min-w-0 truncate">{device}</span>
         </span>
         <span className="flex items-center gap-1.5 shrink-0" title={STATE_META[meta.state]?.hint}>
           <StateDot state={meta.state} size={6} />
@@ -169,13 +169,15 @@ function ChatHeader({ id }: { id: string }) {
             className="!px-2 !text-[11px] font-mono text-[var(--t-mute)] w-[118px] shrink-0"
           />
         )}
-        {hasModel && plan.visible.includes("model") && (
+        {hasModel && plan.visible.includes("select") && (
+          /* w-auto is load-bearing: the .t-input component width is 100% and
+             would otherwise fill the cluster. The planner reserves the cap. */
           <Select
             value={currentValue}
             options={modelOptions}
             onChange={onModelPick}
             ariaLabel="Switch model"
-            className="!h-6 !px-2 !py-0 !text-[11px] font-mono text-[var(--t-mute)] w-[170px] shrink-0"
+            className="!h-6 !px-2 !py-0 !text-[11px] font-mono text-[var(--t-mute)] w-auto max-w-[170px] shrink-0"
           />
         )}
         {busy && (
@@ -190,7 +192,7 @@ function ChatHeader({ id }: { id: string }) {
         <>
           <div className="fixed inset-0 z-40" onClick={() => setMenu(false)} />
           <div className="absolute right-2 top-[42px] z-50 w-52 rounded-lg bg-[var(--t-bg2)] border border-[var(--t-line2)] shadow-2xl py-1 t-pop">
-            {plan.overflow.includes("model") && (
+            {plan.overflow.includes("select") && (
               <div className="px-2 py-1.5" onClick={(e) => e.stopPropagation()}>
                 <Select
                   value={currentValue}
@@ -280,6 +282,9 @@ function Timeline({ id, view }: { id: string; view: SessionView }) {
     for (let i = view.items.length - 1; i >= 0; i--) if (view.items[i].kind === "msg") return view.items[i].id;
   }, [view.items]);
 
+  /* the shared chat column width (issue #6) — hooks stay top-level, never
+     inside the JSX ternary below */
+  const columnW = useContext(ChatColumnCtx);
   /* the turn rail (issue #7): one mark per user message at the right edge */
   const railItems = useMemo(() => turnRailItems(view.items, view.msgs), [view.items, view.msgs]);
   const [railActive, setRailActive] = useState(-1);
@@ -290,7 +295,7 @@ function Timeline({ id, view }: { id: string; view: SessionView }) {
         {view.items.length === 0 ? (
           <EmptyChat id={id} />
         ) : (
-          <div className="mx-auto px-4 py-5 space-y-4" style={{ maxWidth: useContext(ChatColumnCtx) }}>
+          <div className="mx-auto px-4 py-5 space-y-4" style={{ maxWidth: columnW }}>
             {view.items.map((it) => (
               <div key={it.id} data-iid={it.id}>
                 {it.kind === "msg" ? (
@@ -648,7 +653,19 @@ function Composer({ id }: { id: string }) {
           ))}
         </div>
       )}
-      <div className={cn("flex items-end gap-1.5 rounded-xl border bg-[var(--t-bg0)] transition-colors focus-within:border-[var(--t-mute)] px-2 py-1.5", dead ? "border-dashed border-[var(--t-line2)]" : "border-[var(--t-line2)]")}>
+      <div
+        className={cn("flex items-end gap-1.5 rounded-xl border bg-[var(--t-bg0)] transition-colors focus-within:border-[var(--t-mute)] px-2 py-1.5", dead ? "border-dashed border-[var(--t-line2)]" : "border-[var(--t-line2)]")}
+        onDragOver={(e) => {
+          if (isFileDrag(e.dataTransfer)) e.preventDefault();
+        }}
+        onDrop={(e) => {
+          const files = filesFromTransfer(e.dataTransfer);
+          if (files.length) {
+            e.preventDefault();
+            void attachFiles(files);
+          }
+        }}
+      >
         <input
           ref={fileRef}
           type="file"
@@ -662,6 +679,13 @@ function Composer({ id }: { id: string }) {
           ref={ta}
           value={text}
           onChange={(e) => setText(e.target.value)}
+          onPaste={(e) => {
+            const files = filesFromTransfer(e.clipboardData);
+            if (files.length) {
+              e.preventDefault();
+              void attachFiles(files);
+            }
+          }}
           onKeyDown={(e) => {
             if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
               e.preventDefault();
@@ -701,6 +725,108 @@ function Composer({ id }: { id: string }) {
   );
 }
 
+
+/* ---------------- draggable chat column width (issue #6) ---------------- */
+
+/* one width state shared by the timeline and the composer (same axis), with
+   hover-revealed drag handles at the panel's side edges */
+function ChatWidthProvider({ timeline, composer, perms }: { timeline: ReactNode; composer: ReactNode; perms: ReactNode }) {
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const [columnW, setColumnW] = useState(0);
+  const [pref, setPref] = useState<number | null>(() => (typeof localStorage !== "undefined" ? readChatWidthPref(localStorage) : null));
+  const dragRef = useRef<{ originX: number; base: number; side: "left" | "right"; startPref: number | null } | null>(null);
+  const [dragging, setDragging] = useState(false);
+
+  /* layout effect: the initial measure lands before first paint, so a stored
+     pref doesn't flash CHAT_WIDTH_MIN for a frame (columnW starts at 0) */
+  useLayoutEffect(() => {
+    const el = wrapRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => setColumnW(el.clientWidth));
+    ro.observe(el);
+    setColumnW(el.clientWidth);
+    return () => ro.disconnect();
+  }, []);
+
+  const width = pref === null ? CHAT_WIDTH_DEFAULT : resolveChatWidth(columnW, pref);
+
+  const onPointerDown = (side: "left" | "right") => (e: React.PointerEvent) => {
+    e.preventDefault();
+    /* capture keeps pointerup/cancel flowing even when the pointer leaves the
+       window; without it an off-window release sticks the drag and leaks the
+       listeners (the buttons===0 self-heal in move is the fallback) */
+    try { (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); } catch { /* capture unsupported */ }
+    /* drag from the DISPLAYED width — never the stored pref, which the clamp
+       can hide (a wide-monitor pref under a narrow window): drags from the
+       pref commit with zero visual change and erode the stored value. A drag
+       the clamp refuses is a no-op, so the pref still can't be clobbered. */
+    dragRef.current = { originX: e.clientX, base: width, side, startPref: pref };
+    setDragging(true);
+    const finish = (commitX: number | null) => {
+      const d = dragRef.current;
+      dragRef.current = null;
+      setDragging(false);
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointercancel", cancel);
+      if (!d) return;
+      if (commitX === null) { // pointercancel: restore the drag-start state, persist nothing
+        setPref(d.startPref);
+        return;
+      }
+      const finalW = commitChatWidth(d.base, columnW, d.originX, commitX, d.side);
+      if (finalW !== null) {
+        setPref(finalW);
+        if (typeof localStorage !== "undefined") writeChatWidthPref(localStorage, finalW);
+      } else {
+        // null = the drag showed nothing (no travel, or the clamp refused it) —
+        // persist nothing and put the drag-start state back
+        setPref(d.startPref);
+      }
+    };
+    const move = (ev: PointerEvent) => {
+      const d = dragRef.current;
+      if (!d) return;
+      if (ev.buttons === 0) { finish(ev.clientX); return; } // pointerup missed — released outside the window
+      /* null = the clamp refuses the drag here — hold the drag-start state, so
+         the column never moves against the drag */
+      setPref(dragDisplayWidth(d.base, columnW, d.originX, ev.clientX, d.side) ?? d.startPref);
+    };
+    const up = (ev: PointerEvent) => finish(ev.clientX);
+    const cancel = () => finish(null);
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+    window.addEventListener("pointercancel", cancel);
+  };
+
+  const handleCls = (side: "left" | "right") =>
+    cn(
+      "absolute top-0 bottom-0 w-2 z-20 cursor-col-resize group/edge",
+      side === "left" ? "left-0" : "right-0",
+    );
+  const gripCls = cn(
+    "absolute top-1/2 -translate-y-1/2 w-[3px] h-10 rounded-full transition-colors",
+    "bg-[var(--t-line2)] group-hover/edge:bg-[var(--t-amber)]",
+    dragging && "bg-[var(--t-amber)]",
+  );
+
+  return (
+    <div ref={wrapRef} className="relative flex-1 min-h-0 flex flex-col">
+      {/* the shared column axis — timeline content and composer align to it */}
+      <div className="flex-1 min-h-0 flex flex-col" style={{ ["--t-chatw" as never]: `${width}px` }}>
+        <ChatColumnCtx.Provider value={width}>{timeline}{perms}{composer}</ChatColumnCtx.Provider>
+      </div>
+      {/* edge drag handles */}
+      {(["left", "right"] as const).map((side) => (
+        <div key={side} className={handleCls(side)} style={{ touchAction: "none" /* touch: drag resizes instead of scrolling */ }} onPointerDown={onPointerDown(side)} title="Drag to resize the chat column" aria-label={`Resize chat column (${side} edge)`} role="separator" aria-orientation="vertical">
+          <span className={cn(gripCls, side === "left" ? "left-0.5" : "right-0.5")} />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+const ChatColumnCtx = createContext<number>(CHAT_WIDTH_DEFAULT);
 
 /* ---------------- the turn rail (issue #7) ---------------- */
 
@@ -757,80 +883,3 @@ function TurnRail({ items, active, scroller }: { items: { id: string; index: num
     </div>
   );
 }
-
-
-/* ---------------- draggable chat column width (issue #6) ---------------- */
-
-/* one width state shared by the timeline and the composer (same axis), with
-   hover-revealed drag handles at the panel's side edges */
-function ChatWidthProvider({ timeline, composer, perms }: { timeline: ReactNode; composer: ReactNode; perms: ReactNode }) {
-  const wrapRef = useRef<HTMLDivElement>(null);
-  const [columnW, setColumnW] = useState(0);
-  const [pref, setPref] = useState<number | null>(() => (typeof localStorage !== "undefined" ? readChatWidthPref(localStorage) : null));
-  const dragRef = useRef<{ originX: number; base: number; side: "left" | "right" } | null>(null);
-  const [dragging, setDragging] = useState(false);
-
-  useEffect(() => {
-    const el = wrapRef.current;
-    if (!el) return;
-    const ro = new ResizeObserver(() => setColumnW(el.clientWidth));
-    ro.observe(el);
-    setColumnW(el.clientWidth);
-    return () => ro.disconnect();
-  }, []);
-
-  const width = pref === null ? CHAT_WIDTH_DEFAULT : resolveChatWidth(columnW, pref);
-
-  const onPointerDown = (side: "left" | "right") => (e: React.PointerEvent) => {
-    e.preventDefault();
-    dragRef.current = { originX: e.clientX, base: width, side };
-    setDragging(true);
-    const move = (ev: PointerEvent) => {
-      const d = dragRef.current;
-      if (!d) return;
-      setPref(Math.round(dragChatWidth(d.base, d.originX, ev.clientX, d.side)));
-    };
-    const up = (ev: PointerEvent) => {
-      const d = dragRef.current;
-      dragRef.current = null;
-      setDragging(false);
-      window.removeEventListener("pointermove", move);
-      window.removeEventListener("pointerup", up);
-      if (d) {
-        const finalW = Math.round(dragChatWidth(d.base, d.originX, ev.clientX, d.side));
-        setPref(finalW);
-        if (typeof localStorage !== "undefined") writeChatWidthPref(localStorage, finalW);
-      }
-    };
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", up);
-  };
-
-  const handleCls = (side: "left" | "right") =>
-    cn(
-      "absolute top-0 bottom-0 w-2 z-20 cursor-col-resize group/edge",
-      side === "left" ? "left-0" : "right-0",
-    );
-  const gripCls = cn(
-    "absolute top-1/2 -translate-y-1/2 w-[3px] h-10 rounded-full transition-colors",
-    "bg-[var(--t-line2)] group-hover/edge:bg-[var(--t-amber)]",
-    dragging && "bg-[var(--t-amber)]",
-  );
-
-  return (
-    <div ref={wrapRef} className="relative flex-1 min-h-0 flex flex-col">
-      {/* the shared column axis — timeline content and composer align to it */}
-      <div className="flex-1 min-h-0 flex flex-col" style={{ ["--t-chatw" as never]: `${width}px` }}>
-        <ChatColumnCtx.Provider value={width}>{timeline}{perms}{composer}</ChatColumnCtx.Provider>
-      </div>
-      {/* edge drag handles */}
-      {(["left", "right"] as const).map((side) => (
-        <div key={side} className={handleCls(side)} onPointerDown={onPointerDown(side)} title="Drag to resize the chat column" aria-label={`Resize chat column (${side} edge)`} role="separator" aria-orientation="vertical">
-          <span className={cn(gripCls, side === "left" ? "left-0.5" : "right-0.5")} />
-        </div>
-      ))}
-    </div>
-  );
-}
-
-const ChatColumnCtx = createContext<number>(CHAT_WIDTH_DEFAULT);

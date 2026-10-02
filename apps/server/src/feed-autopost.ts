@@ -118,15 +118,21 @@ export function startFeedAutopost() {
    #29: pi has no MCP, so this excerpt IS the report reaching the inbox) */
 function finalTextExcerpt(sessionId: string, maxChars = 600): string | null {
   const evs = store.listEvents(sessionId).map((f) => f.ev);
+  /* roles up front, one pass — the backward scan below used to re-reverse the
+     whole log per candidate msg.done. Forward-set means a repeated messageId
+     resolves to its LAST msg.start, the same winner the reverse-find picked. */
+  const roleOf = new Map<string, string | undefined>();
+  for (const e of evs) {
+    if (e.type === "msg.start") roleOf.set((e as { messageId?: string }).messageId as string, (e as { role?: string }).role);
+  }
   /* final completed assistant message: its text-channel chunks joined */
   let textId: string | null = null;
   for (let i = evs.length - 1; i >= 0; i--) {
     const e = evs[i];
     if (e.type === "msg.done" && !e.stopReason) {
-      // find its role via the matching start
-      const start = [...evs].reverse().find((x) => x.type === "msg.start" && (x as { messageId?: string }).messageId === (e as { messageId?: string }).messageId);
-      if ((start as { role?: string } | undefined)?.role === "assistant") {
-        textId = (e as { messageId?: string }).messageId ?? null;
+      const id = (e as { messageId?: string }).messageId;
+      if (id !== undefined && roleOf.get(id) === "assistant") {
+        textId = id;
         break;
       }
     }

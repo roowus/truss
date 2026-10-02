@@ -97,8 +97,11 @@ test("A: a mid-turn pi exit settles the open bubble + open call before the error
 
 /* ── B: the work_done card carries the turn's output ── */
 
-/** scripted adapter: runs one full turn producing a report, then idles */
-function scriptedAdapter(id: string): HarnessAdapter {
+/** scripted adapter: runs one full turn producing a report, then idles.
+    report = null scripts a turn with NO assistant text (tool-only), which
+    must fall back to today's duration line. The default report is padded
+    past the 600-char excerpt cap so the bound assertion bites. */
+function scriptedAdapter(id: string, report: string | null = "REPORT-MARKER: hermes is novel because… " + "x".repeat(800)): HarnessAdapter {
   let sid = "unset";
   return {
     id: id as never,
@@ -117,7 +120,9 @@ function scriptedAdapter(id: string): HarnessAdapter {
       await tick(50);
       yield { type: "session.state", sessionId: sid, state: "running" } as ProtoEvent;
       yield { type: "msg.start", sessionId: sid, messageId: "m-report", role: "assistant", at: Date.now() } as ProtoEvent;
-      yield { type: "msg.chunk", sessionId: sid, messageId: "m-report", text: "REPORT-MARKER: hermes is novel because…", channel: "text" } as ProtoEvent;
+      if (report !== null) {
+        yield { type: "msg.chunk", sessionId: sid, messageId: "m-report", text: report, channel: "text" } as ProtoEvent;
+      }
       yield { type: "msg.done", sessionId: sid, messageId: "m-report" } as ProtoEvent;
       yield { type: "llm.call.done", sessionId: sid, callId: "c1", status: 200, latencyMs: 1200 } as ProtoEvent;
       yield { type: "session.state", sessionId: sid, state: "idle" } as ProtoEvent;
@@ -134,6 +139,7 @@ test("B: the work_done feed card carries a bounded excerpt of the turn's final a
     const feed = await import("../src/feed.js");
     const autopost = await import("../src/feed-autopost.js");
     sessions.registerAdapter("fake-feedcast" as never, scriptedAdapter("fake-feedcast"));
+    sessions.registerAdapter("fake-silent" as never, scriptedAdapter("fake-silent", null));
     try {
       autopost.startFeedAutopost(); // module-level listener; once per file
 
@@ -147,10 +153,28 @@ test("B: the work_done feed card carries a bounded excerpt of the turn's final a
       }
       assert.ok(card, "a work_done card posts when the turn settles");
       assert.ok(card.body.includes("REPORT-MARKER"), `the card carries WHAT the turn produced — today it's only "${"Turn settled after Ns"}"; got: ${card.body}`);
-      assert.ok(card.body.length <= 4000, "bounded excerpt, not the whole transcript");
+      /* the implementation cap is 600 chars + the ellipsis (feed-autopost.ts):
+         assert against THAT, not a loose transcript-sized bound */
+      assert.ok(card.body.length <= 601, `bounded at the real cap (600 + …), not the whole transcript; got ${card.body.length}`);
+      assert.ok(card.body.endsWith("…"), "an over-cap report is truncated with the ellipsis");
       assert.equal(card.sessionId, s.id, "click-through to the session stays");
+
+      /* the no-text fallback: a tool-only turn (no text chunks) keeps today's
+         duration line — returning "" instead of null here would blank the
+         card on every harness, unpinned */
+      const silent = await sessions.createSession({ harness: "fake-silent" as never, cwd: "/tmp", title: "tool-only turn" });
+      let silentCard: any;
+      const deadline2 = Date.now() + 5000;
+      while (Date.now() < deadline2) {
+        silentCard = feed.listFeed({}).find((i: any) => i.type === "work_done" && i.sessionId === silent.id);
+        if (silentCard) break;
+        await tick(100);
+      }
+      assert.ok(silentCard, "a work_done card posts for the no-text turn too");
+      assert.match(silentCard.body, /^Turn settled after \d+s\.$/, "no assistant text → the duration-line fallback, not a blank card");
     } finally {
       sessions.unregisterAdapter("fake-feedcast" as never);
+      sessions.unregisterAdapter("fake-silent" as never);
     }
   } finally {
     cleanup();

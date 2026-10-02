@@ -192,3 +192,48 @@ test("redeemPairing rejects unknown and expired codes", async () => {
     cleanup();
   }
 });
+
+/* ── 4. redeem rate limiting (issue #1 security note: "the redeem endpoint
+   must be rate-limited; short codes have a small keyspace by design") ── */
+
+test("redeemRateOk gives each client a small attempt budget, then shuts the door", async () => {
+  const { cleanup } = await freshServer("deliver-rate");
+  try {
+    const pairing = await loadPairing();
+    assert.ok(pairing, "src/pairing.ts must exist (see mint test)");
+    assert.equal(typeof pairing.redeemRateOk, "function", "pairing.ts must export redeemRateOk(client, now?) — the /i/:code guard");
+    assert.equal(typeof pairing.REDEEM_RATE_MAX, "number");
+    assert.ok(pairing.REDEEM_RATE_MAX > 0 && pairing.REDEEM_RATE_MAX <= 60, "a handful of tries, not hundreds");
+
+    const t0 = 1_000_000;
+    for (let i = 0; i < pairing.REDEEM_RATE_MAX; i++) {
+      assert.equal(pairing.redeemRateOk("rate-client-a", t0 + i), true, `attempt ${i + 1} within budget`);
+    }
+    assert.equal(pairing.redeemRateOk("rate-client-a", t0 + pairing.REDEEM_RATE_MAX), false, "budget exhausted — the route answers 429");
+    assert.equal(pairing.redeemRateOk("rate-client-a", t0 + pairing.REDEEM_RATE_MAX + 1), false, "stays shut inside the window");
+
+    /* budgets are per client — one brute-forcer must not burn everyone */
+    assert.equal(pairing.redeemRateOk("rate-client-b", t0), true, "a different client still has its own budget");
+  } finally {
+    cleanup();
+  }
+});
+
+test("redeemRateOk reopens after the window (a legit retry a minute later works)", async () => {
+  const { cleanup } = await freshServer("deliver-rate-window");
+  try {
+    const pairing = await loadPairing();
+    assert.ok(pairing, "src/pairing.ts must exist (see mint test)");
+
+    const t0 = 2_000_000;
+    for (let i = 0; i <= pairing.REDEEM_RATE_MAX; i++) pairing.redeemRateOk("rate-client-c", t0);
+    assert.equal(pairing.redeemRateOk("rate-client-c", t0 + 1), false, "saturated");
+    assert.equal(
+      pairing.redeemRateOk("rate-client-c", t0 + pairing.REDEEM_RATE_WINDOW_MS + 1),
+      true,
+      "the window expired — a fresh budget, not a permanent ban",
+    );
+  } finally {
+    cleanup();
+  }
+});

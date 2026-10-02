@@ -1,9 +1,13 @@
 name: ci
 
+# workflow_dispatch: the audit-fix loop dispatches this on a PR head it
+# pushed (bot pushes do not fire pull_request events).
 on:
   push:
     branches: [main, beta]
   pull_request:
+  # (manual dispatch used by the PR audit driver for bot-pushed heads)
+  workflow_dispatch:
 
 jobs:
   verify:

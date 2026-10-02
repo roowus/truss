@@ -7,8 +7,8 @@ import { join } from "node:path";
 /* SPEC-TESTS for model switching being dropped on ACP resume —
    https://github.com/roowus/truss/issues/14
    ("No matter what model I pick, prompting fails 'billing exhausted for
-   glm-4.7'"). These FAIL on purpose today: they pin the contract a fix must
-   satisfy.
+   glm-4.7'"). These pin the contract the issue demanded; the fix landed
+   with them, so they pass.
 
    Root cause: hermesAdapter.spawn's resume branch (adapters/hermes.ts:93-100)
    DISCARDS the session/resume response, so res.models is always undefined —

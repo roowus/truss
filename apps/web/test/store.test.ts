@@ -13,6 +13,9 @@ import type { ProtoEvent } from "../src/lib/proto";
    schedules notifications via requestAnimationFrame — shim it for those two
    Store-level tests; everything else still uses the pure reduce path */
 (globalThis as any).requestAnimationFrame ??= (cb: (t: number) => void) => setTimeout(() => cb(Date.now()), 0);
+/* refreshSessionsSoon (reached by the restore path) schedules via
+   window.setTimeout */
+(globalThis as any).window.setTimeout ??= globalThis.setTimeout.bind(globalThis);
 const { reduce, emptyView, toMs, store } = await import("../src/lib/store");
 
 const T0 = 1_000; // arbitrary frameTime base
@@ -264,6 +267,78 @@ test("session.updated patches effort in place, and null clears it (issue #27)", 
   assert.equal(store.state.sessions["ef-1"].title, "renamed");
   assert.equal(store.state.sessions["ef-1"].effort, undefined, "unrelated updates keep the cleared effort cleared");
   delete store.state.sessions["ef-1"];
+});
+
+test("session.updated for an unknown session refreshes the trash list too (restore drops the ghost for every client)", async () => {
+  /* restoreSession broadcasts session.updated; only the restoring client
+     refreshes its own trash list, so other clients kept the restored session
+     as a ghost in "recently deleted" until reload */
+  const s = store as unknown as {
+    onFrame: (f: { seq: number; ev: unknown }) => void;
+    refreshTrash: () => Promise<void>;
+    refreshSessionsSoon: () => void;
+  };
+  let trashRefreshes = 0;
+  let sessionRefreshes = 0;
+  const origTrash = s.refreshTrash;
+  const origSoon = s.refreshSessionsSoon;
+  s.refreshTrash = async () => {
+    trashRefreshes++;
+  };
+  s.refreshSessionsSoon = () => {
+    sessionRefreshes++;
+  };
+  try {
+    s.onFrame({ seq: 20, ev: { type: "session.updated", sessionId: "restored-1" } as never });
+    assert.equal(sessionRefreshes, 1, "an unknown meta still re-lists sessions");
+    assert.equal(trashRefreshes, 1, "and the trash list refreshes so the restored ghost disappears");
+    /* a plain metadata patch on a known session must NOT hit the trash route */
+    store.set((st) => ({
+      sessions: {
+        ...st.sessions,
+        "ms-1": {
+          id: "ms-1", harness: "pi", title: "t", cwd: "/tmp", model: "m1", provider: "p1",
+          state: "idle", created_at: 0, updated_at: 0, live: true,
+        } as never,
+      },
+    }));
+    s.onFrame({ seq: 21, ev: { type: "session.updated", sessionId: "ms-1", title: "x" } as never });
+    assert.equal(trashRefreshes, 1, "known-meta updates leave the trash list alone");
+    delete store.state.sessions["ms-1"];
+  } finally {
+    s.refreshTrash = origTrash;
+    s.refreshSessionsSoon = origSoon;
+  }
+});
+
+test("session.updated for an UNKNOWN session (a restore from another device) refreshes sessions AND the trash list", async () => {
+  /* regression: a restore broadcasts session.updated; the handler re-listed
+     the main sessions but never refreshed the trash, so this device kept the
+     restored chat under "recently deleted" until the next deletion event */
+  const s = store as unknown as {
+    onFrame: (f: { seq: number; ev: unknown }) => void;
+    refreshSessionsSoon: () => void;
+    refreshTrash: () => Promise<void>;
+  };
+  let soonCalls = 0;
+  let trashCalls = 0;
+  s.refreshSessionsSoon = () => {
+    soonCalls++;
+  };
+  s.refreshTrash = () => {
+    trashCalls++;
+    return Promise.resolve();
+  };
+  try {
+    assert.ok(!store.state.sessions["ghost-restore"], "not a session this device knows");
+    s.onFrame({ seq: 20, ev: { type: "session.updated", sessionId: "ghost-restore", title: "back from trash" } as never });
+    assert.equal(soonCalls, 1, "re-lists the main sessions so the row appears");
+    assert.equal(trashCalls, 1, "and the trash list drops it here too, immediately");
+  } finally {
+    /* restore the prototype methods (the spies were own properties) */
+    delete (s as Record<string, unknown>).refreshSessionsSoon;
+    delete (s as Record<string, unknown>).refreshTrash;
+  }
 });
 
 test("msg.start attachments ride onto the message (transcript chips survive reload); absent stays absent", () => {

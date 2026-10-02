@@ -60,10 +60,18 @@ export class AcpClient {
   private idc = 0;
   private pending = new Map<string, { res: (v: unknown) => void; rej: (e: Error) => void }>();
   private sessionHandlers = new Map<string, SessionHandler>();
+  /* registrations refused because a handler already held the key. The refused
+     spawn is the retry that is going live right now; the handler holding the
+     key is the abandoned spawn whose dispose is about to free it. Recording
+     the claimant lets offSession hand the key straight to it instead of
+     leaving it empty (issue #12). A list, not a slot: two refused
+     registrations on one key are possible (a retry landing while an
+     abandoned spawn still holds the key, then another), and a slot would
+     leave the first claimant live with no handler and no claim — deaf to
+     every frame for that session. */
+  private sessionClaims = new Map<string, SessionHandler[]>();
   private ready: Promise<void> | null = null;
   private exitListenersAttached = false;
-  /** in-flight request → its timeout timer (cleared on answer) */
-  private timers = new Map<string, ReturnType<typeof setTimeout>>();
 
   constructor(
     private launch: AcpLaunchSpec,
@@ -72,13 +80,20 @@ export class AcpClient {
 
   async ensure(): Promise<void> {
     if (this.ready) return this.ready;
-    this.ready = (async () => {
+    const ready = (async () => {
       const proc = spawn(this.launch.command, this.launch.args, {
         stdio: ["pipe", "pipe", "inherit"], // stderr is diagnostics, never protocol
         env: { ...process.env, ...this.launch.env },
         cwd: this.launch.cwd,
       });
       this.proc = proc;
+      /* a fresh wire. The buffer survives the previous child otherwise: a
+         boot that was killed mid-frame leaves its newline-less tail here, and
+         the retry's first line would parse as that tail plus the new child's
+         own answer — dropped as unparseable, taking the retry's initialize
+         with it. Only one boot runs at a time (this.ready gates re-entry), so
+         nothing a live child still owes us can be here. */
+      this.buf = "";
 
       proc.stdout!.setEncoding("utf8");
       proc.stdout!.on("data", (chunk: string) => {
@@ -100,13 +115,36 @@ export class AcpClient {
       });
 
       proc.on("exit", () => {
-        for (const p of this.pending.values()) p.rej(new Error("acp server exited"));
-        this.pending.clear();
-        for (const t of this.timers.values()) clearTimeout(t);
-        this.timers.clear();
-        this.proc = null;
-        this.ready = null;
+        /* only the CURRENT process may flush client state — after a failed
+           boot the half-started child is killed and its exit can land after a
+           retry has already spawned a healthy replacement; flushing for the
+           dead one would reject the retry's initialize and get that new child
+           killed in turn */
+        this.flushFor(proc, new Error("acp server exited"));
       });
+
+      /* Node emits 'error' on the ChildProcess when the binary cannot be
+         spawned at all: a wrong TRUSS_HERMES_BIN, or dsh missing from PATH.
+         An EventEmitter 'error' with no listener throws, and that throw is
+         the truss server's uncaughtException — the whole server dies instead
+         of landing the error row the failed spawn was about to produce, and
+         ensure()'s retry contract turns into a crash loop. A spawn that never
+         started has no exit event, so this handler is what flushes the boot's
+         pending initialize. pi.ts and claude.ts attach one on their own
+         children; the shared client is the seam every ACP harness goes
+         through. */
+      proc.on("error", (err) => {
+        this.flushFor(proc, err);
+      });
+
+      /* a write can outrun the child's death: the boot-failure kill and the
+         spawn-phase recycle both leave this.proc set for a beat after the
+         reader is gone, and call()/respond() write without a guard. EPIPE on
+         a stream with no 'error' listener is the same unhandled throw as a
+         missing binary. The failed write is a request whose answer never
+         comes, so its own budget already rejects it — this listener only has
+         to keep the server up. */
+      proc.stdin?.on("error", () => {});
 
       /* never orphan the multiplexed server when the truss server goes down */
       const shutdown = () => {
@@ -141,10 +179,32 @@ export class AcpClient {
         throw e;
       }
     })();
-    this.ready.catch(() => {
-      this.ready = null;
+    this.ready = ready;
+    ready.catch(() => {
+      /* only clear if nobody replaced us meanwhile (a dispose + fresh
+         ensure() must not be unwound by the old boot's late rejection) */
+      if (this.ready === ready) this.ready = null;
     });
-    return this.ready;
+    return ready;
+  }
+
+  /** Flush everything this child still owed and forget it. Runs for both the
+     exit event and the ChildProcess 'error' event, and only for the CURRENT
+     process: after a failed boot the half-started child is killed and its
+     exit can land after a retry has already spawned a healthy replacement;
+     flushing for the dead one would reject the retry's initialize and get
+     that new child killed in turn. */
+  private flushFor(proc: ChildProcess, err: Error) {
+    if (this.proc !== proc) return;
+    /* every rejected entry clears its own timer in the wrapper below */
+    for (const p of this.pending.values()) p.rej(err);
+    this.pending.clear();
+    /* the server took its sessions with it — these handlers are stale, and
+       leaving them would refuse the re-registration a resume needs */
+    this.sessionHandlers.clear();
+    this.sessionClaims.clear();
+    this.proc = null;
+    this.ready = null;
   }
 
   private dispatch(rec: Frame) {
@@ -167,32 +227,66 @@ export class AcpClient {
     }
   }
 
-  call(method: string, params: unknown): Promise<unknown> {
+  /**
+   * One JSON-RPC request. Budgeted so a wedged harness fails fast instead of
+   * pending forever (issue #12). `timeoutMs` overrides the budget for this one
+   * call; 0 runs it unbudgeted — the turn call does that, because a turn is as
+   * long as the agent needs and budgeting it would fail every long turn and
+   * lose its output.
+   */
+  call(method: string, params: unknown, timeoutMs?: number): Promise<unknown> {
     if (!this.proc?.stdin) return Promise.reject(new Error("acp server not running"));
     const id = `truss-${++this.idc}`;
     this.proc.stdin.write(JSON.stringify({ jsonrpc: "2.0", id, method, params }) + "\n");
     return new Promise((res, rej) => {
-      /* a wedged harness (issue #12: hermes session/new stalled 10m03s) must
-         fail fast and loud instead of pending forever */
-      const budget = this.opts.requestTimeoutMs ?? ACP_DEFAULT_TIMEOUT_MS;
-      const timer = setTimeout(() => {
-        if (this.pending.delete(id)) {
-          this.timers.delete(id);
-          rej(new Error(`acp ${method} timed out after ${Math.round(budget / 1000)}s`));
-        }
-      }, budget);
+      /* TRUSS_ACP_TIMEOUT_MS shrinks the budget for tests (same idiom as
+         TRUSS_DSH_BIN) so a wedge takes milliseconds, not the full default */
+      const budget =
+        timeoutMs ??
+        this.opts.requestTimeoutMs ??
+        (Number(process.env.TRUSS_ACP_TIMEOUT_MS) || ACP_DEFAULT_TIMEOUT_MS);
+      const timer =
+        budget > 0
+          ? setTimeout(() => {
+              if (!this.pending.delete(id)) return;
+              rej(new Error(`acp ${method} timed out after ${Math.round(budget / 1000)}s`));
+              /* A spawn-phase timeout means the process answered nothing while
+                 booting it, and this.ready still points at it: every later
+                 create/resume/model-switch would pay the full budget against
+                 the same wedged process until truss restarted. Recycle it so
+                 the next ensure() boots fresh — but only when nothing else is
+                 on this process. A registered session (its frame handler) or
+                 another call in flight means the process is shared, and
+                 killing it would take healthy sessions down with the wedged
+                 one. */
+              const spawnPhase = method === "initialize" || method === "session/new" || method === "session/resume";
+              if (spawnPhase && this.sessionHandlers.size === 0 && this.pending.size === 0) {
+                try {
+                  this.proc?.kill("SIGKILL");
+                } catch {
+                  /* already gone */
+                }
+                /* forget the process here rather than at its exit event: the
+                   SIGKILL and the exit event are not atomic, and an ensure()
+                   arriving between them would be handed this dying boot and
+                   write its first request into a pipe with no reader — a
+                   spawn a retry would have carried, failed. The exit handler
+                   skips it (this.proc no longer matches) and has nothing left
+                   to flush: both guards above were already empty. */
+                this.proc = null;
+                this.ready = null;
+              }
+            }, budget)
+          : null;
       /* timeouts are failure signaling, not a reason to hold the loop open */
-      timer.unref?.();
-      this.timers.set(id, timer);
+      timer?.unref?.();
       this.pending.set(id, {
         res: (v: unknown) => {
-          clearTimeout(this.timers.get(id));
-          this.timers.delete(id);
+          if (timer) clearTimeout(timer);
           res(v);
         },
         rej: (e: Error) => {
-          clearTimeout(this.timers.get(id));
-          this.timers.delete(id);
+          if (timer) clearTimeout(timer);
           rej(e);
         },
       });
@@ -204,15 +298,91 @@ export class AcpClient {
   }
 
   onSession(dshSessionId: string, fn: SessionHandler) {
+    /* first live registration wins: sessions multiplex on this one client
+       keyed by the harness session id, and resume/respawn reuse the stored
+       ref — so a spawn that outlived the spawn budget lands after a retry
+       has already gone live on the same id. Re-registering over the live
+       handler would steal the session's frames, and the abandoned spawn's
+       dispose would then close the live session out from under it (issue
+       #12). */
+    if (this.sessionHandlers.has(dshSessionId)) {
+      /* refused — but the retry is live the moment its spawn returns, so
+         remember it: the owner's dispose is what frees this key, and freeing
+         must hand the key on rather than leave the retry with no handler */
+      const claims = this.sessionClaims.get(dshSessionId) ?? [];
+      claims.push(fn);
+      this.sessionClaims.set(dshSessionId, claims);
+      return;
+    }
+    this.sessionClaims.delete(dshSessionId);
     this.sessionHandlers.set(dshSessionId, fn);
   }
 
-  offSession(dshSessionId: string) {
-    this.sessionHandlers.delete(dshSessionId);
+  /** fn is done with this session. As the owner it frees the key, handing it
+     to the earliest claimant a refused registration left waiting; as a
+     refused claimant it only drops its own claim, so a closing queue is
+     never handed the key later. Without the hand-off, the abandonment race
+     could free the key right after a retry's registration was refused and
+     leave that live retry with no handler — every frame for the session
+     silently dropped (issue #12). */
+  offSession(dshSessionId: string, fn: SessionHandler) {
+    if (this.sessionHandlers.get(dshSessionId) === fn) {
+      this.sessionHandlers.delete(dshSessionId);
+      const claims = this.sessionClaims.get(dshSessionId) ?? [];
+      const next = claims.shift();
+      if (next) this.sessionHandlers.set(dshSessionId, next);
+      /* only drop the entry once the queue is drained — deleting it here
+         would orphan the claimants still waiting behind the one handed the
+         key, and they would go deaf with no claim to be rescued by */
+      if (!claims.length) this.sessionClaims.delete(dshSessionId);
+      return;
+    }
+    const claims = this.sessionClaims.get(dshSessionId);
+    if (!claims) return;
+    const at = claims.indexOf(fn);
+    if (at !== -1) claims.splice(at, 1);
+    if (!claims.length) this.sessionClaims.delete(dshSessionId);
+  }
+
+  /** is fn still the handler registered for this session? Sessions multiplex
+     on one client keyed by the harness session id, and resume/respawn reuse
+     the stored ref — so a spawn that outlived the spawn budget can settle
+     after a retry has already gone live on the same key. Its late teardown
+     must stop here, or it deletes the live session's handler and every
+     frame for that session is silently dropped (issue #12). */
+  ownsSession(dshSessionId: string, fn: SessionHandler) {
+    return this.sessionHandlers.get(dshSessionId) === fn;
   }
 }
 
 /* ── per-session state + the standard event mapping ── */
+
+/**
+ * Teardown every ACP adapter's dispose shares — hermes and dsh both hand this
+ * their handle, so the ownership guard exists once and can't drift between
+ * the two copies.
+ *
+ * Sessions multiplex on one shared client keyed by the harness session id,
+ * and resume/respawn reuse the stored ref — a spawn that outlived the spawn
+ * budget can land after a retry has gone live on the same key, and its late
+ * teardown must not close the live session out from under it (issue #12).
+ * The other ordering is the sharper one: when the abandoned spawn is the
+ * FIRST to register it owns the key and ownsSession alone would let the close
+ * through — so a handle the spawn budget gave up on never closes the harness
+ * session it resumed. The retry is bringing that same session back, and the
+ * next resume reclaims it.
+ */
+export function disposeAcpSession(client: AcpClient, h: AcpSessionState) {
+  const owned = Boolean(h.onFrame && client.ownsSession(h.acpSessionId, h.onFrame));
+  /* offSession even when the key was never ours: a registration that was
+     refused leaves a claim behind, and a handle going away must not leave
+     the client ready to hand the key to a queue that is about to close */
+  if (h.onFrame) client.offSession(h.acpSessionId, h.onFrame);
+  if (owned && !(h.abandoned && h.resumed)) {
+    void client.call("session/close", { sessionId: h.acpSessionId }).catch(() => undefined);
+  }
+  h.queue.close();
+}
 
 export class AsyncQueue<T> {
   private buf: T[] = [];
@@ -250,6 +420,12 @@ export interface AcpSessionState extends AdapterHandle {
   turnStartedAt: number;
   toolStartedAt: Map<string, number>;
   pendingPerms: Set<string>;
+  /** the handler this state registered on the shared client — dispose checks
+     it still owns the key before tearing the session down */
+  onFrame: SessionHandler | null;
+  /** the harness session came from the stored resume ref rather than a fresh
+     session/new, so it is shared with any retry that resumes the same ref */
+  resumed: boolean;
 }
 
 export function makeSessionState(sessionId: string, acpSessionId: string, model: string): AcpSessionState {
@@ -264,6 +440,8 @@ export function makeSessionState(sessionId: string, acpSessionId: string, model:
     turnStartedAt: 0,
     toolStartedAt: new Map(),
     pendingPerms: new Set(),
+    onFrame: null,
+    resumed: false,
   };
 }
 
