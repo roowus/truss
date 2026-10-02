@@ -61,6 +61,8 @@ export interface Backend {
   deleteSession(id: string, hard: boolean): Promise<unknown>;
   /** the 30-day trash: list / restore / delete-forever */
   trash(): Promise<{ sessions: SessionMeta[] }>;
+  /** bulk trash move (issue #4): every id gets single-delete semantics */
+  bulkDeleteSessions(ids: string[]): Promise<{ deleted: number }>;
   restoreSession(id: string): Promise<unknown>;
   purgeSession(id: string): Promise<unknown>;
   archiveSession(id: string, archived: boolean): Promise<unknown>;
@@ -182,6 +184,7 @@ export function createLiveBackend(): Backend {
     permission: (id, requestId, choice) =>
       req("POST", `/api/sessions/${encodeURIComponent(id)}/permission`, { requestId, choice }),
     trash: () => req("GET", "/api/trash"),
+    bulkDeleteSessions: (ids) => req("POST", "/api/sessions/bulk-delete", { ids }),
     restoreSession: (id) => req("POST", `/api/sessions/${encodeURIComponent(id)}/restore`, {}),
     purgeSession: (id) => req("POST", `/api/sessions/${encodeURIComponent(id)}/purge`, {}),
     deleteSession: (id, hard) =>

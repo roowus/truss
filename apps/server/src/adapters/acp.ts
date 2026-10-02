@@ -80,7 +80,7 @@ export class AcpClient {
 
   async ensure(): Promise<void> {
     if (this.ready) return this.ready;
-    this.ready = (async () => {
+    const ready = (async () => {
       const proc = spawn(this.launch.command, this.launch.args, {
         stdio: ["pipe", "pipe", "inherit"], // stderr is diagnostics, never protocol
         env: { ...process.env, ...this.launch.env },
@@ -179,10 +179,13 @@ export class AcpClient {
         throw e;
       }
     })();
-    this.ready.catch(() => {
-      this.ready = null;
+    this.ready = ready;
+    ready.catch(() => {
+      /* only clear if nobody replaced us meanwhile (a dispose + fresh
+         ensure() must not be unwound by the old boot's late rejection) */
+      if (this.ready === ready) this.ready = null;
     });
-    return this.ready;
+    return ready;
   }
 
   /** Flush everything this child still owed and forget it. Runs for both the
@@ -236,7 +239,12 @@ export class AcpClient {
     const id = `truss-${++this.idc}`;
     this.proc.stdin.write(JSON.stringify({ jsonrpc: "2.0", id, method, params }) + "\n");
     return new Promise((res, rej) => {
-      const budget = timeoutMs ?? this.opts.requestTimeoutMs ?? ACP_DEFAULT_TIMEOUT_MS;
+      /* TRUSS_ACP_TIMEOUT_MS shrinks the budget for tests (same idiom as
+         TRUSS_DSH_BIN) so a wedge takes milliseconds, not the full default */
+      const budget =
+        timeoutMs ??
+        this.opts.requestTimeoutMs ??
+        (Number(process.env.TRUSS_ACP_TIMEOUT_MS) || ACP_DEFAULT_TIMEOUT_MS);
       const timer =
         budget > 0
           ? setTimeout(() => {
