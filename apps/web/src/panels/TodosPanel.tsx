@@ -164,6 +164,8 @@ export function TodosPanel(_props: IDockviewPanelProps) {
 function Facet({ label, value, values, onChange, short }: { label: string; value: string; values: string[]; onChange: (v: string) => void; short?: boolean }) {
   if (values.length === 0) return null;
   return (
+    /* the facets live in the filter bar, so they take the compact size —
+       Select's own default is the 34px form height */
     <Select
       size="bar"
       width={short ? 130 : 112}
