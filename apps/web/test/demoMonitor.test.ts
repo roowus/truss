@@ -21,9 +21,9 @@ test("demo metrics: every proc row carries user, memPct, threads and ageSec", as
     assert.ok(entry.metrics.procs.length > 0, `${entry.hostname}: proc rows exist`);
     for (const p of entry.metrics.procs) {
       assert.ok(typeof p.user === "string" && p.user.length > 0, `${entry.hostname} pid ${p.pid}: user is a login name, not blank`);
-      assert.ok(Number.isFinite(p.memPct) && p.memPct >= 0, `${entry.hostname} pid ${p.pid}: memPct is a number`);
-      assert.ok(Number.isInteger(p.threads) && p.threads > 0, `${entry.hostname} pid ${p.pid}: threads is a count`);
-      assert.ok(Number.isFinite(p.ageSec) && p.ageSec >= 0, `${entry.hostname} pid ${p.pid}: ageSec is a number (age renders fmtUptime(ageSec))`);
+      assert.ok(p.memPct !== undefined && Number.isFinite(p.memPct) && p.memPct >= 0, `${entry.hostname} pid ${p.pid}: memPct is a number`);
+      assert.ok(p.threads !== undefined && Number.isInteger(p.threads) && p.threads > 0, `${entry.hostname} pid ${p.pid}: threads is a count`);
+      assert.ok(p.ageSec !== undefined && Number.isFinite(p.ageSec) && p.ageSec >= 0, `${entry.hostname} pid ${p.pid}: ageSec is a number (age renders fmtUptime(ageSec))`);
     }
   }
 });
