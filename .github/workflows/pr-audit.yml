@@ -18,15 +18,15 @@ name: pr-audit
 # report delivery, GH_PROJECT_PAT for project-board writes.
 
 on:
+  # The comment trigger is the primary fire mechanism: it always evaluates
+  # the default branch's workflow, so it works for stacked PRs whose base is
+  # another feature branch. The work session comments "~run-audit" after
+  # each fix push (config/agent/work-session.md).
   issue_comment:
     types: [created]
-  # issues.labeled fires from the DEFAULT branch even for stacked PRs whose
-  # base is another feature branch — pull_request.labeled would evaluate the
-  # workflow from the base branch, which may not have this file.
-  issues:
-    types: [labeled]
-  # synchronize covers the base-is-main case (post-retarget); session
-  # "~run-audit" comments cover the rest.
+  # pull_request events only fire when the PR's BASE branch already contains
+  # this workflow — i.e. main-based PRs. (issues.labeled does NOT fire for
+  # PR label changes; verified empirically 2026-10-01.)
   pull_request:
     types: [labeled, synchronize]
 
@@ -74,8 +74,6 @@ jobs:
           if [ "$EVENT" = "issue_comment" ] && [ "$IS_PR" = "true" ] && [ "$COMMENT_AUTHOR" = "OWNER" ] \
              && case "$COMMENT_BODY" in *"~run-audit"*) true;; *) false;; esac; then
             fire=true; via=comment
-          elif [ "$EVENT" = "issues" ] && [ "$ACTION" = "labeled" ] && [ "$LABEL" = "audit" ] && [ "$IS_PR" = "true" ]; then
-            fire=true; via=label
           elif [ "$EVENT" = "pull_request" ] && [ "$SAME_REPO" = "true" ]; then
             if [ "$ACTION" = "labeled" ] && [ "$LABEL" = "audit" ]; then
               fire=true; via=label
