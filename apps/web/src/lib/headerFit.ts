@@ -50,3 +50,22 @@ export function planHeaderFit(
   }
   return { visible, overflow };
 }
+
+/* The chat header's right cluster as ChatPanel wires it, in display order.
+   `stop` and `more` are essential: the interrupt stays reachable and the ⋯
+   menu is the overflow trigger's home. That trigger is rendered on every
+   plan, so it is priced here, once — ChatPanel reserves triggerWidth 0.
+   Charging it twice (this item plus the trigger reservation) left the
+   footprint unchanged when trajectory collapsed, and widths that truly fit
+   pushed the model Select into the menu ~28px early.
+   apps/web/test/headerFit.test.ts asserts this array still equals its spec
+   cluster, so a width that drifts here fails there instead of quietly
+   diverging from the rendered header. */
+export const HEADER_CLUSTER: HeaderFitItem[] = [
+  { id: "select", width: 170 },
+  { id: "stop", width: 58, essential: true },
+  { id: "trajectory", width: 28 },
+  { id: "more", width: 28, essential: true },
+];
+
+export const HEADER_GAP = 6;
