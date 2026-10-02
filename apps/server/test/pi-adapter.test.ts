@@ -118,8 +118,14 @@ function run(text) {
 
 function handle(cmd) {
   const id = cmd.id;
+  const GET_STATE_DELAY = Number(process.env.FAKE_PI_GET_STATE_DELAY || 0);
   switch (cmd.type) {
     case "get_state":
+      if (GET_STATE_DELAY > 0) {
+        /* answer late so the adapter's deferred effort write can race it */
+        setTimeout(() => out({ type: "response", id: id, command: "get_state", success: true, data: { sessionId: "fake-pi-session-1", isStreaming: running } }), GET_STATE_DELAY);
+        break;
+      }
       out({ type: "response", id: id, command: "get_state", success: true, data: { sessionId: "fake-pi-session-1", isStreaming: running } });
       break;
     case "prompt":
@@ -171,7 +177,7 @@ process.stdin.on("data", (chunk) => {
     handle(cmd);
   }
 });
-process.stdin.on("end", () => process.exit(0));
+process.stdin.on("end", () => { if (!process.env.FAKE_PI_IGNORE_END) process.exit(0); });
 `;
 
 /* ── harness helpers ── */
@@ -191,11 +197,21 @@ function makeFakePi(tag: string): FakePi {
   return { dir, logPath: join(dir, "pi.log") };
 }
 
-/** run fn with the fake pi first on PATH and FAKE_PI_LOG pointed at its log */
-async function withFakePi(tag: string, fn: (fake: FakePi) => Promise<void>): Promise<void> {
+/** run fn with the fake pi first on PATH and FAKE_PI_LOG pointed at its log.
+    `env` rides along for the whole run (restored afterwards). */
+async function withFakePi(
+  tag: string,
+  fn: (fake: FakePi) => Promise<void>,
+  env: Record<string, string> = {},
+): Promise<void> {
   const fake = makeFakePi(tag);
   const oldPath = process.env.PATH;
   const oldLog = process.env.FAKE_PI_LOG;
+  const oldEnv: Record<string, string | undefined> = {};
+  for (const [k, v] of Object.entries(env)) {
+    oldEnv[k] = process.env[k];
+    process.env[k] = v;
+  }
   process.env.PATH = fake.dir + "/bin:" + (oldPath ?? "");
   process.env.FAKE_PI_LOG = fake.logPath;
   try {
@@ -205,6 +221,10 @@ async function withFakePi(tag: string, fn: (fake: FakePi) => Promise<void>): Pro
     else process.env.PATH = oldPath;
     if (oldLog === undefined) delete process.env.FAKE_PI_LOG;
     else process.env.FAKE_PI_LOG = oldLog;
+    for (const [k, v] of Object.entries(oldEnv)) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
     rmSync(fake.dir, { recursive: true, force: true });
   }
 }
@@ -485,6 +505,57 @@ test("dispose: ending stdin shuts pi down cleanly, exit 0, no error events", { t
     await Promise.race([finished, new Promise((r) => setTimeout(r, 3000))]);
     const errors = events.filter((e) => e.type === "session.state" && (e as { state: string }).state === "error");
     assert.deepEqual(errors, [], "no error events after dispose");
+  });
+});
+
+/* ── effort write vs. a dead pipe (issue #27) ──
+   The adapter defers set_thinking_level until get_state answers (up to 8s).
+   dispose() must tear that down, and a late write into a dead stdin must
+   never take the server down. */
+
+test("effort: dispose() before get_state answers must not write set_thinking_level into the ended pipe", { timeout: 15000 }, async () => {
+  await withFakePi(
+    "effort-dispose",
+    async (fake) => {
+      const handle = await piAdapter.spawn({
+        sessionId: "t-effort-dispose",
+        cwd: tmpdir(),
+        provider: "truss-fw",
+        model: "m",
+        effort: "high",
+      });
+      const { finished } = collect(handle);
+      piAdapter.dispose(handle); // stdin ends while the handshake is still in flight
+      /* the late get_state answer lands here: harnessRef proves the deferred
+         continuation really ran after dispose */
+      await waitFor(() => handle.harnessRef === "fake-pi-session-1", "late handshake answer");
+      const sent = readLog(fake.logPath).map((r) => r.cmd).filter(Boolean) as { type?: string }[];
+      assert.ok(!sent.some((c) => c.type === "set_thinking_level"), "no effort write after dispose");
+      /* the test process surviving is the other half: the write must be
+         guarded off, not left to whatever the stream does with it */
+      await Promise.race([finished, new Promise((r) => setTimeout(r, 1000))]);
+    },
+    { FAKE_PI_GET_STATE_DELAY: "400", FAKE_PI_IGNORE_END: "1" },
+  );
+});
+
+/* Node absorbs a write into a dead child's stdin today (it errors instead of
+   emitting), so this is a characterization pin rather than red/green: should
+   that ever turn into a stream 'error' again, the listener in spawn() keeps
+   it from being an uncaught exception here. */
+test("a late write into a dead stdin neither throws nor crashes the server", { timeout: 15000 }, async () => {
+  await withFakePi("deadpipe", async () => {
+    const handle = await piAdapter.spawn({ sessionId: "t-deadpipe", cwd: tmpdir(), provider: "truss-fw", model: "m" });
+    const { finished } = collect(handle);
+    await waitFor(() => handle.harnessRef === "fake-pi-session-1", "handshake done");
+    procOf(handle).kill("SIGKILL");
+    await new Promise((r) => (procOf(handle).once("exit", () => r(null))));
+    /* the 8s effort continuation, send() and interrupt() all land here after
+       a harness dies mid-flight */
+    procOf(handle).stdin!.write("late\n");
+    await new Promise((r) => setTimeout(r, 100));
+    await Promise.race([finished, new Promise((r) => setTimeout(r, 1000))]);
+    assert.equal(handle.harnessRef, "fake-pi-session-1", "the run got as far as the handshake");
   });
 });
 

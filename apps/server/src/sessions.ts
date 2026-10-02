@@ -125,6 +125,13 @@ function settleOrphanedPerms(sessionId: string) {
    "Booting…" spinner */
 export const SPAWN_TIMEOUT_MS = 90_000;
 
+/** case-insensitive levels, blank/null clears to the harness default,
+   harness-specific levels (ultrathink…) pass through (issue #27) */
+export function normalizeEffort(v: string | null | undefined): string | null {
+  const t = (v ?? "").trim().toLowerCase();
+  return t || null;
+}
+
 /**
  * Bound an adapter.spawn with the spawn budget. Every spawn goes through here
  * — create, resume, and model-switch respawn alike: a wedged harness must fail
@@ -187,6 +194,8 @@ export async function createSession(
     cwd: string;
     model?: string;
     provider?: string;
+    /** reasoning effort (issue #27) — travels with model+provider */
+    effort?: string | null;
     title?: string;
     project?: string;
   },
@@ -197,6 +206,7 @@ export async function createSession(
 
   const id = randomUUID().slice(0, 8);
   const title = input.title?.trim() || "new session";
+  const effort = normalizeEffort(input.effort);
   store.createSession({
     id,
     harness: input.harness,
@@ -204,6 +214,7 @@ export async function createSession(
     cwd: input.cwd,
     model: input.model,
     provider: input.provider,
+    effort,
     project: input.project,
   });
 
@@ -227,6 +238,7 @@ export async function createSession(
         cwd: input.cwd,
         model: input.model,
         provider: input.provider,
+        effort,
       },
       opts.spawnTimeoutMs ?? SPAWN_TIMEOUT_MS,
     );
@@ -299,6 +311,7 @@ async function resumeSessionOnce(id: string, opts: { spawnTimeoutMs?: number }):
         cwd: row.cwd,
         model: row.model ?? undefined,
         provider: row.provider ?? undefined,
+        effort: row.effort ?? undefined,
         resumeRef: row.harness_ref,
       },
       opts.spawnTimeoutMs ?? SPAWN_TIMEOUT_MS,
@@ -417,6 +430,7 @@ export async function switchModel(
             cwd: row.cwd,
             model,
             provider,
+            effort: row.effort ?? undefined,
             resumeRef: row.harness_ref ?? undefined,
           },
           opts.spawnTimeoutMs ?? SPAWN_TIMEOUT_MS,
@@ -449,6 +463,65 @@ export async function switchModel(
         ? `model switched to ${label} — harness restarted, history kept`
         : `model set to ${label} — applies when the session resumes`;
   const noteId = `m-sys-${Date.now()}`;
+  sink({ type: "msg.start", sessionId, messageId: noteId, role: "system", at: Date.now() });
+  sink({ type: "msg.chunk", sessionId, messageId: noteId, text: note });
+  sink({ type: "msg.done", sessionId, messageId: noteId });
+  return { mode };
+}
+
+/**
+ * Change a session's reasoning effort (issue #27) — mirrors switchModel:
+ * adapters have no live effort hook, so a live session respawns carrying it
+ * (restart, history intact); a dead one stores it for the next resume.
+ * Either way the row updates and session.updated tells every client.
+ */
+export async function setSessionEffort(sessionId: string, effort: string | null): Promise<{ mode: "restart" | "stored" }> {
+  const row = store.getSession(sessionId);
+  if (!row) throw new Error(`no such session: ${sessionId}`);
+  const clean = normalizeEffort(effort);
+  const s = live.get(sessionId);
+
+  let mode: "restart" | "stored" = "stored";
+  if (s) {
+    if (row.state === "running") {
+      throw new Error("session is running: interrupt it, then change effort (the harness can't swap mid-turn)");
+    }
+    s.adapter.dispose(s.handle);
+    live.delete(sessionId);
+    let handle: AdapterHandle;
+    try {
+      handle = await s.adapter.spawn({
+        sessionId,
+        cwd: row.cwd,
+        model: row.model ?? undefined,
+        provider: row.provider ?? undefined,
+        effort: clean ?? undefined,
+        resumeRef: row.harness_ref ?? undefined,
+      });
+    } catch (err) {
+      /* the session is out of `live` now and can't take prompts, so the row
+         must not keep saying idle: report error like createSession does, and
+         sendPrompt's resume-on-prompt path picks it back up */
+      const detail = err instanceof Error ? err.message : String(err);
+      store.setSessionState(sessionId, "error");
+      sink({ type: "session.state", sessionId, state: "error", detail });
+      throw err;
+    }
+    goLive(sessionId, s.adapter, handle);
+    if (handle.harnessRef && handle.harnessRef !== row.harness_ref) {
+      store.setHarnessRef(sessionId, handle.harnessRef);
+    }
+    mode = "restart";
+  }
+
+  store.setSessionEffort(sessionId, clean);
+  sink({ type: "session.updated", sessionId, effort: clean });
+
+  const noteId = `m-sys-${Date.now()}`;
+  const suffix = mode === "restart" ? " (harness restarted, history kept)" : " (applies when the session resumes)";
+  const note = clean
+    ? `reasoning effort ${mode === "restart" ? "switched" : "set"} to ${clean}${suffix}`
+    : `reasoning effort cleared to the harness default${suffix}`;
   sink({ type: "msg.start", sessionId, messageId: noteId, role: "system", at: Date.now() });
   sink({ type: "msg.chunk", sessionId, messageId: noteId, text: note });
   sink({ type: "msg.done", sessionId, messageId: noteId });

@@ -485,6 +485,7 @@ class Store {
               ...(ev.archived !== undefined ? { archived: ev.archived ? 1 : 0 } : {}),
               ...(ev.model !== undefined ? { model: ev.model ?? undefined } : {}),
               ...(ev.provider !== undefined ? { provider: ev.provider ?? undefined } : {}),
+              ...(ev.effort !== undefined ? { effort: ev.effort ?? undefined } : {}),
             },
           },
         }));
@@ -555,6 +556,16 @@ class Store {
       await this.be.interrupt(id);
     } catch (e: any) {
       this.toast("error", "Interrupt failed", e.message);
+    }
+  }
+  /** reasoning effort (issue #27): restart for live, stored for dead, null clears */
+  async switchEffort(id: string, effort: string | null) {
+    try {
+      const { mode } = await this.be.setSessionEffort(id, effort);
+      if (mode === "restart") this.toast("info", "Effort switched", "harness restarted, history kept");
+    } catch (e: any) {
+      this.toast("error", "Couldn't change effort", e.message);
+      throw e;
     }
   }
   async switchModel(id: string, model: string, provider?: string) {

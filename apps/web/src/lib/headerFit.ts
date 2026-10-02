@@ -63,6 +63,7 @@ export function planHeaderFit(
    diverging from the rendered header. */
 export const HEADER_CLUSTER: HeaderFitItem[] = [
   { id: "select", width: 170 },
+  { id: "effort", width: 118 },
   { id: "stop", width: 58, essential: true },
   { id: "trajectory", width: 28 },
   { id: "more", width: 28, essential: true },

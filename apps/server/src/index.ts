@@ -20,6 +20,7 @@ import {
   reconcileOnBoot,
   resolvePermission,
   sendPrompt,
+  setSessionEffort,
   switchModel,
   setBroadcaster,
   deleteSessions,
@@ -387,6 +388,7 @@ app.post("/api/sessions", async (req, reply) => {
     cwd?: string;
     model?: string;
     provider?: string;
+    effort?: string;
     title?: string;
     project?: string;
   };
@@ -397,6 +399,7 @@ app.post("/api/sessions", async (req, reply) => {
       cwd: body.cwd ?? process.cwd(),
       model: body.model,
       provider: body.provider,
+      effort: body.effort,
       title: body.title,
       project: body.project,
     });
@@ -446,6 +449,17 @@ app.post("/api/sessions/:id/upload", { bodyLimit: 34 * 1024 * 1024 }, async (req
     return { upload: saveUpload(row.cwd, name, data) };
   } catch (err) {
     return reply.code(400).send({ error: String(err instanceof Error ? err.message : err) });
+  }
+});
+
+app.post("/api/sessions/:id/effort", async (req, reply) => {
+  const { id } = req.params as { id: string };
+  const { effort } = (req.body ?? {}) as { effort?: string | null };
+  if (effort != null && typeof effort !== "string") return reply.code(400).send({ error: "effort must be a string or null" });
+  try {
+    return await setSessionEffort(id, effort ?? null);
+  } catch (err) {
+    return reply.code(409).send({ error: String(err instanceof Error ? err.message : err) });
   }
 });
 

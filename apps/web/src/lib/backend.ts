@@ -57,6 +57,8 @@ export interface Backend {
   getSession(id: string): Promise<{ session: SessionMeta }>;
   /** switch a session's model: live where the harness supports it, else restart-with-history or stored for next resume */
   setSessionModel(id: string, model: string, provider?: string): Promise<{ mode: "live" | "restart" | "stored" }>;
+  /** reasoning effort (issue #27): restart for live sessions, stored otherwise; null clears */
+  setSessionEffort(id: string, effort: string | null): Promise<{ mode: "restart" | "stored" }>;
   getEvents(id: string): Promise<{ events: Frame[] }>;
   prompt(id: string, text: string, attachments?: PromptAttachment[]): Promise<{ ok: boolean }>;
   /** upload a file into the session's workspace (.truss-uploads/) for attaching */
@@ -188,6 +190,7 @@ export function createLiveBackend(): Backend {
     listSessions: () => req("GET", "/api/sessions"),
     createSession: (b) => req("POST", "/api/sessions", b),
     getSession: (id) => req("GET", `/api/sessions/${encodeURIComponent(id)}`),
+    setSessionEffort: (id, effort) => req("POST", `/api/sessions/${encodeURIComponent(id)}/effort`, { effort }),
     setSessionModel: (id, model, provider) =>
       req("POST", `/api/sessions/${encodeURIComponent(id)}/model`, { model, provider }),
     getEvents: (id) => req("GET", `/api/sessions/${encodeURIComponent(id)}/events`),

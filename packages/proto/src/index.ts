@@ -44,6 +44,8 @@ export interface SessionUpdated {
   archived?: boolean;
   model?: string | null;
   provider?: string | null;
+  /** reasoning effort change (issue #27) */
+  effort?: string | null;
 }
 
 /** hard-deleted: the row and its event log are gone. Broadcast-only (the FK

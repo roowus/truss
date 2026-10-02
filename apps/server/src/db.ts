@@ -55,6 +55,10 @@ if (!sessionCols.some((c) => c.name === "provider")) {
 if (!sessionCols.some((c) => c.name === "deleted_at")) {
   db.exec(`ALTER TABLE sessions ADD COLUMN deleted_at INTEGER`);
 }
+/* migration: per-session reasoning effort (issue #27) */
+if (!sessionCols.some((c) => c.name === "effort")) {
+  db.exec(`ALTER TABLE sessions ADD COLUMN effort TEXT`);
+}
 
 /* server-level key-value store (layout persistence, future settings) */
 db.exec(`
@@ -79,11 +83,12 @@ export interface SessionRow {
   harness_ref: string | null;
   archived: number;
   deleted_at: number | null;
+  effort: string | null;
 }
 
 const insertSession = db.prepare(`
-  INSERT INTO sessions (id, harness, title, cwd, model, provider, project, state, created_at, updated_at)
-  VALUES (@id, @harness, @title, @cwd, @model, @provider, @project, @state, @created_at, @updated_at)
+  INSERT INTO sessions (id, harness, title, cwd, model, provider, effort, project, state, created_at, updated_at)
+  VALUES (@id, @harness, @title, @cwd, @model, @provider, @effort, @project, @state, @created_at, @updated_at)
 `);
 
 const updateSessionState = db.prepare(`
@@ -154,6 +159,7 @@ export const store = {
     cwd: string;
     model?: string;
     provider?: string;
+    effort?: string | null;
     project?: string;
   }): SessionRow {
     const now = Date.now();
@@ -164,6 +170,7 @@ export const store = {
       cwd: s.cwd,
       model: s.model ?? null,
       provider: s.provider ?? null,
+      effort: s.effort ?? null,
       project: s.project ?? null,
       state: "spawning",
       created_at: now,
@@ -180,6 +187,11 @@ export const store = {
     updateSessionTitle.run({ id, title, at: Date.now() });
   },
 
+  /** effort travels with the model+provider pair (issue #27) */
+  setSessionEffort(id: string, effort: string | null) {
+    db.prepare(`UPDATE sessions SET effort = ?, updated_at = ? WHERE id = ?`).run(effort, Date.now(), id);
+  },
+
   /** model + provider move together — storing one without the other is how
      resumed sessions ended up sending fireworks ids to the zai endpoint */
   setSessionModel(id: string, model: string | null, provider: string | null) {
@@ -194,6 +206,7 @@ export const store = {
     cwd: string;
     model?: string;
     provider?: string;
+    effort?: string | null;
     project?: string;
     state: SessionState;
     created_at: number;
@@ -206,6 +219,7 @@ export const store = {
       cwd: s.cwd,
       model: s.model ?? null,
       provider: s.provider ?? null,
+      effort: s.effort ?? null,
       project: s.project ?? null,
       state: s.state,
       created_at: s.created_at,
