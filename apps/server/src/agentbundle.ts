@@ -55,9 +55,23 @@ function b64(s: string | Buffer) {
   return Buffer.from(s).toString("base64");
 }
 
+/* serverUrl is request/body-controlled and lands inside a shell script that
+   can run unattended on a remote peer (taildrop, ssh-install) — the unquoted
+   env heredoc below would honor `$()`/backticks, and a newline would inject
+   whole script lines. One choke point, so every delivery route inherits the
+   guard: a plain http(s) URL — host (dns/ipv4/ipv6), optional port, optional
+   simple path — and nothing the shell can read as syntax. (issue #91 audit) */
+const SERVER_URL_RE = /^https?:\/\/[A-Za-z0-9.\-[\]:]+(:\d+)?(\/[A-Za-z0-9._~\/-]*)?$/;
+export function assertSafeServerUrl(serverUrl: string): void {
+  if (!SERVER_URL_RE.test(serverUrl ?? "")) {
+    throw new Error("serverUrl must be a plain http(s) URL — host, optional port and path, no shell characters");
+  }
+}
+
 export function installScript(hostId: string, serverUrl: string): string {
   const host = getHost(hostId);
   if (!host) throw new Error(`no such host: ${hostId}`);
+  assertSafeServerUrl(serverUrl);
   /* http(s) for the curl line; the agent dials ws(s) */
   const wsUrl = serverUrl.replace(/^http/, "ws");
   if (!existsSync(bundlePath())) throw new Error("agent bundle isn't built yet — the server builds it at boot, retry in a few seconds");

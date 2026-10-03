@@ -48,7 +48,7 @@ import { createHost, deleteHost, getHost, isHostTombstoned, listHosts, rotateHos
 import { netInfo, taildropToPeer, tailscalePeers, tailscaleServe, tailscaleSshOk, tailscaleSshRun } from "./net.js";
 import { deliveryOptions, installerDropName } from "./installer.js";
 import { mintPairing, redeemPairing, redeemRateOk } from "./pairing.js";
-import { agentBundleError, ensureAgentBundle, standaloneInstallScript, installScript } from "./agentbundle.js";
+import { agentBundleError, assertSafeServerUrl, ensureAgentBundle, standaloneInstallScript, installScript } from "./agentbundle.js";
 import { registerMcpPerms } from "./mcp-perms.js";
 import { importDshSessions } from "./import-dsh.js";
 import { registerMcpTruss } from "./mcp-truss.js";
@@ -261,6 +261,13 @@ app.post("/api/hosts/:id/pair", async (req, reply) => {
   /* the wizard holds the plaintext once; verify it matches this host's hash
      before minting a code that stands for it */
   if (!verifyAgentToken(id, token, "")) return reply.code(403).send({ error: "token doesn't match this host" });
+  /* the URL is embedded in the redeem-time script — reject shell syntax at
+     mint, not after the user already typed the command (issue #91 audit) */
+  try {
+    assertSafeServerUrl(serverUrl);
+  } catch (e: any) {
+    return reply.code(400).send({ error: e.message });
+  }
   const { code, expiresAt } = mintPairing({ hostId: id, token, serverUrl });
   return { code, expiresAt, url: `${serverUrl}/i/${code}`, command: `curl -fsSL ${serverUrl}/i/${code} | sh` };
 });
@@ -270,6 +277,11 @@ app.post("/api/hosts/:id/taildrop", async (req, reply) => {
   const { peer, token, serverUrl } = (req.body ?? {}) as { peer?: string; token?: string; serverUrl?: string };
   if (!peer || !token || !serverUrl) return reply.code(400).send({ error: "peer, token and serverUrl are required" });
   if (!verifyAgentToken(id, token, "")) return reply.code(403).send({ error: "token doesn't match this host" });
+  try {
+    assertSafeServerUrl(serverUrl); // the URL lands inside the dropped script
+  } catch (e: any) {
+    return reply.code(400).send({ error: e.message });
+  }
   const { writeFileSync, mkdtempSync, rmSync } = await import("node:fs");
   const { tmpdir } = await import("node:os");
   const { join } = await import("node:path");
@@ -317,6 +329,14 @@ app.post("/api/hosts/:id/ssh-install", async (req, reply) => {
   const { peer, token, serverUrl } = (req.body ?? {}) as { peer?: string; token?: string; serverUrl?: string };
   if (!peer || !token || !serverUrl) return reply.code(400).send({ error: "peer, token and serverUrl are required" });
   if (!verifyAgentToken(id, token, "")) return reply.code(403).send({ error: "token doesn't match this host" });
+  /* CRITICAL gate (issue #91 audit): this route executes the script on the
+     peer with no human reading it — the URL embedded in that script must be
+     a plain URL, rejected before the CLI is ever invoked */
+  try {
+    assertSafeServerUrl(serverUrl);
+  } catch (e: any) {
+    return reply.code(400).send({ error: e.message });
+  }
   try {
     await ensureAgentBundle().catch(() => {});
     await tailscaleSshRun(peer, standaloneInstallScript(id, serverUrl, token));
