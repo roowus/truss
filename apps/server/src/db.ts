@@ -247,9 +247,12 @@ export const store = {
     });
   },
 
+  /* pin deliberately does NOT bump updated_at (unlike archive): the row
+     stays visible, so a bump would reset its "ago" label and strand it at
+     the top of the recency partition after an unpin (audit B1, issue #86) */
   setPinned(id: string, pinned: boolean) {
-    db.prepare(`UPDATE sessions SET pinned = @p, updated_at = @at WHERE id = @id`).run({
-      id, p: pinned ? 1 : 0, at: Date.now(),
+    db.prepare(`UPDATE sessions SET pinned = @p WHERE id = @id`).run({
+      id, p: pinned ? 1 : 0,
     });
   },
 

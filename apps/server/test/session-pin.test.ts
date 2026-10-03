@@ -107,3 +107,34 @@ test("pinning never touches lifecycle: archived stays archived, state untouched"
     cleanup();
   }
 });
+
+/* regression (audit round 1, B1): pin must NOT bump updated_at — the row
+   stays visible, so a bump would fake recency ("ago" jumps to now) and an
+   unpin would strand the chat at the top of the unpinned partition */
+test("pin/unpin leaves updated_at and the recency order untouched", async () => {
+  const { db, cleanup } = await freshServer("pin-recency");
+  const sessions = await import("../src/sessions.js");
+  sessions.registerAdapter("fake-pin4" as never, fakeAdapter("fake-pin4"));
+  try {
+    const older = await sessions.createSession({ harness: "fake-pin4" as never, cwd: "/tmp", title: "older" });
+    const newer = await sessions.createSession({ harness: "fake-pin4" as never, cwd: "/tmp", title: "newer" });
+    db.store.run(`UPDATE sessions SET updated_at = ? WHERE id = ?`, 1000, older.id);
+    db.store.run(`UPDATE sessions SET updated_at = ? WHERE id = ?`, 2000, newer.id);
+
+    (sessions as any).setSessionPinned(older.id, true);
+    (sessions as any).setSessionPinned(older.id, false);
+
+    const row = db.store.listSessions().find((r: any) => r.id === older.id) as any;
+    assert.equal(row.updated_at, 1000, "pin cycle never touches updated_at");
+    /* the file shares one in-process db across tests, so assert the RELATIVE
+       order of just these two rows, not the whole list */
+    const mine = db.store
+      .listSessions()
+      .map((r: any) => r.id)
+      .filter((id: string) => id === older.id || id === newer.id);
+    assert.deepEqual(mine, [newer.id, older.id], "the unpinned recency order is exactly where it was");
+  } finally {
+    sessions.unregisterAdapter("fake-pin4" as never);
+    cleanup();
+  }
+});

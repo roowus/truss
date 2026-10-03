@@ -599,7 +599,8 @@ class Store {
     }
   }
 
-  /* pin/unpin (issue #86): optimistic local flip; other clients follow via
+  /* pin/unpin (issue #86): flip local state only after the server confirms;
+     on failure the toast shows and state stays put. Other clients follow via
      the session.updated broadcast / their next list refetch (shells+hosts) */
   async pinSession(id: string, pinned = true) {
     const be = this.state.backend;
