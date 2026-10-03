@@ -114,9 +114,24 @@ never asked for? When you judge it done:
 2. Do any final cleanup commit without the label.
 3. Confirm the preview is up and healthy at `https://pr-<N>.truss.rewis`
    (tilt is already running it; fix it if not — the developer tests there).
-4. Set the issue/PR to review status on the project board.
-5. Tell the developer plainly: what you built, what the audits said, what
-   you fixed and what you declined, and the preview URL for manual testing.
+4. **Hand it to the developer on the PR itself** — this is the queue they
+   watch:
+   a. Apply the review label: `gh pr edit <pr> --add-label ready-for-review`.
+   b. Post the handoff comment:
+      `gh pr comment <pr> --body "..."` covering, in plain language:
+      - **What this does** — one or two sentences.
+      - **What the audits found and what I fixed** — the fix list with the
+        round each landed in; also what I declined and why.
+      - **What to look at** — the specific flows/files worth your eyes.
+      - **How to test** — exact steps at the preview:
+        `https://pr-<N>.truss.rewis` (fill in N; verify it is actually up
+        before posting).
+      - **The working session**: `https://agent.rewis/#s=<your
+        $DSH_SESSION_ID>` — click through if you want to talk to it or see
+        the reasoning.
+5. Set the issue/PR to review status on the project board.
+6. Update your ledger entry (`~/.local/state/truss-sessions.json`) to
+   `"state": "review"`.
 
 ## If the developer messages you after manual testing
 
