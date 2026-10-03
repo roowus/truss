@@ -262,22 +262,39 @@ function SessionRow({ s, now, archived, trashView }: { s: SessionMeta; now: numb
 
 
 /* ---------------- shells + remote hosts rows (issue #85) ----------------
-   Actions come from src/lib/rowActions.ts — open is the row click itself,
-   the rest render as hover actions with the session-row pattern: the
-   destructive one is last and takes a two-click confirm. */
+   Actions come from src/lib/rowActions.ts (looked up by id, never by
+   position) — open is the row click itself, the rest render as hover
+   actions with the session-row pattern: the destructive one takes a
+   two-click confirm. */
 
-function ShellRow({ t }: { t: TerminalInfo }) {
+/* the two-click confirm, shared by the destructive row actions: first click
+   arms (auto-disarm after 3s), second click fires */
+function useTwoClickConfirm(): [boolean, (fire: () => void) => void] {
   const [confirm, setConfirm] = useState(false);
-  const [editing, setEditing] = useState(false);
-  const [name, setName] = useState("");
   useEffect(() => {
     if (!confirm) return;
     const tm = setTimeout(() => setConfirm(false), 3000);
     return () => clearTimeout(tm);
   }, [confirm]);
+  const click = (fire: () => void) => {
+    if (!confirm) return setConfirm(true);
+    setConfirm(false);
+    fire();
+  };
+  return [confirm, click];
+}
+
+const confirmCls = (confirm: boolean) =>
+  cn("w-6 h-6", confirm && "!text-[var(--t-red)] bg-[color-mix(in_oklab,var(--t-red)_15%,transparent)]");
+
+function ShellRow({ t }: { t: TerminalInfo }) {
+  const [confirm, confirmClick] = useTwoClickConfirm();
+  const [editing, setEditing] = useState(false);
+  const [name, setName] = useState("");
 
   const actions = shellRowActions(t);
-  const kill = actions.at(-1)!;
+  const rename = actions.find((a) => a.id === "rename");
+  const kill = actions.find((a) => a.dangerous);
   const dead = t.alive === false;
 
   const finishRename = () => {
@@ -310,44 +327,49 @@ function ShellRow({ t }: { t: TerminalInfo }) {
         <span className="text-[12px] text-[var(--t-fg2)] truncate">{t.title ?? t.id}</span>
       )}
       <span className="ml-auto hidden group-hover:flex items-center shrink-0" onClick={(e) => e.stopPropagation()}>
-        <IconBtn
-          icon={actions[1].icon ?? "edit"}
-          label={actions[1].label}
-          className="w-6 h-6"
-          onClick={() => {
-            setName(t.title ?? "");
-            setEditing(true);
-          }}
-        />
-        <IconBtn
-          icon={kill.icon ?? "x"}
-          label={confirm ? (dead ? "Click again: remove this exited shell" : "Click again: kill this shell") : kill.label}
-          className={cn("w-6 h-6", confirm && "!text-[var(--t-red)] bg-[color-mix(in_oklab,var(--t-red)_15%,transparent)]")}
-          onClick={() => {
-            if (!confirm) return setConfirm(true);
-            setConfirm(false);
-            void desktops.killTerminal(t.id);
-          }}
-        />
+        {rename && (
+          <IconBtn
+            icon={rename.icon ?? "edit"}
+            label={rename.label}
+            className="w-6 h-6"
+            onClick={() => {
+              setName(t.title ?? "");
+              setEditing(true);
+            }}
+          />
+        )}
+        {kill && (
+          <IconBtn
+            icon={kill.icon ?? "x"}
+            label={confirm ? (dead ? "Click again: remove this exited shell" : "Click again: kill this shell") : kill.label}
+            className={confirmCls(confirm)}
+            onClick={() => confirmClick(() => void desktops.killTerminal(t.id))}
+          />
+        )}
       </span>
     </div>
   );
 }
 
 function HostRow({ h, alias }: { h: HostInfo; alias?: string }) {
-  const [confirm, setConfirm] = useState(false);
-  useEffect(() => {
-    if (!confirm) return;
-    const tm = setTimeout(() => setConfirm(false), 3000);
-    return () => clearTimeout(tm);
-  }, [confirm]);
+  const [confirm, confirmClick] = useTwoClickConfirm();
 
   const actions = hostRowActions(h);
-  const del = actions.at(-1)!;
+  const del = actions.find((a) => a.dangerous);
+  const open = () => openPanel("host", { hostId: h.id, title: alias || h.label });
 
   return (
     <div
-      onClick={() => openPanel("host", { hostId: h.id, title: alias || h.label })}
+      role="button"
+      tabIndex={0}
+      onClick={open}
+      onKeyDown={(e) => {
+        /* the row was a real <button> before #85 — keyboard opens stay */
+        if ((e.key === "Enter" || e.key === " ") && e.target === e.currentTarget) {
+          e.preventDefault();
+          open();
+        }
+      }}
       className="group w-full flex items-center gap-2 mx-0.5 px-2 h-7 text-[12px] text-[var(--t-mute)] hover:text-[var(--t-fg)] hover:bg-white/[0.03] rounded-md text-left cursor-pointer"
       title={`${h.label} · ${h.online ? `online · ${h.agent?.adapters.join(", ")}` : "offline"} · open host details`}
     >
@@ -355,19 +377,16 @@ function HostRow({ h, alias }: { h: HostInfo; alias?: string }) {
       <Icon name="host" size={12} className={h.online ? "text-[var(--t-sky)]" : "text-[var(--t-dim)]"} />
       <span className={cn("flex-1 truncate", !h.online && "opacity-50")}>{alias || h.label}</span>
       {h.revoked && !confirm && <span className="text-[8.5px] font-mono uppercase text-[var(--t-red)] shrink-0 group-hover:hidden">revoked</span>}
-      <span className="hidden group-hover:flex items-center shrink-0" onClick={(e) => e.stopPropagation()}>
-        <IconBtn
-          icon={del.icon ?? "trash"}
-          label={confirm ? `Click again: delete ${alias || h.label} (drops its agent if connected)` : del.label}
-          className={cn("w-6 h-6", confirm && "!text-[var(--t-red)] bg-[color-mix(in_oklab,var(--t-red)_15%,transparent)]")}
-          onClick={async () => {
-            if (!confirm) return setConfirm(true);
-            setConfirm(false);
-            await store.be?.deleteHost(h.id);
-            await store.refreshHosts();
-          }}
-        />
-      </span>
+      {del && (
+        <span className="hidden group-hover:flex items-center shrink-0" onClick={(e) => e.stopPropagation()}>
+          <IconBtn
+            icon={del.icon ?? "trash"}
+            label={confirm ? `Click again: delete ${alias || h.label} (drops its agent if connected)` : del.label}
+            className={confirmCls(confirm)}
+            onClick={() => confirmClick(() => void store.deleteHost(h.id))}
+          />
+        </span>
+      )}
     </div>
   );
 }
