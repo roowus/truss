@@ -34,12 +34,16 @@ issue right now, and if so, which one. Cheap and deterministic: no wandering.
    ```sh
    curl -sS -X POST http://127.0.0.1:3080/plugins/dsh-spawn/session \
      -H 'content-type: application/json' -d @- <<'JSON'
-   {"cwd": "/home/ubuntu/projects/truss",
+   {"cwd": "/home/ubuntu/projects/truss-automation",
     "title": "work: #<n> — <slug>",
-    "prompt": "You are a work session for the truss repo. Read /home/ubuntu/projects/truss/config/agent/work-session.md and follow it fully. Your issue is #<n> — start at phase 1."}
+    "group": "truss automation",
+    "prompt": "You are a work session for the truss repo. The repo is at /home/ubuntu/projects/truss — work there (cd first; your cwd is the automation home, which only anchors your sidebar group). Read /home/ubuntu/projects/truss/config/agent/work-session.md and follow it fully. Your issue is #<n> — start at phase 1."}
    JSON
    ```
-   The response is `{"sessionId": "session-…"}` — that id is the worker.
+   The `cwd` is the automation home on purpose: DSH groups a session under
+   the workspace over its cwd, so workers file under "truss automation"
+   while doing the actual work in the real repo. The response is
+   `{"sessionId": "session-…"}` — that id is the worker.
    Update the project board item to in-progress:
    `gh project item-edit ...` (see docs/pr-audit.md for the PAT setup).
 6. Record the mapping so the developer can watch the worker: append
