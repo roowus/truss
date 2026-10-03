@@ -187,6 +187,13 @@ app.get("/agent/connect", { websocket: true }, (socket, req) => {
         socket.close(4400, "hello first");
         return;
       }
+      /* the host row may have been deleted between connect and hello —
+         dropAgent only sees registered agents, so without this gate the
+         hello would register a dead host's harnesses (audit round 2) */
+      if (!getHost(host)) {
+        socket.close(4404, "host deleted");
+        return;
+      }
       helloed = true;
       agentHello(
         host,

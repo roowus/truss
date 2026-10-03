@@ -83,6 +83,13 @@ export function listHosts() {
    mints a fresh id so re-adding a box is never blocked. */
 const tombstoned = new Set<string>();
 
+/** tests only: the Set is process-global while freshServer swaps the data
+   dir per fixture — clear it when a fixture needs env auto-registration
+   for an id some earlier test deleted */
+export function resetHostTombstones() {
+  tombstoned.clear();
+}
+
 export function deleteHost(id: string) {
   table();
   store.run(`DELETE FROM hosts WHERE id = ?`, id);
