@@ -1,6 +1,7 @@
 import type {
   AgentInfo,
   CreateSessionBody,
+  DeliveryOption,
   FeedItem,
   FileEntry,
   FileRead,
@@ -98,9 +99,14 @@ export interface Backend {
   revokeHost(id: string, revoked: boolean): Promise<unknown>;
   deleteHost(id: string): Promise<unknown>;
   /** installer delivery (issue #1): short single-use pairing command, or
-     taildrop the standalone script to the picked tailnet device */
+     taildrop the standalone script to the picked tailnet device.
+     Last mile (issue #91): deliveryOptions orders the ways by what the user
+     must type (tailscale-ssh = 0 leads when the peer allows); sshInstall is
+     the zero-typing path — the server runs the installer on the peer. */
   pairHost(id: string, token: string, serverUrl: string): Promise<{ code: string; expiresAt: number; url: string; command: string }>;
-  taildropHost(id: string, peer: string, token: string, serverUrl: string): Promise<{ ok: boolean; file: string }>;
+  taildropHost(id: string, peer: string, token: string, serverUrl: string): Promise<{ ok: boolean; file: string; command: string; typedChars: number }>;
+  deliveryOptions(id: string, peer: string | null, token: string, serverUrl: string): Promise<{ options: DeliveryOption[] }>;
+  sshInstall(id: string, peer: string, token: string, serverUrl: string): Promise<{ ok: boolean }>;
   /** Monitor: local + remote host vitals */
   metrics(): Promise<MonitorData>;
   /** network reachability (tailscale detect, LAN addrs, serve toggle) */
@@ -234,6 +240,8 @@ export function createLiveBackend(): Backend {
     deleteHost: (id) => req("DELETE", `/api/hosts/${encodeURIComponent(id)}`),
     pairHost: (id, token, serverUrl) => req("POST", `/api/hosts/${encodeURIComponent(id)}/pair`, { token, serverUrl }),
     taildropHost: (id, peer, token, serverUrl) => req("POST", `/api/hosts/${encodeURIComponent(id)}/taildrop`, { peer, token, serverUrl }),
+    deliveryOptions: (id, peer, token, serverUrl) => req("POST", `/api/hosts/${encodeURIComponent(id)}/delivery`, { peer: peer ?? undefined, token, serverUrl }),
+    sshInstall: (id, peer, token, serverUrl) => req("POST", `/api/hosts/${encodeURIComponent(id)}/ssh-install`, { peer, token, serverUrl }),
     metrics: () => req("GET", "/api/metrics"),
     netInfo: () => req("GET", "/api/net"),
     tailscalePeers: () => req("GET", "/api/net/tailscale/peers"),

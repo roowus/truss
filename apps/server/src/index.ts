@@ -45,7 +45,8 @@ import { startFeedAutopost } from "./feed-autopost.js";
 import { startDoubletakePoll } from "./integrations/doubletake.js";
 import { composePractices, getGlobalPractices, saveGlobalPractices } from "./practices.js";
 import { createHost, deleteHost, getHost, isHostTombstoned, listHosts, rotateHostToken, setHostRevoked, verifyAgentToken } from "./hosts.js";
-import { netInfo, taildropToPeer, tailscalePeers, tailscaleServe } from "./net.js";
+import { netInfo, taildropToPeer, tailscalePeers, tailscaleServe, tailscaleSshOk, tailscaleSshRun } from "./net.js";
+import { deliveryOptions, installerDropName } from "./installer.js";
 import { mintPairing, redeemPairing, redeemRateOk } from "./pairing.js";
 import { agentBundleError, ensureAgentBundle, standaloneInstallScript, installScript } from "./agentbundle.js";
 import { registerMcpPerms } from "./mcp-perms.js";
@@ -272,16 +273,56 @@ app.post("/api/hosts/:id/taildrop", async (req, reply) => {
   const { writeFileSync, mkdtempSync, rmSync } = await import("node:fs");
   const { tmpdir } = await import("node:os");
   const { join } = await import("node:path");
+  /* the last-mile fix (issue #91): the drop lands under a short, typeable
+     name — `t-dd20.sh`, not `truss-install-dd203a82.sh` — stable per host,
+     so a resend overwrites (refreshes) instead of cluttering the inbox */
+  const name = installerDropName(id);
   const dir = mkdtempSync(join(tmpdir(), "truss-taildrop-"));
   try {
-    const file = join(dir, `truss-install-${id}.sh`);
+    const file = join(dir, name);
     writeFileSync(file, standaloneInstallScript(id, serverUrl, token), { mode: 0o700 });
     await taildropToPeer(peer, [file]);
-    return { ok: true, file: `truss-install-${id}.sh` };
+    const command = `sh ~/Downloads/${name}`;
+    return { ok: true, file: name, command, typedChars: command.length };
   } catch (err) {
     return reply.code(502).send({ error: String(err instanceof Error ? err.message : err) });
   } finally {
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+/* the wizard's option list (issue #91): what CAN we do for this host on this
+   peer, ordered by what the user must type. Probing ssh actually opens a
+   connection, so this stays token-gated like the delivery routes. */
+app.post("/api/hosts/:id/delivery", async (req, reply) => {
+  const { id } = req.params as { id: string };
+  const { peer, token, serverUrl } = (req.body ?? {}) as { peer?: string; token?: string; serverUrl?: string };
+  if (!token || !serverUrl) return reply.code(400).send({ error: "token and serverUrl are required" });
+  if (!verifyAgentToken(id, token, "")) return reply.code(403).send({ error: "token doesn't match this host" });
+  let taildropOk = false;
+  let sshOk = false;
+  const target = (peer ?? "").trim();
+  if (target) {
+    const { peers } = await tailscalePeers();
+    taildropOk = peers.some((p) => p.dnsName === target || p.hostName === target);
+    if (taildropOk) sshOk = await tailscaleSshOk(target);
+  }
+  return { options: deliveryOptions({ taildropOk, sshOk, serverUrl, hostId: id, peer: target || undefined }) };
+});
+
+/* zero typing (issue #91): with the user's explicit click, this server runs
+   the installer on the peer itself over tailscale ssh */
+app.post("/api/hosts/:id/ssh-install", async (req, reply) => {
+  const { id } = req.params as { id: string };
+  const { peer, token, serverUrl } = (req.body ?? {}) as { peer?: string; token?: string; serverUrl?: string };
+  if (!peer || !token || !serverUrl) return reply.code(400).send({ error: "peer, token and serverUrl are required" });
+  if (!verifyAgentToken(id, token, "")) return reply.code(403).send({ error: "token doesn't match this host" });
+  try {
+    await ensureAgentBundle().catch(() => {});
+    await tailscaleSshRun(peer, standaloneInstallScript(id, serverUrl, token));
+    return { ok: true };
+  } catch (err) {
+    return reply.code(502).send({ error: String(err instanceof Error ? err.message : err) });
   }
 });
 

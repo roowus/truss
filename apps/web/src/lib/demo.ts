@@ -747,7 +747,17 @@ export function createDemoBackend(): Backend {
       return { ok: true };
     },
     pairHost: async (_id, _t, serverUrl) => ({ code: "k3xm7q", expiresAt: Date.now() + 600_000, url: `${serverUrl}/i/k3xm7q`, command: `curl -fsSL ${serverUrl}/i/k3xm7q | sh` }),
-    taildropHost: async () => ({ ok: true, file: "truss-install-demo.sh" }),
+    taildropHost: async (id) => {
+      const file = `t-${String(id).slice(0, 4)}.sh`;
+      return { ok: true, file, command: `sh ~/Downloads/${file}`, typedChars: `sh ~/Downloads/${file}`.length };
+    },
+    deliveryOptions: async (_id, peer, _t, serverUrl) => ({
+      options: [
+        ...(peer ? [{ kind: "taildrop" as const, label: "Send the installer to the device, then run it", command: "sh ~/Downloads/t-newh.sh", typedChars: 24 }] : []),
+        { kind: "pairing" as const, label: "Type a short command with a one-time code", command: `curl -fsSL ${serverUrl}/i/xxxxxx | sh`, typedChars: `curl -fsSL ${serverUrl}/i/xxxxxx | sh`.length },
+      ].sort((a, b) => a.typedChars - b.typedChars),
+    }),
+    sshInstall: async () => ({ ok: true }),
     metrics: async () => {
       const t = Date.now();
       /* typed as the real shape: the monitor table renders this fixture with

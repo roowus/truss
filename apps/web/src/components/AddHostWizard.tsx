@@ -3,7 +3,7 @@ import { store, useApp } from "@/lib/store";
 import { ago, until } from "@/lib/format";
 import { defaultTailscaleReturn, peerAlreadyAdded } from "@/lib/device";
 import { dropInstructionLabel, dropRunCommand } from "@/lib/installInstruction";
-import type { TailscalePeer } from "@/lib/proto";
+import type { DeliveryOption, TailscalePeer } from "@/lib/proto";
 import { Btn, Icon, Select, Spinner } from "./ui";
 import { cn } from "@/utils/cn";
 
@@ -32,6 +32,13 @@ export function AddHostWizard({ onClose }: { onClose: () => void }) {
   const [pairBusy, setPairBusy] = useState(false);
   const [dropState, setDropState] = useState<"idle" | "sending" | "sent" | "failed">("idle");
   const [dropErr, setDropErr] = useState<string | null>(null);
+  /* the last mile (issue #91): the server's option list for this host/peer,
+     ordered by what the user must type; the short drop command comes back
+     from the taildrop response itself */
+  const [delivery, setDelivery] = useState<DeliveryOption[] | null>(null);
+  const [dropCmd, setDropCmd] = useState<string | null>(null);
+  const [sshState, setSshState] = useState<"idle" | "running" | "done" | "failed">("idle");
+  const [sshErr, setSshErr] = useState<string | null>(null);
 
   useEffect(() => {
     be?.netInfo().then(setNet).catch(() => setNet(null));
@@ -87,6 +94,20 @@ export function AddHostWizard({ onClose }: { onClose: () => void }) {
       setBusy(false);
     }
   };
+
+  /* once the host exists, ask the server what it can do for the picked peer
+     (issue #91): taildrop with a short name, tailscale-ssh zero-typing when
+     the probe allows, pairing always. Options arrive sorted by typedChars. */
+  useEffect(() => {
+    if (!created || !be || !serverAddr) return;
+    let dead = false;
+    be.deliveryOptions(created.id, pickedPeer, created.token, serverAddr).then(
+      (r) => { if (!dead) setDelivery(r.options); },
+      () => { if (!dead) setDelivery(null); },
+    );
+    return () => { dead = true; };
+  }, [be, created, pickedPeer, serverAddr]);
+  const sshOption = delivery?.find((o) => o.kind === "ssh" && o.typedChars === 0) ?? null;
 
   /* step 3: poll until the agent dials in */
   const online = created ? hosts.find((h) => h.id === created.id)?.online : false;
@@ -237,6 +258,25 @@ export function AddHostWizard({ onClose }: { onClose: () => void }) {
             <div className="rounded-lg border border-[var(--t-line2)] bg-[var(--t-bg0)] p-3 font-mono text-[11px] leading-relaxed text-[var(--t-fg2)] break-all select-all">{command}</div>
             <div className="flex items-center gap-2 flex-wrap">
               <Btn size="xs" variant="outline" icon="copy" onClick={() => { void navigator.clipboard.writeText(command); store.toast("ok", "Copied", "run it on the remote host"); }}>Copy command</Btn>
+              {sshOption && pickedPeerLabel && created && (
+                <Btn
+                  size="xs"
+                  variant="amber"
+                  icon="bolt"
+                  disabled={sshState === "running" || sshState === "done"}
+                  title={`This server runs the installer on ${pickedPeerLabel} itself: ${sshOption.command}`}
+                  onClick={() => {
+                    setSshState("running");
+                    setSshErr(null);
+                    be?.sshInstall(created.id, pickedPeer!, created.token, serverAddr).then(
+                      () => { setSshState("done"); setStep(3); },
+                      (e) => { setSshState("failed"); setSshErr(e?.message ?? String(e)); },
+                    );
+                  }}
+                >
+                  {sshState === "done" ? "Installed ✓" : sshState === "running" ? "Installing…" : "Install it for me"}
+                </Btn>
+              )}
               {pickedPeerLabel && created && (
                 <Btn
                   size="xs"
@@ -247,8 +287,9 @@ export function AddHostWizard({ onClose }: { onClose: () => void }) {
                   onClick={() => {
                     setDropState("sending");
                     setDropErr(null);
+                    setDropCmd(null);
                     be?.taildropHost(created.id, pickedPeer!, created.token, serverAddr).then(
-                      (r) => { setDropFile(r.file); setDropState("sent"); },
+                      (r) => { setDropFile(r.file); setDropState("sent"); setDropCmd(r.command); },
                       (e) => { setDropState("failed"); setDropErr(e?.message ?? String(e)); },
                     );
                   }}
@@ -275,13 +316,19 @@ export function AddHostWizard({ onClose }: { onClose: () => void }) {
               </Btn>
               <span className="text-[10.5px] text-[var(--t-dim)]">needs node ≥ 20 on the remote + the harness CLIs it should host</span>
             </div>
+            {sshOption && sshState !== "done" && (
+              <p className="text-[11px] text-[var(--t-dim)] leading-relaxed">
+                <b className="text-[var(--t-fg)]">Install it for me</b> runs the installer on {pickedPeerLabel} over tailscale ssh right now: you type nothing there. The click is your consent; the exact command the server runs is in the button's tooltip.
+              </p>
+            )}
+            {sshErr && <p className="text-[11px] text-[var(--t-red)]">Remote install failed: {sshErr} — use the copy command or one of the other options instead.</p>}
             {dropErr && <p className="text-[11px] text-[var(--t-red)]">Taildrop failed: {dropErr} — use the copy command or the short one instead.</p>}
             {dropState === "sent" && dropFile && (
               <div className="rounded-lg border border-[var(--t-line)] bg-[var(--t-bg0)] px-3 py-2 space-y-1.5">
                 <p className="text-[11px] text-[var(--t-teal)]">{dropInstructionLabel(dropFile)}</p>
                 <div className="flex items-center gap-2">
-                  <code className="font-mono text-[11.5px] text-[var(--t-fg2)] break-all select-all">{dropRunCommand(dropFile)}</code>
-                  <Btn size="xs" variant="outline" icon="copy" onClick={() => { void navigator.clipboard.writeText(dropRunCommand(dropFile)); store.toast("ok", "Copied", "paste it in a terminal on the device"); }}>Copy</Btn>
+                  <code className="font-mono text-[11.5px] text-[var(--t-fg2)] break-all select-all">{dropCmd ?? dropRunCommand(dropFile)}</code>
+                  <Btn size="xs" variant="outline" icon="copy" onClick={() => { void navigator.clipboard.writeText(dropCmd ?? dropRunCommand(dropFile)); store.toast("ok", "Copied", "paste it in a terminal on the device"); }}>Copy</Btn>
                 </div>
               </div>
             )}
