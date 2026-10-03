@@ -56,10 +56,10 @@ export function deliveryOptions(caps: DeliveryCaps): DeliveryOption[] {
   const drop = installerDropName(caps.hostId ?? "");
 
   if (caps.sshOk) {
-    /* zero typing: THIS server runs the installer on the peer. The command
-       is shown for transparency and consent — it is what the server runs,
-       not something the user types. */
-    const command = `tailscale ssh ${caps.peer ?? "<device>"} 'sh -s' < ${drop}`;
+    /* zero typing: THIS server runs the installer on the peer, piping the
+       script over stdin (tailscaleSshRun) — no drop file is involved. The
+       command is shown for transparency and consent; the user types nothing. */
+    const command = `tailscale ssh ${caps.peer ?? "<device>"} sh -s`;
     opts.push({ kind: "ssh", label: "Install it for me over tailscale ssh", command, typedChars: 0 });
   }
   if (caps.taildropOk) {

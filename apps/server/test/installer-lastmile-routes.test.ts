@@ -157,3 +157,30 @@ test("ssh-install: a CLI failure surfaces as a 502 with the CLI's own message", 
   assert.equal(r.status, 502, JSON.stringify(r.body));
   assert.match(r.body.error, /ssh is not enabled/, "the peer's own refusal reaches the wizard");
 });
+
+/* ── audit round 1 pins: the probe cache, the hostName-only peer match, and
+   the drop-name degenerate fallback ── */
+
+test("tailscaleSshOk caches the probe: a second ask within the TTL never touches the CLI", async () => {
+  const { tailscaleSshOk } = await import("../src/net.js");
+  const peer = "cachebox.tail-example.ts.net"; // unique — the cache is module-level
+  const probesBefore = fakeCalls().filter((c) => c.argv[0] === "ssh" && c.argv[1] === peer).length;
+
+  assert.equal(await tailscaleSshOk(peer), true, "first ask probes (fake CLI accepts)");
+  assert.equal(await tailscaleSshOk(peer), true, "second ask is the warm cache");
+  const probesAfter = fakeCalls().filter((c) => c.argv[0] === "ssh" && c.argv[1] === peer).length;
+  assert.equal(probesAfter - probesBefore, 1, "one real probe, not two — the wizard can re-ask on every render");
+});
+
+test("delivery options: a peer named by hostName (not dnsName) still matches the tailnet", async () => {
+  const r = await post(`/api/hosts/${host.id}/delivery`, { peer: "fakebox", token, serverUrl: srv.base });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.ok(r.body.options.find((o: { kind: string }) => o.kind === "taildrop"), "hostName-only reference still offers taildrop");
+});
+
+test("installerDropName: degenerate and hostile ids still yield a safe, stable name", async () => {
+  const { installerDropName } = await import("../src/installer.js");
+  assert.equal(installerDropName(""), "t-host.sh", "empty id falls back, never an empty fragment");
+  assert.equal(installerDropName("AB!!cd12"), "t-abcd.sh", "non-alphanumerics stripped, lowercased");
+  assert.equal(installerDropName("ab"), "t-ab.sh", "short ids keep what they have");
+});

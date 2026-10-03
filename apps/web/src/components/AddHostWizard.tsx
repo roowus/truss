@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { store, useApp } from "@/lib/store";
 import { ago, until } from "@/lib/format";
 import { defaultTailscaleReturn, peerAlreadyAdded } from "@/lib/device";
-import { dropInstructionLabel, dropRunCommand } from "@/lib/installInstruction";
+import { dropInstructionLabel } from "@/lib/installInstruction";
 import type { DeliveryOption, TailscalePeer } from "@/lib/proto";
 import { Btn, Icon, Select, Spinner } from "./ui";
 import { cn } from "@/utils/cn";
@@ -318,17 +318,17 @@ export function AddHostWizard({ onClose }: { onClose: () => void }) {
             </div>
             {sshOption && sshState !== "done" && (
               <p className="text-[11px] text-[var(--t-dim)] leading-relaxed">
-                <b className="text-[var(--t-fg)]">Install it for me</b> runs the installer on {pickedPeerLabel} over tailscale ssh right now: you type nothing there. The click is your consent; the exact command the server runs is in the button's tooltip.
+                <b className="text-[var(--t-fg)]">Install it for me</b> runs the installer on {pickedPeerLabel} over tailscale ssh right now: this server pipes the script to the peer, you type nothing there. The click is your consent; the command the server runs is in the button's tooltip.
               </p>
             )}
             {sshErr && <p className="text-[11px] text-[var(--t-red)]">Remote install failed: {sshErr} — use the copy command or one of the other options instead.</p>}
             {dropErr && <p className="text-[11px] text-[var(--t-red)]">Taildrop failed: {dropErr} — use the copy command or the short one instead.</p>}
-            {dropState === "sent" && dropFile && (
+            {dropState === "sent" && dropCmd && (
               <div className="rounded-lg border border-[var(--t-line)] bg-[var(--t-bg0)] px-3 py-2 space-y-1.5">
                 <p className="text-[11px] text-[var(--t-teal)]">{dropInstructionLabel(dropFile)}</p>
                 <div className="flex items-center gap-2">
-                  <code className="font-mono text-[11.5px] text-[var(--t-fg2)] break-all select-all">{dropCmd ?? dropRunCommand(dropFile)}</code>
-                  <Btn size="xs" variant="outline" icon="copy" onClick={() => { void navigator.clipboard.writeText(dropCmd ?? dropRunCommand(dropFile)); store.toast("ok", "Copied", "paste it in a terminal on the device"); }}>Copy</Btn>
+                  <code className="font-mono text-[11.5px] text-[var(--t-fg2)] break-all select-all">{dropCmd}</code>
+                  <Btn size="xs" variant="outline" icon="copy" onClick={() => { void navigator.clipboard.writeText(dropCmd); store.toast("ok", "Copied", "paste it in a terminal on the device"); }}>Copy</Btn>
                 </div>
               </div>
             )}
