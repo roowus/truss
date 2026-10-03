@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { store, useApp } from "@/lib/store";
 import { ago, until } from "@/lib/format";
 import { defaultTailscaleReturn, peerAlreadyAdded } from "@/lib/device";
+import { dropInstructionLabel, dropRunCommand } from "@/lib/installInstruction";
 import type { TailscalePeer } from "@/lib/proto";
 import { Btn, Icon, Select, Spinner } from "./ui";
 import { cn } from "@/utils/cn";
@@ -100,6 +101,10 @@ export function AddHostWizard({ onClose }: { onClose: () => void }) {
   const command = created && serverAddr
     ? `curl -fsSL ${serverAddr}/agent/install.sh?host=${created.id} | sh -s -- ${created.token}`
     : "";
+
+  /* the file taildrop delivered — the authoritative name comes back in the
+     taildropHost response (the demo backend names it differently) */
+  const [dropFile, setDropFile] = useState("");
 
   return (
     <div className="fixed inset-0 z-[100] grid place-items-center bg-black/50" onPointerDown={(e) => e.target === e.currentTarget && onClose()}>
@@ -243,7 +248,7 @@ export function AddHostWizard({ onClose }: { onClose: () => void }) {
                     setDropState("sending");
                     setDropErr(null);
                     be?.taildropHost(created.id, pickedPeer!, created.token, serverAddr).then(
-                      () => setDropState("sent"),
+                      (r) => { setDropFile(r.file); setDropState("sent"); },
                       (e) => { setDropState("failed"); setDropErr(e?.message ?? String(e)); },
                     );
                   }}
@@ -271,7 +276,15 @@ export function AddHostWizard({ onClose }: { onClose: () => void }) {
               <span className="text-[10.5px] text-[var(--t-dim)]">needs node ≥ 20 on the remote + the harness CLIs it should host</span>
             </div>
             {dropErr && <p className="text-[11px] text-[var(--t-red)]">Taildrop failed: {dropErr} — use the copy command or the short one instead.</p>}
-            {dropState === "sent" && <p className="text-[11px] text-[var(--t-teal)]">In the device's taildrop inbox: run <span className="font-mono">sh ~/Downloads/truss-install-{created?.id}.sh</span> (taildrop lands there by default).</p>}
+            {dropState === "sent" && dropFile && (
+              <div className="rounded-lg border border-[var(--t-line)] bg-[var(--t-bg0)] px-3 py-2 space-y-1.5">
+                <p className="text-[11px] text-[var(--t-teal)]">{dropInstructionLabel(dropFile)}</p>
+                <div className="flex items-center gap-2">
+                  <code className="font-mono text-[11.5px] text-[var(--t-fg2)] break-all select-all">{dropRunCommand(dropFile)}</code>
+                  <Btn size="xs" variant="outline" icon="copy" onClick={() => { void navigator.clipboard.writeText(dropRunCommand(dropFile)); store.toast("ok", "Copied", "paste it in a terminal on the device"); }}>Copy</Btn>
+                </div>
+              </div>
+            )}
             {pairCmd && (
               <div className="rounded-lg border border-[var(--t-line)] bg-[var(--t-bg0)] px-3 py-2">
                 <div className="font-mono text-[12px] text-[var(--t-fg)] break-all select-all">{pairCmd.command}</div>
