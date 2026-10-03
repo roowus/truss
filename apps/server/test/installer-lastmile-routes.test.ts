@@ -224,3 +224,36 @@ test("standaloneInstallScript itself refuses a hostile serverUrl (the choke poin
     assert.ok(standaloneInstallScript(host.id, ok, token).startsWith("#!/bin/sh"), `legit ${ok} still installs`);
   }
 });
+
+/* ── audit round 3 (Critical): the host LABEL is the other request-
+   controlled string in the same peer-executed script — POST /api/hosts is
+   the unauthenticated bootstrap and hands back the token, so a hostile label
+   plus /ssh-install is remote execution with no human in the loop ── */
+
+const HOSTILE_LABEL = 'evil"$(MARKSUB)\nMARKLINE\n`MARKBT`';
+
+function assertLabelNeutralized(script: string) {
+  assert.ok(!script.includes("$(MARKSUB)"), "command substitution in the label must not survive");
+  assert.ok(!script.includes("`MARKBT`"), "backticks in the label must not survive");
+  assert.ok(
+    !script.split("\n").some((l) => l.trim() === "MARKLINE"),
+    "an interior newline must not inject a whole script line",
+  );
+}
+
+test("a hostile host label is neutralized at the script choke point", async () => {
+  const made = await post("/api/hosts", { label: HOSTILE_LABEL });
+  assert.equal(made.status, 200, "labels are free text in the UI — sanitizing is the script's job");
+  const { standaloneInstallScript } = await import("../src/agentbundle.js");
+  const script = standaloneInstallScript(made.body.host.id, srv.base, made.body.token);
+  assertLabelNeutralized(script);
+  assert.ok(script.startsWith("#!/bin/sh"), "still a runnable installer");
+});
+
+test("ssh-install on a hostile-labeled host sends the peer a clean script", async () => {
+  const made = await post("/api/hosts", { label: HOSTILE_LABEL });
+  assert.equal(made.status, 200);
+  const r = await post(`/api/hosts/${made.body.host.id}/ssh-install`, { peer: PEER, token: made.body.token, serverUrl: srv.base });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assertLabelNeutralized(readFileSync(`${fakeLog}.stdin`, "utf8"));
+});
