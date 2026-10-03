@@ -483,6 +483,7 @@ class Store {
               ...(ev.title !== undefined ? { title: ev.title } : {}),
               ...(ev.project !== undefined ? { project: ev.project ?? undefined } : {}),
               ...(ev.archived !== undefined ? { archived: ev.archived ? 1 : 0 } : {}),
+              ...(ev.pinned !== undefined ? { pinned: ev.pinned } : {}),
               ...(ev.model !== undefined ? { model: ev.model ?? undefined } : {}),
               ...(ev.provider !== undefined ? { provider: ev.provider ?? undefined } : {}),
             },
@@ -595,6 +596,41 @@ class Store {
       this.set((s) => ({ sessions: { ...s.sessions, [id]: { ...s.sessions[id], archived: archived ? 1 : 0 } } }));
     } catch (e: any) {
       this.toast("error", archived ? "Couldn't archive the session" : "Couldn't restore the session", e?.message ?? String(e));
+    }
+  }
+
+  /* pin/unpin (issue #86): optimistic local flip; other clients follow via
+     the session.updated broadcast / their next list refetch (shells+hosts) */
+  async pinSession(id: string, pinned = true) {
+    const be = this.state.backend;
+    if (!be) return;
+    try {
+      await be.pinSession(id, pinned);
+      this.set((s) => ({ sessions: { ...s.sessions, [id]: { ...s.sessions[id], pinned } } }));
+    } catch (e: any) {
+      this.toast("error", pinned ? "Couldn't pin the session" : "Couldn't unpin the session", e?.message ?? String(e));
+    }
+  }
+
+  async pinTerminal(id: string, pinned = true) {
+    const be = this.state.backend;
+    if (!be) return;
+    try {
+      await be.pinTerminal(id, pinned);
+      this.set((s) => ({ terminals: s.terminals.map((t) => (t.id === id ? { ...t, pinned } : t)) }));
+    } catch (e: any) {
+      this.toast("error", pinned ? "Couldn't pin the shell" : "Couldn't unpin the shell", e?.message ?? String(e));
+    }
+  }
+
+  async pinHost(id: string, pinned = true) {
+    const be = this.state.backend;
+    if (!be) return;
+    try {
+      await be.pinHost(id, pinned);
+      this.set((s) => ({ hosts: s.hosts.map((h) => (h.id === id ? { ...h, pinned } : h)) }));
+    } catch (e: any) {
+      this.toast("error", pinned ? "Couldn't pin the host" : "Couldn't unpin the host", e?.message ?? String(e));
     }
   }
 

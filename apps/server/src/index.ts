@@ -13,6 +13,7 @@ import {
   deleteSession,
   setProjectArchived,
   setSessionArchived,
+  setSessionPinned,
   interrupt,
   isLive,
   listHarnesses,
@@ -27,7 +28,7 @@ import {
   restoreSession,
   type EventFrame,
 } from "./sessions.js";
-import { attachTerminal, closeTerminal, createTerminal, listTerminals, renameTerminal } from "./terminal.js";
+import { attachTerminal, closeTerminal, createTerminal, listTerminals, renameTerminal, setTerminalPinned } from "./terminal.js";
 import { createSkill, listSkills, setSkillDisabled, trashSkill } from "./skills.js";
 import {
   createPath as createWorkspacePath,
@@ -44,7 +45,7 @@ import { listFeed, setFeedBroadcaster, setFeedState, shareFeedItem } from "./fee
 import { startFeedAutopost } from "./feed-autopost.js";
 import { startDoubletakePoll } from "./integrations/doubletake.js";
 import { composePractices, getGlobalPractices, saveGlobalPractices } from "./practices.js";
-import { createHost, deleteHost, getHost, isHostTombstoned, listHosts, rotateHostToken, setHostRevoked, verifyAgentToken } from "./hosts.js";
+import { createHost, deleteHost, getHost, isHostTombstoned, listHosts, rotateHostToken, setHostPinned, setHostRevoked, verifyAgentToken } from "./hosts.js";
 import { netInfo, taildropToPeer, tailscalePeers, tailscaleServe, tailscaleSshOk, tailscaleSshRun } from "./net.js";
 import { deliveryOptions, installerDropName } from "./installer.js";
 import { mintPairing, redeemPairing, redeemRateOk } from "./pairing.js";
@@ -446,6 +447,16 @@ app.post("/api/hosts/:id/revoke", async (req) => {
   setHostRevoked(id, revoked !== false);
   return { ok: true };
 });
+app.post("/api/hosts/:id/pin", async (req, reply) => {
+  const { id } = req.params as { id: string };
+  const { pinned } = (req.body ?? {}) as { pinned?: boolean };
+  try {
+    setHostPinned(id, pinned !== false);
+    return { ok: true };
+  } catch (e: any) {
+    return reply.code(404).send({ error: e.message ?? String(e) });
+  }
+});
 app.delete("/api/hosts/:id", async (req, reply) => {
   const { id } = req.params as { id: string };
   /* a repeat delete (the sidebar's two-click confirm double-firing) is a
@@ -602,6 +613,19 @@ app.post("/api/projects/archive", async (req, reply) => {
   return { ok: true, archived: archived !== false, sessions: n };
 });
 
+/* pin/unpin (issue #86): pinned rows float to the top of their sidebar
+   section — chats persist, shells are in-memory, hosts persist */
+app.post("/api/sessions/:id/pin", async (req, reply) => {
+  const { id } = req.params as { id: string };
+  const { pinned } = (req.body ?? {}) as { pinned?: boolean };
+  try {
+    setSessionPinned(id, pinned !== false);
+    return { ok: true };
+  } catch (err) {
+    return reply.code(404).send({ error: String(err) });
+  }
+});
+
 /* the 30-day trash (issue #5): list, restore, delete-forever */
 app.get("/api/trash", async () => ({ sessions: store.listDeletedSessions() }));
 app.post("/api/sessions/:id/restore", async (req, reply) => {
@@ -672,6 +696,17 @@ app.post("/api/terminals/:id/rename", async (req, reply) => {
     return renameTerminal(id, String(title ?? ""));
   } catch (e: any) {
     return reply.code(400).send({ error: e.message ?? String(e) });
+  }
+});
+
+app.post("/api/terminals/:id/pin", async (req, reply) => {
+  const { id } = req.params as { id: string };
+  const { pinned } = (req.body ?? {}) as { pinned?: boolean };
+  try {
+    setTerminalPinned(id, pinned !== false);
+    return { ok: true };
+  } catch (e: any) {
+    return reply.code(404).send({ error: e.message ?? String(e) });
   }
 });
 

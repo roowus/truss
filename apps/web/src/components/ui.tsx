@@ -45,6 +45,7 @@ const paths: Record<string, ReactNode> = {
   edit: <><path d="M3 11.5V13h1.5l8-8-1.5-1.5-8 8zM10.5 4l1.5-1.5 1.5 1.5L12 5.5" /></>,
   arrow: <path d="M2.5 8h10M8.5 4l4 4-4 4" />,
   mic: <><rect x="5.5" y="1.5" width="5" height="8" rx="2.5" /><path d="M3.5 7.5a4.5 4.5 0 0 0 9 0M8 12v2.5M5.5 14.5h5" /></>,
+  pin: <><path d="M9.9 2.6l3.5 3.5-1.3.4-2.5 2.5-.4 1.3-2.6-2.6 1.3-.4 2.5-2.5z" /><path d="M6.6 9.4L2.8 13.2" /></>,
 };
 export function Icon({ name, size = 14, className }: { name: keyof typeof paths | string; size?: number; className?: string }) {
   return (

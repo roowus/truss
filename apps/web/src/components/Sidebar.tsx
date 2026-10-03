@@ -6,6 +6,7 @@ import { openAgentShell, openDailyDriver, openFreeShell, openPanel, openSession 
 import { HarnessMark, Icon, IconBtn, StateDot, TrussLogo, Spinner, STATE_META } from "./ui";
 import type { HostInfo, SessionMeta, TerminalInfo } from "@/lib/proto";
 import { hostRowActions, shellRowActions } from "@/lib/rowActions";
+import { sortWithPinned } from "@/lib/pinSort";
 import { cn } from "@/utils/cn";
 
 export function Sidebar({ onNew }: { onNew: () => void }) {
@@ -39,7 +40,14 @@ export function Sidebar({ onNew }: { onNew: () => void }) {
       if (!g.has(k)) g.set(k, []);
       g.get(k)!.push(s);
     }
-    return [[...g.entries()].sort((a, b) => (a[0] === "" ? 1 : b[0] === "" ? -1 : a[0].localeCompare(b[0]))), arch] as const;
+    /* issue #86: pinned chats float to the top of their section (the group
+       order itself is untouched); pinned archived chats lead the archive */
+    return [
+      [...g.entries()]
+        .sort((a, b) => (a[0] === "" ? 1 : b[0] === "" ? -1 : a[0].localeCompare(b[0])))
+        .map(([k, list]) => [k, sortWithPinned(list, (s) => !!s.pinned)] as [string, SessionMeta[]]),
+      sortWithPinned(arch, (s) => !!s.pinned),
+    ] as const;
   }, [order, sessions, q, groupMode]);
 
   return (
@@ -153,12 +161,13 @@ export function Sidebar({ onNew }: { onNew: () => void }) {
           {terminals.length === 0 ? (
             <div className="px-3 py-1 text-[11px] text-[var(--t-dim)]">None running.</div>
           ) : (
-            terminals.map((t) => <ShellRow key={t.id} t={t} />)
+            /* issue #86: pinned shells lead the section, stable within each partition */
+            sortWithPinned(terminals, (t) => !!t.pinned).map((t) => <ShellRow key={t.id} t={t} />)
           )}
         </Section>
 
         <Section title="remote hosts" action={<IconBtn icon="plus" label="Add host" className="w-5 h-5" onClick={() => window.dispatchEvent(new Event("truss:add-host"))} />}>
-          {hosts.map((h) => <HostRow key={h.id} h={h} alias={hostPrefs[h.id]?.alias} />)}
+          {sortWithPinned(hosts, (h) => !!h.pinned).map((h) => <HostRow key={h.id} h={h} alias={hostPrefs[h.id]?.alias} />)}
           {hosts.length === 0 && !agentsError && (
             <button onClick={() => window.dispatchEvent(new Event("truss:add-host"))} className="w-full mx-0.5 px-2 py-2 rounded-md border border-dashed border-[var(--t-line2)] text-[11px] text-[var(--t-dim)] hover:text-[var(--t-mute)] hover:border-[var(--t-mute)] text-left">
               No hosts yet. Add one — the agent dials out, so no firewall holes.
@@ -214,6 +223,7 @@ function SessionRow({ s, now, archived, trashView }: { s: SessionMeta; now: numb
       {focused && <span className="absolute left-0 top-2 bottom-2 w-[2px] rounded-full bg-[var(--t-amber)]" />}
       <HarnessMark harness={s.harness} size={17} className={dead ? "opacity-45" : ""} />
       <span className={cn("flex-1 min-w-0 truncate text-[12.5px]", dead ? "text-[var(--t-mute)]" : "text-[var(--t-fg)]", archived && "opacity-60")}>{s.title}</span>
+      {!!s.pinned && !trashView && <Icon name="pin" size={10} className="shrink-0 text-[var(--t-amber)] opacity-80" />}
       {pending > 0 && (
         <span className="shrink-0 inline-grid place-items-center w-4 h-4 rounded-full bg-[var(--t-amber)] text-[#1b1305] text-[9.5px] font-bold t-pulse-soft" title="Permission waiting">{pending}</span>
       )}
@@ -228,6 +238,16 @@ function SessionRow({ s, now, archived, trashView }: { s: SessionMeta; now: numb
         <StateDot state={s.state} size={6} />
       </span>
       <span className="hidden group-hover:flex items-center shrink-0" onClick={(e) => e.stopPropagation()}>
+        {/* pin is orthogonal to archive (issue #86): offered on both kinds of row */}
+        {!trashView && (
+          <IconBtn
+            icon="pin"
+            label={s.pinned ? "Unpin from the top of the section" : "Pin to the top of the section"}
+            className="w-6 h-6"
+            active={!!s.pinned}
+            onClick={() => void store.pinSession(s.id, !s.pinned)}
+          />
+        )}
         {archived ? (
           <IconBtn icon="archive" label="Restore to the sidebar" className="w-6 h-6" onClick={() => store.archiveSession(s.id, false)} />
         ) : (
@@ -326,7 +346,20 @@ function ShellRow({ t }: { t: TerminalInfo }) {
       ) : (
         <span className="text-[12px] text-[var(--t-fg2)] truncate">{t.title ?? t.id}</span>
       )}
-      <span className="ml-auto hidden group-hover:flex items-center shrink-0" onClick={(e) => e.stopPropagation()}>
+      {/* pin uses opacity, not display, so it stays in the tab order — focus
+          reveals it like hover does (issue #86); when pinned it doubles as
+          the always-on amber marker */}
+      <IconBtn
+        icon="pin"
+        label={t.pinned ? "Unpin shell" : "Pin shell to the top of this section"}
+        active={!!t.pinned}
+        className={cn("ml-auto w-6 h-6", !t.pinned && "opacity-0 group-hover:opacity-70 focus-visible:opacity-100")}
+        onClick={(e) => {
+          e.stopPropagation();
+          void store.pinTerminal(t.id, !t.pinned);
+        }}
+      />
+      <span className="hidden group-hover:flex items-center shrink-0" onClick={(e) => e.stopPropagation()}>
         {rename && (
           <IconBtn
             icon={rename.icon ?? "edit"}
@@ -377,6 +410,19 @@ function HostRow({ h, alias }: { h: HostInfo; alias?: string }) {
       <Icon name="host" size={12} className={h.online ? "text-[var(--t-sky)]" : "text-[var(--t-dim)]"} />
       <span className={cn("flex-1 truncate", !h.online && "opacity-50")}>{alias || h.label}</span>
       {h.revoked && !confirm && <span className="text-[8.5px] font-mono uppercase text-[var(--t-red)] shrink-0 group-hover:hidden">revoked</span>}
+      {/* a real button now that the row is a div (pre-#85 the row itself was
+          a <button>, so pin had to be a span); opacity, not display, keeps it
+          tabbable — focus reveals it like hover does (issue #86, audit B4) */}
+      <IconBtn
+        icon="pin"
+        label={h.pinned ? "Unpin host" : "Pin host to the top of this section"}
+        active={!!h.pinned}
+        className={cn("w-6 h-6", !h.pinned && "opacity-0 group-hover:opacity-70 focus-visible:opacity-100")}
+        onClick={(e) => {
+          e.stopPropagation();
+          void store.pinHost(h.id, !h.pinned);
+        }}
+      />
       {del && (
         <span className="hidden group-hover:flex items-center shrink-0" onClick={(e) => e.stopPropagation()}>
           <IconBtn

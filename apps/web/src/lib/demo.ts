@@ -692,6 +692,11 @@ export function createDemoBackend(): Backend {
       for (const h of t.listeners) h.onTitle?.(next);
       return { ok: true };
     },
+    async pinTerminal(tid, pinned) {
+      const t = terminals.get(tid);
+      if (t) t.info.pinned = pinned;
+      return { ok: true };
+    },
     async skills(cwd): Promise<{ skills: SkillInfo[] }> {
       await net(150);
       const base: SkillInfo[] = [
@@ -747,6 +752,14 @@ export function createDemoBackend(): Backend {
     purgeSession: async () => ({ ok: true }),
     rotateHostToken: async () => ({ token: "truss_agent_demo_rotated" }),
     revokeHost: async () => ({ ok: true }),
+    pinHost: async (id, pinned) => {
+      /* persist on the entry like pinSession does: refreshHosts() re-reads
+         demoHosts, so a no-op here would silently drop the pin on the next
+         refresh (audit round 3) */
+      const h = demoHosts.find((x) => x.id === id);
+      if (h) h.pinned = pinned;
+      return { ok: true };
+    },
     deleteHost: async (id) => {
       demoHosts = demoHosts.filter((h) => h.id !== id);
       return { ok: true };
@@ -841,6 +854,11 @@ export function createDemoBackend(): Backend {
         if ((sess.meta as any).project === project) { (sess.meta as any).archived = archived ? 1 : 0; n++; }
       }
       return { ok: true, sessions: n };
+    },
+    pinSession: async (id, pinned) => {
+      const sess = sessions.get(id);
+      if (sess) (sess.meta as any).pinned = pinned;
+      return { ok: true };
     },
     credentials: async () => ({ routes: [], service: "demo", serviceActive: false }),
     upsertCredential: async () => ({ ok: true, restarted: false }),

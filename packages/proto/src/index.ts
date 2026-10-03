@@ -35,13 +35,14 @@ export interface SessionStateEvent {
   state: SessionState;
   detail?: string;
 }
-/** metadata changed (archive, retitle, regroup, model switch) without a lifecycle change */
+/** metadata changed (archive, retitle, regroup, model switch, pin) without a lifecycle change */
 export interface SessionUpdated {
   type: "session.updated";
   sessionId: string;
   title?: string;
   project?: string | null;
   archived?: boolean;
+  pinned?: boolean;
   model?: string | null;
   provider?: string | null;
 }

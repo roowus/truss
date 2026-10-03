@@ -55,6 +55,12 @@ if (!sessionCols.some((c) => c.name === "provider")) {
 if (!sessionCols.some((c) => c.name === "deleted_at")) {
   db.exec(`ALTER TABLE sessions ADD COLUMN deleted_at INTEGER`);
 }
+/* migration: pinned floats a session to the top of its sidebar section
+   (issue #86) — orthogonal to archived/state, a pinned archived chat stays
+   archived */
+if (!sessionCols.some((c) => c.name === "pinned")) {
+  db.exec(`ALTER TABLE sessions ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0`);
+}
 
 /* server-level key-value store (layout persistence, future settings) */
 db.exec(`
@@ -78,7 +84,16 @@ export interface SessionRow {
   updated_at: number;
   harness_ref: string | null;
   archived: number;
+  /* boolean at the store boundary (unlike the older archived 0/1) — the
+     sidebar's pin key and the #86 contract want a real flag, not SQLite's int */
+  pinned: boolean;
   deleted_at: number | null;
+}
+
+/* sqlite stores pinned as 0/1; every read path normalizes to a boolean */
+function asSessionRow(r: unknown): SessionRow {
+  const row = r as Omit<SessionRow, "pinned"> & { pinned: number };
+  return { ...row, pinned: !!row.pinned };
 }
 
 const insertSession = db.prepare(`
@@ -169,7 +184,8 @@ export const store = {
       created_at: now,
       updated_at: now,
     });
-    return getSessionStmt.get(s.id) as SessionRow;
+    const row = getSessionStmt.get(s.id);
+    return asSessionRow(row);
   },
 
   setSessionState(id: string, state: SessionState) {
@@ -211,7 +227,8 @@ export const store = {
       created_at: s.created_at,
       updated_at: s.updated_at,
     });
-    return getSessionStmt.get(s.id) as SessionRow;
+    const row = getSessionStmt.get(s.id);
+    return asSessionRow(row);
   },
 
   setHarnessRef(id: string, ref: string) {
@@ -230,9 +247,15 @@ export const store = {
     });
   },
 
+  setPinned(id: string, pinned: boolean) {
+    db.prepare(`UPDATE sessions SET pinned = @p, updated_at = @at WHERE id = @id`).run({
+      id, p: pinned ? 1 : 0, at: Date.now(),
+    });
+  },
+
   /** every session carrying a project tag (for bulk archive) */
   sessionsInProject(project: string): SessionRow[] {
-    return db.prepare(`SELECT * FROM sessions WHERE project = @p`).all({ p: project }) as SessionRow[];
+    return (db.prepare(`SELECT * FROM sessions WHERE project = @p`).all({ p: project }) as unknown[]).map(asSessionRow);
   },
 
   getKv(key: string): string | undefined {
@@ -245,7 +268,8 @@ export const store = {
   },
 
   getSession(id: string): SessionRow | undefined {
-    return getSessionStmt.get(id) as SessionRow | undefined;
+    const row = getSessionStmt.get(id);
+    return row ? asSessionRow(row) : undefined;
   },
 
   /** hard delete — row + full event log (CASCADE) */
@@ -254,12 +278,12 @@ export const store = {
   },
 
   listSessions(): SessionRow[] {
-    return listSessionsStmt.all() as SessionRow[];
+    return (listSessionsStmt.all() as unknown[]).map(asSessionRow);
   },
 
   /** the 30-day trash (issue #5): stamped rows, newest first */
   listDeletedSessions(): SessionRow[] {
-    return listDeletedSessionsStmt.all() as SessionRow[];
+    return (listDeletedSessionsStmt.all() as unknown[]).map(asSessionRow);
   },
 
   /** every harness_ref ever seen, trashed rows included — import dedupe must

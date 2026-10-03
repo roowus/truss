@@ -480,6 +480,16 @@ export function setSessionArchived(sessionId: string, archived: boolean) {
   sink({ type: "session.updated", sessionId, archived });
 }
 
+/** pin/unpin (issue #86) — floats to the top of the sidebar section.
+    Orthogonal to lifecycle: a pinned archived session stays archived, and
+    pinning never touches state. */
+export function setSessionPinned(sessionId: string, pinned: boolean) {
+  const row = store.getSession(sessionId);
+  if (!row) throw new Error(`no such session: ${sessionId}`);
+  store.setPinned(sessionId, pinned);
+  sink({ type: "session.updated", sessionId, pinned });
+}
+
 /** every session under a project tag */
 export function setProjectArchived(project: string, archived: boolean): number {
   const rows = store.sessionsInProject(project);

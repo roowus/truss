@@ -17,6 +17,7 @@ export interface HostRow {
   created_at: number;
   last_seen: number | null;
   revoked: number;
+  pinned: number;
   note: string;
 }
 
@@ -32,9 +33,16 @@ function table() {
       created_at   INTEGER NOT NULL,
       last_seen    INTEGER,
       revoked      INTEGER NOT NULL DEFAULT 0,
+      pinned       INTEGER NOT NULL DEFAULT 0,
       note         TEXT NOT NULL DEFAULT ''
     );
   `);
+  /* migration: pinned floats the host to the top of the sidebar's hosts
+     section (issue #86); pre-pin databases need the column added */
+  const cols = store.all<{ name: string }>(`PRAGMA table_info(hosts)`);
+  if (!cols.some((c) => c.name === "pinned")) {
+    store.exec(`ALTER TABLE hosts ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0`);
+  }
   ready = true;
 }
 
@@ -46,6 +54,7 @@ function camel(r: HostRow) {
     createdAt: r.created_at,
     lastSeen: r.last_seen ?? undefined,
     revoked: !!r.revoked,
+    pinned: !!r.pinned,
     note: r.note,
   };
 }
@@ -105,6 +114,14 @@ export function deleteHost(id: string) {
 export function setHostRevoked(id: string, revoked: boolean) {
   table();
   store.run(`UPDATE hosts SET revoked = ? WHERE id = ?`, revoked ? 1 : 0, id);
+}
+
+/** pin/unpin (issue #86) — floats the host to the top of the sidebar's hosts
+    section. Orthogonal to revoked: a pinned revoked host stays revoked. */
+export function setHostPinned(id: string, pinned: boolean) {
+  table();
+  if (!getHost(id)) throw new Error(`no such host: ${id}`);
+  store.run(`UPDATE hosts SET pinned = ? WHERE id = ?`, pinned ? 1 : 0, id);
 }
 
 /** rotate: new plaintext once, old token dies. Revocation is separate — a
