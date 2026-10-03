@@ -37,6 +37,7 @@ export interface TerminalHandlers {
   onHello?: (h: { title?: string; alive: boolean }) => void;
   onOut: (data: string) => void;
   onExit?: (code: number) => void;
+  onTitle?: (title: string) => void;
   onError?: (msg: string) => void;
 }
 
@@ -73,6 +74,7 @@ export interface Backend {
   listTerminals(): Promise<{ terminals: TerminalInfo[] }>;
   createTerminal(body: { cwd?: string; title?: string }): Promise<{ terminal: TerminalInfo }>;
   deleteTerminal(id: string): Promise<unknown>;
+  renameTerminal(id: string, title: string): Promise<unknown>;
   skills(cwd: string): Promise<{ skills: SkillInfo[] }>;
   /** Files panel: workspace browser, confined server-side to `root` */
   listFiles(root: string, path?: string, q?: string): Promise<{ entries: FileEntry[] }>;
@@ -210,6 +212,7 @@ export function createLiveBackend(): Backend {
       return { terminal: r.terminal ?? r };
     },
     deleteTerminal: (id) => req("DELETE", `/api/terminals/${encodeURIComponent(id)}`),
+    renameTerminal: (id, title) => req("POST", `/api/terminals/${encodeURIComponent(id)}/rename`, { title }),
     skills: (cwd) => req("GET", `/api/skills?cwd=${encodeURIComponent(cwd)}`),
     listFiles: (root, path, q) =>
       req("GET", `/api/files?root=${encodeURIComponent(root)}${path ? `&path=${encodeURIComponent(path)}` : ""}${q ? `&q=${encodeURIComponent(q)}` : ""}`),
@@ -335,6 +338,7 @@ export function createLiveBackend(): Backend {
           if (f.type === "hello") h.onHello?.({ title: f.title, alive: !!f.alive });
           else if (f.type === "out") h.onOut(f.data);
           else if (f.type === "exit") h.onExit?.(f.code);
+          else if (f.type === "title") h.onTitle?.(f.title);
         } catch {
           /* ignore */
         }

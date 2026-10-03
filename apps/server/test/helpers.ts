@@ -11,6 +11,11 @@ import { join } from "node:path";
  *   const { db, todos } = await freshServer("todos");
  *   ... test body ...
  *   cleanup();
+ *
+ * Caveat: only the DB is isolated this way — module-level in-memory state
+ * (e.g. hosts.ts's deleted-id tombstones) survives across fixtures in the
+ * same file. Modules that keep such state export a reset (see
+ * resetHostTombstones); call it when a fixture needs a clean slate.
  */
 export interface FreshServer {
   dir: string;

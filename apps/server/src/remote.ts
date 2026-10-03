@@ -208,6 +208,21 @@ export function agentBye(hostId: string) {
   console.log(`[remote] agent ${hostId} gone`);
 }
 
+/** host deleted — drop the live channel NOW. Tokens are only checked at
+   connect, so without this a deleted host's agent keeps running until the
+   process restarts (issue #85). agentBye reaps the registry; the socket
+   close then re-fires it as a no-op. */
+export function dropAgent(hostId: string) {
+  const agent = agents.get(hostId);
+  if (!agent) return;
+  agentBye(hostId);
+  try {
+    agent.socket.close();
+  } catch {
+    /* already closing */
+  }
+}
+
 /** frame router for an agent socket */
 export function agentFrame(hostId: string, msg: Record<string, unknown>) {
   switch (msg.type) {

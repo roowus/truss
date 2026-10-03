@@ -79,6 +79,26 @@ export function listTerminals() {
   return [...terms.values()].map((t) => ({ id: t.id, title: t.title, cwd: t.cwd, alive: t.alive }));
 }
 
+/** rename a shell and push a title frame so attached tabs repaint live.
+   Exited-but-listed shells stay renamable — their ghost tabs deserve real
+   names too. Titles stay per-server-session; nothing persists. */
+export function renameTerminal(id: string, title: string): { id: string; title: string } {
+  const t = terms.get(id);
+  if (!t) throw new Error(`no such terminal: ${id}`);
+  const trimmed = title.trim().slice(0, 64);
+  if (!trimmed) throw new Error("title must not be blank");
+  t.title = trimmed;
+  const frame = JSON.stringify({ type: "title", title: t.title });
+  for (const c of t.clients) {
+    try {
+      c.send(frame);
+    } catch {
+      /* client vanished mid-write */
+    }
+  }
+  return { id, title: t.title };
+}
+
 export function closeTerminal(id: string) {
   const t = terms.get(id);
   if (!t) return;

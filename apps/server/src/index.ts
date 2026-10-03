@@ -27,7 +27,7 @@ import {
   restoreSession,
   type EventFrame,
 } from "./sessions.js";
-import { attachTerminal, closeTerminal, createTerminal, listTerminals } from "./terminal.js";
+import { attachTerminal, closeTerminal, createTerminal, listTerminals, renameTerminal } from "./terminal.js";
 import { createSkill, listSkills, setSkillDisabled, trashSkill } from "./skills.js";
 import {
   createPath as createWorkspacePath,
@@ -43,7 +43,7 @@ import { createTodo, listTodos, resolveTodoAccess, setTodoBroadcaster, userUpdat
 import { listFeed, setFeedBroadcaster, setFeedState, shareFeedItem } from "./feed.js";
 import { startFeedAutopost } from "./feed-autopost.js";
 import { composePractices, getGlobalPractices, saveGlobalPractices } from "./practices.js";
-import { createHost, deleteHost, listHosts, rotateHostToken, setHostRevoked, verifyAgentToken } from "./hosts.js";
+import { createHost, deleteHost, getHost, isHostTombstoned, listHosts, rotateHostToken, setHostRevoked, verifyAgentToken } from "./hosts.js";
 import { netInfo, taildropToPeer, tailscalePeers, tailscaleServe } from "./net.js";
 import { mintPairing, redeemPairing, redeemRateOk } from "./pairing.js";
 import { agentBundleError, ensureAgentBundle, standaloneInstallScript, installScript } from "./agentbundle.js";
@@ -59,6 +59,7 @@ import {
   agentBye,
   agentFrame,
   agentHello,
+  dropAgent,
   listAgents,
   requestMetrics,
   wireRemoteRegistry,
@@ -153,6 +154,13 @@ app.get("/agent/connect", { websocket: true }, (socket, req) => {
   /* per-host tokens (hosts table) first; the shared env token is a dev
      fallback that auto-registers the host into the same registry */
   if (!host || !token || !verifyAgentToken(host, token, AGENT_TOKEN)) {
+    /* a tombstoned id is not "unauthorized" — the host was deleted here.
+       Distinct code so the agent stops retrying instead of pointing at a
+       token it cannot fix (issue #85, audit round 3) */
+    if (host && isHostTombstoned(host)) {
+      socket.close(4404, "host deleted");
+      return;
+    }
     socket.close(4403, "unauthorized");
     return;
   }
@@ -184,6 +192,13 @@ app.get("/agent/connect", { websocket: true }, (socket, req) => {
     if (!helloed) {
       if (msg.type !== "hello") {
         socket.close(4400, "hello first");
+        return;
+      }
+      /* the host row may have been deleted between connect and hello —
+         dropAgent only sees registered agents, so without this gate the
+         hello would register a dead host's harnesses (audit round 2) */
+      if (!getHost(host)) {
+        socket.close(4404, "host deleted");
         return;
       }
       helloed = true;
@@ -359,9 +374,15 @@ app.post("/api/hosts/:id/revoke", async (req) => {
   setHostRevoked(id, revoked !== false);
   return { ok: true };
 });
-app.delete("/api/hosts/:id", async (req) => {
+app.delete("/api/hosts/:id", async (req, reply) => {
   const { id } = req.params as { id: string };
+  /* a repeat delete (the sidebar's two-click confirm double-firing) is a
+     clean 404, not an error (issue #85) */
+  if (!getHost(id)) return reply.code(404).send({ error: `no such host: ${id}` });
   deleteHost(id);
+  /* the live agent channel dies with the row — tokens are only checked at
+     connect, so the socket would otherwise keep running until restart */
+  dropAgent(id);
   return { ok: true };
 });
 
@@ -552,6 +573,18 @@ app.delete("/api/terminals/:id", async (req) => {
   const { id } = req.params as { id: string };
   closeTerminal(id);
   return { ok: true };
+});
+
+/* rename lands with the sidebar row actions (issue #85); open tabs repaint
+   via the pushed title frame */
+app.post("/api/terminals/:id/rename", async (req, reply) => {
+  const { id } = req.params as { id: string };
+  const { title } = (req.body ?? {}) as { title?: string };
+  try {
+    return renameTerminal(id, String(title ?? ""));
+  } catch (e: any) {
+    return reply.code(400).send({ error: e.message ?? String(e) });
+  }
 });
 
 app.get("/api/terminal/:id/ws", { websocket: true }, (socket, req) => {

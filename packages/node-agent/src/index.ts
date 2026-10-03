@@ -163,7 +163,6 @@ function connect() {
   });
 
   ws.on("close", (code: number, reason: Buffer) => {
-    console.log(`[node-agent] disconnected (${code} ${reason}); retrying in ${reconnectDelay}ms`);
     /* dispose local sessions — the server marks them closed on its side */
     for (const [, entry] of live) {
       try {
@@ -174,6 +173,15 @@ function connect() {
     }
     live.clear();
     ws = null;
+    /* 4404 = the host was deleted on the server: retrying can never succeed
+       (the id is tombstoned), so say so once and stop instead of spamming
+       "unauthorized" every 15s forever (issue #85, audit round 3). Re-adding
+       the host means a new id + token, which takes a restart anyway. */
+    if (code === 4404) {
+      console.log("[node-agent] this host was deleted on the server; not retrying — re-add it (new id + token) and restart the agent");
+      return;
+    }
+    console.log(`[node-agent] disconnected (${code} ${reason}); retrying in ${reconnectDelay}ms`);
     setTimeout(connect, reconnectDelay);
     reconnectDelay = Math.min(reconnectDelay * 2, 15000);
   });

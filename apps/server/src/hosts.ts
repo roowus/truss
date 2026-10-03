@@ -75,9 +75,31 @@ export function listHosts() {
   return store.all<HostRow>(`SELECT * FROM hosts ORDER BY created_at DESC`).map(camel);
 }
 
+/* ids deleted this process. The shared-env-token fallback auto-registers an
+   unknown id on sight — without a tombstone, a deleted host whose agent
+   reconnects (which delete now actively triggers via dropAgent) would
+   resurrect itself seconds later (issue #85, audit round 1). In-memory on
+   purpose: a restart is the explicit reset, and the add-host wizard always
+   mints a fresh id so re-adding a box is never blocked. */
+const tombstoned = new Set<string>();
+
+/** tests only: the Set is process-global while freshServer swaps the data
+   dir per fixture — clear it when a fixture needs env auto-registration
+   for an id some earlier test deleted */
+export function resetHostTombstones() {
+  tombstoned.clear();
+}
+
+/** the connect gate answers 4404 ("host deleted") for these, not a bare
+   4403, so the node-agent stops retrying instead of blaming the token */
+export function isHostTombstoned(id: string) {
+  return tombstoned.has(id);
+}
+
 export function deleteHost(id: string) {
   table();
   store.run(`DELETE FROM hosts WHERE id = ?`, id);
+  tombstoned.add(id);
 }
 
 export function setHostRevoked(id: string, revoked: boolean) {
@@ -115,6 +137,9 @@ export function verifyAgentToken(hostId: string, token: string, envToken: string
      duplicate row on every reconnect) */
   if (envToken && token === envToken) {
     if (!r) {
+      /* a deleted host stays deleted — its agent reconnecting with the
+         shared token must not resurrect the row (issue #85) */
+      if (tombstoned.has(hostId)) return false;
       store.run(
         `INSERT INTO hosts (id, label, token_hash, token_prefix, created_at, note) VALUES (?, ?, ?, ?, ?, ?)`,
         hostId, hostId, hashToken(token), `…${token.slice(-6)}`, Date.now(), "auto-registered via shared token",

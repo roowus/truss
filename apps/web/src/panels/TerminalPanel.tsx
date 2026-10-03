@@ -73,6 +73,10 @@ export function TerminalPanel({ params, api, containerApi }: IDockviewPanelProps
         term.write(`\r\n\x1b[2m[process exited${code !== undefined ? ` · code ${code}` : ""}]\x1b[0m\r\n`);
       },
       onError: (m) => store.toast("error", "Terminal connection problem", m),
+      /* a rename from the sidebar repaints this tab live (issue #85) */
+      onTitle: (title) => {
+        if (title && title !== api.title) api.setTitle(title);
+      },
     });
     const doFit = () => {
       if (el.clientWidth < 20 || el.clientHeight < 20) return; // xterm fit() throws on zero-size hosts

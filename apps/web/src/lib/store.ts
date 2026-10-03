@@ -680,6 +680,25 @@ class Store {
     }
     this.set((s) => ({ terminals: s.terminals.filter((t) => t.id !== id) }));
   }
+  async renameTerminal(id: string, title: string) {
+    try {
+      await this.be.renameTerminal(id, title);
+    } catch (e: any) {
+      this.toast("error", "Couldn't rename shell", e.message);
+      return;
+    }
+    this.set((s) => ({ terminals: s.terminals.map((t) => (t.id === id ? { ...t, title: title.trim().slice(0, 64) } : t)) }));
+  }
+  /* sidebar host delete (issue #85): a primary affordance must not fail
+     silently — toast on error, refresh either way */
+  async deleteHost(id: string) {
+    try {
+      await this.be.deleteHost(id);
+    } catch (e: any) {
+      if (e.status !== 404) this.toast("error", "Couldn't delete host", e.message);
+    }
+    await this.refreshHosts();
+  }
   focus(id: string | undefined) {
     if (this.state.focused !== id) this.set({ focused: id });
   }

@@ -147,6 +147,33 @@ test("shared env token fallback auto-registers under the host's OWN id (no dupli
   }
 });
 
+test("a deleted host stays deleted: the shared env token can't resurrect it (issue #85 audit)", async () => {
+  const { cleanup } = await freshServer("hosts-tombstone");
+  try {
+    const hosts = await import("../src/hosts.js");
+    /* the tombstone Set is process-global (see helpers.ts caveat) — start
+       clean so this test doesn't depend on file order */
+    hosts.resetHostTombstones();
+    const hostId = "tombstoned-env-host";
+
+    /* an env-token host auto-registers, then the user deletes it */
+    assert.equal(hosts.verifyAgentToken(hostId, "shared-secret", "shared-secret"), true, "env fallback registers");
+    assert.ok(hosts.getHost(hostId), "row exists");
+    hosts.deleteHost(hostId);
+    assert.equal(hosts.getHost(hostId), undefined, "row gone");
+
+    /* its agent reconnects with the same shared token (dropAgent closed the
+       socket; the node-agent retries unconditionally) — refused, no new row */
+    assert.equal(hosts.verifyAgentToken(hostId, "shared-secret", "shared-secret"), false, "tombstoned id refused");
+    assert.equal(hosts.getHost(hostId), undefined, "no resurrection");
+
+    /* a fresh id on the same shared token still registers fine */
+    assert.equal(hosts.verifyAgentToken("tombstoned-env-host-2", "shared-secret", "shared-secret"), true, "only the deleted id is blocked");
+  } finally {
+    cleanup();
+  }
+});
+
 test("a revoked host stays dead even with the shared env token", async () => {
   const { cleanup } = await freshServer("hosts-env-revoked");
   try {

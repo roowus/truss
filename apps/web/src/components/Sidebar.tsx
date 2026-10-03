@@ -4,7 +4,8 @@ import { desktops, useDesktops } from "@/lib/desktops";
 import { ago, daysLeftInTrash, shortPath } from "@/lib/format";
 import { openAgentShell, openDailyDriver, openFreeShell, openPanel, openSession } from "@/lib/workspace";
 import { HarnessMark, Icon, IconBtn, StateDot, TrussLogo, Spinner, STATE_META } from "./ui";
-import type { SessionMeta } from "@/lib/proto";
+import type { HostInfo, SessionMeta, TerminalInfo } from "@/lib/proto";
+import { hostRowActions, shellRowActions } from "@/lib/rowActions";
 import { cn } from "@/utils/cn";
 
 export function Sidebar({ onNew }: { onNew: () => void }) {
@@ -152,35 +153,12 @@ export function Sidebar({ onNew }: { onNew: () => void }) {
           {terminals.length === 0 ? (
             <div className="px-3 py-1 text-[11px] text-[var(--t-dim)]">None running.</div>
           ) : (
-            terminals.map((t) => (
-              <div key={t.id} className="group flex items-center gap-2 mx-0.5 px-2 h-7 rounded-md hover:bg-white/[0.03] cursor-pointer" onClick={() => openPanel("terminal", { terminalId: t.id, title: t.title })} title={t.cwd ? shortPath(t.cwd) : undefined}>
-                <Icon name="term" size={12} className={t.alive === false ? "text-[var(--t-red)]" : "text-[var(--t-dim)]"} />
-                <span className="text-[12px] text-[var(--t-fg2)] truncate">{t.title ?? t.id}</span>
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    void desktops.killTerminal(t.id);
-                  }}
-                  className="ml-auto opacity-0 group-hover:opacity-70 hover:!opacity-100 text-[var(--t-mute)]"
-                  title="Kill shell"
-                >
-                  <Icon name="x" size={11} />
-                </button>
-              </div>
-            ))
+            terminals.map((t) => <ShellRow key={t.id} t={t} />)
           )}
         </Section>
 
         <Section title="remote hosts" action={<IconBtn icon="plus" label="Add host" className="w-5 h-5" onClick={() => window.dispatchEvent(new Event("truss:add-host"))} />}>
-          {hosts.map((h) => (
-            <button key={h.id} onClick={() => openPanel("host", { hostId: h.id, title: hostPrefs[h.id]?.alias || h.label })} className="group w-full flex items-center gap-2 mx-0.5 px-2 h-7 text-[12px] text-[var(--t-mute)] hover:text-[var(--t-fg)] hover:bg-white/[0.03] rounded-md text-left" title={`${h.label} · ${h.online ? `online · ${h.agent?.adapters.join(", ")}` : "offline"} · open host details`}>
-              <span className={cn("w-1.5 h-1.5 rounded-full shrink-0", h.online ? "bg-[var(--t-teal)]" : "bg-[var(--t-line2)]")} />
-              <Icon name="host" size={12} className={h.online ? "text-[var(--t-sky)]" : "text-[var(--t-dim)]"} />
-              <span className={cn("flex-1 truncate", !h.online && "opacity-50")}>{hostPrefs[h.id]?.alias || h.label}</span>
-              {h.revoked && <span className="text-[8.5px] font-mono uppercase text-[var(--t-red)] shrink-0">revoked</span>}
-              <Icon name="chev" size={10} className="opacity-0 group-hover:opacity-100 text-[var(--t-dim)]" />
-            </button>
-          ))}
+          {hosts.map((h) => <HostRow key={h.id} h={h} alias={hostPrefs[h.id]?.alias} />)}
           {hosts.length === 0 && !agentsError && (
             <button onClick={() => window.dispatchEvent(new Event("truss:add-host"))} className="w-full mx-0.5 px-2 py-2 rounded-md border border-dashed border-[var(--t-line2)] text-[11px] text-[var(--t-dim)] hover:text-[var(--t-mute)] hover:border-[var(--t-mute)] text-left">
               No hosts yet. Add one — the agent dials out, so no firewall holes.
@@ -278,6 +256,137 @@ function SessionRow({ s, now, archived, trashView }: { s: SessionMeta; now: numb
           />
         )}
       </span>
+    </div>
+  );
+}
+
+
+/* ---------------- shells + remote hosts rows (issue #85) ----------------
+   Actions come from src/lib/rowActions.ts (looked up by id, never by
+   position) — open is the row click itself, the rest render as hover
+   actions with the session-row pattern: the destructive one takes a
+   two-click confirm. */
+
+/* the two-click confirm, shared by the destructive row actions: first click
+   arms (auto-disarm after 3s), second click fires */
+function useTwoClickConfirm(): [boolean, (fire: () => void) => void] {
+  const [confirm, setConfirm] = useState(false);
+  useEffect(() => {
+    if (!confirm) return;
+    const tm = setTimeout(() => setConfirm(false), 3000);
+    return () => clearTimeout(tm);
+  }, [confirm]);
+  const click = (fire: () => void) => {
+    if (!confirm) return setConfirm(true);
+    setConfirm(false);
+    fire();
+  };
+  return [confirm, click];
+}
+
+const confirmCls = (confirm: boolean) =>
+  cn("w-6 h-6", confirm && "!text-[var(--t-red)] bg-[color-mix(in_oklab,var(--t-red)_15%,transparent)]");
+
+function ShellRow({ t }: { t: TerminalInfo }) {
+  const [confirm, confirmClick] = useTwoClickConfirm();
+  const [editing, setEditing] = useState(false);
+  const [name, setName] = useState("");
+
+  const actions = shellRowActions(t);
+  const rename = actions.find((a) => a.id === "rename");
+  const kill = actions.find((a) => a.dangerous);
+  const dead = t.alive === false;
+
+  const finishRename = () => {
+    const next = name.trim();
+    setEditing(false);
+    if (next && next !== t.title) void store.renameTerminal(t.id, next);
+  };
+
+  return (
+    <div
+      className="group flex items-center gap-2 mx-0.5 px-2 h-7 rounded-md hover:bg-white/[0.03] cursor-pointer"
+      onClick={() => openPanel("terminal", { terminalId: t.id, title: t.title })}
+      title={t.cwd ? shortPath(t.cwd) : undefined}
+    >
+      <Icon name="term" size={12} className={dead ? "text-[var(--t-red)]" : "text-[var(--t-dim)]"} />
+      {editing ? (
+        <input
+          autoFocus
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          onClick={(e) => e.stopPropagation()}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") finishRename();
+            else if (e.key === "Escape") setEditing(false);
+          }}
+          onBlur={finishRename}
+          className="flex-1 min-w-0 bg-[var(--t-bg1)] border border-[var(--t-line2)] rounded px-1 text-[12px] text-[var(--t-fg)] outline-none"
+        />
+      ) : (
+        <span className="text-[12px] text-[var(--t-fg2)] truncate">{t.title ?? t.id}</span>
+      )}
+      <span className="ml-auto hidden group-hover:flex items-center shrink-0" onClick={(e) => e.stopPropagation()}>
+        {rename && (
+          <IconBtn
+            icon={rename.icon ?? "edit"}
+            label={rename.label}
+            className="w-6 h-6"
+            onClick={() => {
+              setName(t.title ?? "");
+              setEditing(true);
+            }}
+          />
+        )}
+        {kill && (
+          <IconBtn
+            icon={kill.icon ?? "x"}
+            label={confirm ? (dead ? "Click again: remove this exited shell" : "Click again: kill this shell") : kill.label}
+            className={confirmCls(confirm)}
+            onClick={() => confirmClick(() => void desktops.killTerminal(t.id))}
+          />
+        )}
+      </span>
+    </div>
+  );
+}
+
+function HostRow({ h, alias }: { h: HostInfo; alias?: string }) {
+  const [confirm, confirmClick] = useTwoClickConfirm();
+
+  const actions = hostRowActions(h);
+  const del = actions.find((a) => a.dangerous);
+  const open = () => openPanel("host", { hostId: h.id, title: alias || h.label });
+
+  return (
+    <div
+      role="button"
+      tabIndex={0}
+      onClick={open}
+      onKeyDown={(e) => {
+        /* the row was a real <button> before #85 — keyboard opens stay */
+        if ((e.key === "Enter" || e.key === " ") && e.target === e.currentTarget) {
+          e.preventDefault();
+          open();
+        }
+      }}
+      className="group w-full flex items-center gap-2 mx-0.5 px-2 h-7 text-[12px] text-[var(--t-mute)] hover:text-[var(--t-fg)] hover:bg-white/[0.03] rounded-md text-left cursor-pointer"
+      title={`${h.label} · ${h.online ? `online · ${h.agent?.adapters.join(", ")}` : "offline"} · open host details`}
+    >
+      <span className={cn("w-1.5 h-1.5 rounded-full shrink-0", h.online ? "bg-[var(--t-teal)]" : "bg-[var(--t-line2)]")} />
+      <Icon name="host" size={12} className={h.online ? "text-[var(--t-sky)]" : "text-[var(--t-dim)]"} />
+      <span className={cn("flex-1 truncate", !h.online && "opacity-50")}>{alias || h.label}</span>
+      {h.revoked && !confirm && <span className="text-[8.5px] font-mono uppercase text-[var(--t-red)] shrink-0 group-hover:hidden">revoked</span>}
+      {del && (
+        <span className="hidden group-hover:flex items-center shrink-0" onClick={(e) => e.stopPropagation()}>
+          <IconBtn
+            icon={del.icon ?? "trash"}
+            label={confirm ? `Click again: delete ${alias || h.label} (drops its agent if connected)` : del.label}
+            className={confirmCls(confirm)}
+            onClick={() => confirmClick(() => void store.deleteHost(h.id))}
+          />
+        </span>
+      )}
     </div>
   );
 }
