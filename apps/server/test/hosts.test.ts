@@ -151,6 +151,9 @@ test("a deleted host stays deleted: the shared env token can't resurrect it (iss
   const { cleanup } = await freshServer("hosts-tombstone");
   try {
     const hosts = await import("../src/hosts.js");
+    /* the tombstone Set is process-global (see helpers.ts caveat) — start
+       clean so this test doesn't depend on file order */
+    hosts.resetHostTombstones();
     const hostId = "tombstoned-env-host";
 
     /* an env-token host auto-registers, then the user deletes it */

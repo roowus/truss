@@ -43,7 +43,7 @@ import { createTodo, listTodos, resolveTodoAccess, setTodoBroadcaster, userUpdat
 import { listFeed, setFeedBroadcaster, setFeedState, shareFeedItem } from "./feed.js";
 import { startFeedAutopost } from "./feed-autopost.js";
 import { composePractices, getGlobalPractices, saveGlobalPractices } from "./practices.js";
-import { createHost, deleteHost, getHost, listHosts, rotateHostToken, setHostRevoked, verifyAgentToken } from "./hosts.js";
+import { createHost, deleteHost, getHost, isHostTombstoned, listHosts, rotateHostToken, setHostRevoked, verifyAgentToken } from "./hosts.js";
 import { netInfo, taildropToPeer, tailscalePeers, tailscaleServe } from "./net.js";
 import { mintPairing, redeemPairing, redeemRateOk } from "./pairing.js";
 import { agentBundleError, ensureAgentBundle, standaloneInstallScript, installScript } from "./agentbundle.js";
@@ -154,6 +154,13 @@ app.get("/agent/connect", { websocket: true }, (socket, req) => {
   /* per-host tokens (hosts table) first; the shared env token is a dev
      fallback that auto-registers the host into the same registry */
   if (!host || !token || !verifyAgentToken(host, token, AGENT_TOKEN)) {
+    /* a tombstoned id is not "unauthorized" — the host was deleted here.
+       Distinct code so the agent stops retrying instead of pointing at a
+       token it cannot fix (issue #85, audit round 3) */
+    if (host && isHostTombstoned(host)) {
+      socket.close(4404, "host deleted");
+      return;
+    }
     socket.close(4403, "unauthorized");
     return;
   }

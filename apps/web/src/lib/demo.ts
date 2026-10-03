@@ -6,6 +6,7 @@ import type {
   CreateSessionBody,
   Frame,
   HarnessesResp,
+  HostInfo,
   ModelInfo,
   MonitorEntry,
   ProtoEvent,
@@ -288,6 +289,11 @@ export function createDemoBackend(): Backend {
   const terminals = new Map<string, FakeShell>();
   let busUp = true;
   let termN = 0;
+  /* the demo's host list is real state, not a rebuilt constant — the sidebar
+     row actions (issue #85) must visibly work in demo mode too */
+  let demoHosts: HostInfo[] = [
+    { id: "atlas", label: "atlas", tokenPrefix: "…demo01", createdAt: Date.now() - 86400_000 * 9, lastSeen: Date.now() - 3600_000, revoked: false, note: "the other box", online: true, agent: { hostId: "atlas", hostname: "atlas", adapters: ["pi"] } },
+  ];
 
   const emit = (s: DemoSession, body: EvBody) => {
     const f: Frame = { seq: ++seq, ev: { ...body, sessionId: s.meta.id } as ProtoEvent };
@@ -726,7 +732,7 @@ export function createDemoBackend(): Backend {
     gitGraph: async () => ({ graph: "* a1b2c3d (HEAD -> main) demo commit\n* e4f5g6h earlier work\n" }),
     gitDiff: async (_cwd, path) => ({ diff: `--- a/${path}\n+++ b/${path}\n@@ -1,1 +1,2 @@\n // demo\n+// changed\n` }),
     gitSwitch: async (_cwd, branch) => ({ branch }),
-    hosts: async () => ({ hosts: [{ id: "atlas", label: "atlas", tokenPrefix: "…demo01", createdAt: Date.now() - 86400_000 * 9, lastSeen: Date.now() - 3600_000, revoked: false, note: "the other box", online: true, agent: { hostId: "atlas", hostname: "atlas", adapters: ["pi"] } }] }),
+    hosts: async () => ({ hosts: demoHosts }),
     createHost: async (label: string) => ({ host: { id: "new-host", label, tokenPrefix: "…demo02", createdAt: Date.now(), revoked: false, note: "", online: false } as never, token: "truss_agent_demo" }),
     setSessionModel: async () => ({ mode: "stored" as const }),
     trash: async () => ({ sessions: [] }),
@@ -736,7 +742,10 @@ export function createDemoBackend(): Backend {
     purgeSession: async () => ({ ok: true }),
     rotateHostToken: async () => ({ token: "truss_agent_demo_rotated" }),
     revokeHost: async () => ({ ok: true }),
-    deleteHost: async () => ({ ok: true }),
+    deleteHost: async (id) => {
+      demoHosts = demoHosts.filter((h) => h.id !== id);
+      return { ok: true };
+    },
     pairHost: async (_id, _t, serverUrl) => ({ code: "k3xm7q", expiresAt: Date.now() + 600_000, url: `${serverUrl}/i/k3xm7q`, command: `curl -fsSL ${serverUrl}/i/k3xm7q | sh` }),
     taildropHost: async () => ({ ok: true, file: "truss-install-demo.sh" }),
     metrics: async () => {

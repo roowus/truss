@@ -46,6 +46,41 @@ test("a host deleted between connect and hello never registers", async () => {
   assert.ok(!agents.some((a: any) => a.hostId === id), "no harnesses registered for the deleted host");
 });
 
+test("reconnect after delete is refused 4404 (host deleted), not a bare 4403 the agent can't act on", async () => {
+  const created = await fetch(`${srv.base}/api/hosts`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ label: "doomed 4404 box" }),
+  }).then((r) => r.json());
+  const { id, token } = { id: created.host.id as string, token: created.token as string };
+
+  const del = await fetch(`${srv.base}/api/hosts/${id}`, { method: "DELETE" });
+  assert.equal(del.status, 200);
+
+  /* per-host token: tombstoned id gets the actionable close code */
+  const ws = new WebSocket(`${srv.wsBase}/agent/connect?host=${id}&token=${encodeURIComponent(token)}`);
+  const code = await new Promise<number>((res) => {
+    ws.addEventListener("close", (e) => res(e.code));
+    setTimeout(() => res(-1), 2000);
+  });
+  assert.equal(code, 4404, "deleted host is 4404, so the agent stops retrying instead of blaming the token");
+
+  /* and a plain bad token on a live host is still 4403 */
+  const other = await fetch(`${srv.base}/api/hosts`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ label: "still here" }),
+  }).then((r) => r.json());
+  const ws2 = new WebSocket(`${srv.wsBase}/agent/connect?host=${other.host.id}&token=truss_agent_wrong`);
+  const code2 = await new Promise<number>((res) => {
+    ws2.addEventListener("close", (e) => res(e.code));
+    setTimeout(() => res(-1), 2000);
+  });
+  assert.equal(code2, 4403, "a bad token on a live host stays unauthorized");
+
+  await fetch(`${srv.base}/api/hosts/${other.host.id}`, { method: "DELETE" });
+});
+
 test("a live host's hello in the same window still registers (the gate only blocks the dead)", async () => {
   const created = await fetch(`${srv.base}/api/hosts`, {
     method: "POST",

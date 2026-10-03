@@ -90,6 +90,12 @@ export function resetHostTombstones() {
   tombstoned.clear();
 }
 
+/** the connect gate answers 4404 ("host deleted") for these, not a bare
+   4403, so the node-agent stops retrying instead of blaming the token */
+export function isHostTombstoned(id: string) {
+  return tombstoned.has(id);
+}
+
 export function deleteHost(id: string) {
   table();
   store.run(`DELETE FROM hosts WHERE id = ?`, id);

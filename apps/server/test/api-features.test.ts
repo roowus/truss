@@ -460,10 +460,11 @@ test("hosts REST: mint (token once) → rotate → revoke → delete, enforced a
   /* no label-edit route exists (gap) */
   assert.equal((await patch(`/api/hosts/${host.id}`, { label: "renamed" })).status, 404, "no PATCH /api/hosts/:id");
 
-  /* delete: row gone, token dead */
+  /* delete: row gone, token dead — with 4404 ("host deleted", the agent
+     stops retrying) rather than a bare 4403 since issue #85's tombstone */
   assert.equal((await del(`/api/hosts/${host.id}`)).status, 200);
   assert.ok(!(await api("/api/hosts")).body.hosts.some((h: Ev) => h.id === host.id));
-  assert.equal(await wsCloseCode(agentUrl(host.id, token2)), 4403, "deleted host's token is dead");
+  assert.equal(await wsCloseCode(agentUrl(host.id, token2)), 4404, "deleted host's token is dead");
 });
 
 /* ── 6. layout round trip ──────────────────────────────────────────────── */

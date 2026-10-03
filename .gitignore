@@ -6,3 +6,4 @@ dist/
 apps/server/data/
 vendor/
 pr-preview/w/
+apps/server/w/
