@@ -54,6 +54,7 @@ import { controlService, deleteRoute, listCredentials, upsertRoute } from "./cre
 import { controlRouter, harnessRouting, routerStatus } from "./router.js";
 import { modelCatalog } from "./modelcat.js";
 import { syncPiModelsJson } from "./pi-config.js";
+import { transcribeAudio, transcribeConfigFromEnv } from "./transcribe.js";
 import { setClaudeModels } from "./adapters/claude.js";
 import {
   agentBye,
@@ -438,6 +439,22 @@ app.post("/api/sessions/:id/upload", { bodyLimit: 34 * 1024 * 1024 }, async (req
     return { upload: saveUpload(row.cwd, name, data) };
   } catch (err) {
     return reply.code(400).send({ error: String(err instanceof Error ? err.message : err) });
+  }
+});
+
+/* voice dictation (issue #15): one take in, transcript out. Same base64 JSON
+   shape as uploads; the speech endpoint itself is operator config, see
+   transcribe.ts. 25 MB route-local cap covers even long PCM takes. */
+app.post("/api/transcribe", { bodyLimit: 25 * 1024 * 1024 }, async (req, reply) => {
+  const { audioBase64, mime } = (req.body ?? {}) as { audioBase64?: string; mime?: string };
+  if (!audioBase64 || typeof audioBase64 !== "string") return reply.code(400).send({ error: "audioBase64 required" });
+  const cfg = transcribeConfigFromEnv();
+  if (!cfg.url)
+    return reply.code(501).send({ error: "voice transcription is not configured on this server (set TRUSS_TRANSCRIBE_URL)" });
+  try {
+    return { text: await transcribeAudio(Buffer.from(audioBase64, "base64"), mime, cfg) };
+  } catch (err) {
+    return reply.code(502).send({ error: String(err instanceof Error ? err.message : err) });
   }
 });
 

@@ -9,6 +9,8 @@ import { CHAT_WIDTH_DEFAULT, commitChatWidth, dragDisplayWidth, readChatWidthPre
 import { filesFromTransfer, isFileDrag } from "@/lib/attach";
 import { formatSessionRef } from "@/lib/sessionRef";
 import { RAIL_INSET, activeRailIndex, railIndexAtOffset, railMarkTop, railNaturalHeight, turnRailItems } from "@/lib/turnRail";
+import { createBrowserVoiceInput, appendTranscript } from "@/lib/voice";
+import type { VoiceController, VoiceState } from "@/lib/voiceInput";
 import { openPanel, openAgentShell, renameSessionPanels } from "@/lib/workspace";
 import { Btn, Empty, HarnessMark, Icon, IconBtn, Select, Spinner, StateDot, STATE_META } from "@/components/ui";
 import { Markdown } from "./Markdown";
@@ -507,6 +509,20 @@ function Composer({ id }: { id: string }) {
   const ta = useRef<HTMLTextAreaElement>(null);
   const now = useNow(1000, meta.state === "spawning");
 
+  /* voice dictation (issue #15): the controller lives across renders and its
+     only output is the draft — sending stays the user's click */
+  const [voiceState, setVoiceState] = useState<VoiceState>("idle");
+  const voiceRef = useRef<VoiceController | null>(null);
+  const voice = () =>
+    (voiceRef.current ??= createBrowserVoiceInput({
+      onText: (t) => {
+        setText((cur) => appendTranscript(cur, t));
+        ta.current?.focus();
+      },
+      onState: setVoiceState,
+    }));
+  useEffect(() => () => voiceRef.current?.cancel(), []); // drop a live take when the panel unmounts
+
   useEffect(() => {
     drafts.set(id, text);
   }, [id, text]);
@@ -568,6 +584,18 @@ function Composer({ id }: { id: string }) {
     }
   };
 
+  const onMic = () => {
+    const v = voice();
+    if (voiceState === "recording") void v.stop();
+    else if (voiceState === "transcribing") v.cancel();
+    else v.start();
+  };
+  const voiceTitle =
+    voiceState === "recording" ? "Stop dictation — the transcript lands in the draft" :
+    voiceState === "transcribing" ? "Transcribing… click to cancel" :
+    voiceState === "error" ? `Dictation failed: ${voiceRef.current?.error() ?? "unknown error"}` :
+    "Dictate into the draft (Esc cancels a take)";
+
   let hint: ReactNode = null;
   let tone: "amber" | "dim" | "red" = "dim";
   if (dead) {
@@ -584,6 +612,14 @@ function Composer({ id }: { id: string }) {
   } else if (running) {
     tone = "amber";
     hint = <><Icon name="lock" size={12} /> {meta.harness} can't take input mid-run — draft is held, or <button className="underline" onClick={() => store.interrupt(id)}>interrupt</button>.</>;
+  }
+  /* an active voice take owns the hint line while it lives */
+  if (voiceState === "recording") {
+    tone = "amber";
+    hint = <><Icon name="mic" size={12} /> Dictating… click the mic to finish, Esc to cancel.</>;
+  } else if (voiceState === "error") {
+    tone = "red";
+    hint = <><Icon name="alert" size={12} /> Dictation failed: {voiceRef.current?.error() ?? "unknown error"}</>;
   }
 
   const columnW = useContext(ChatColumnCtx);
@@ -633,6 +669,20 @@ function Composer({ id }: { id: string }) {
           onChange={(e) => { if (e.target.files?.length) void attachFiles(e.target.files); }}
         />
         <IconBtn icon="clip" label={uploading ? "Uploading…" : "Attach files (they land in .truss-uploads/ in the workspace)"} disabled={uploading || sending} onClick={() => fileRef.current?.click()} className="mb-0.5 shrink-0" />
+        <button
+          onClick={onMic}
+          title={voiceTitle}
+          aria-label={voiceTitle}
+          className={cn(
+            "mb-0.5 shrink-0 inline-grid place-items-center w-7 h-7 rounded-md transition-colors",
+            voiceState === "idle" && "text-[var(--t-mute)] hover:text-[var(--t-fg)] hover:bg-white/[0.06]",
+            voiceState === "recording" && "text-[var(--t-amber)] bg-[color-mix(in_oklab,var(--t-amber)_12%,transparent)] t-pulse",
+            voiceState === "transcribing" && "text-[var(--t-amber)]",
+            voiceState === "error" && "text-[var(--t-red)] hover:bg-white/[0.06]",
+          )}
+        >
+          {voiceState === "transcribing" ? <Spinner size={13} /> : <Icon name="mic" />}
+        </button>
         <textarea
           ref={ta}
           value={text}
@@ -648,6 +698,9 @@ function Composer({ id }: { id: string }) {
             if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
               e.preventDefault();
               void send();
+            } else if (e.key === "Escape" && (voiceState === "recording" || voiceState === "transcribing")) {
+              e.preventDefault();
+              voice().cancel();
             } else if (e.key === "Escape" && running) {
               e.preventDefault();
               void store.interrupt(id);
