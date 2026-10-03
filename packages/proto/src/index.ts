@@ -80,7 +80,7 @@ export interface TodoItem {
   updatedAt: number;
 }
 
-export type FeedType = "todo" | "permission" | "work_done" | "task_run" | "error" | "context" | "report" | "note";
+export type FeedType = "todo" | "permission" | "work_done" | "task_run" | "error" | "context" | "report" | "note" | "doubletake";
 export type FeedImportance = "low" | "normal" | "high" | "urgent";
 export type FeedState = "unread" | "read" | "saved" | "dismissed" | "done";
 export interface FeedItem {

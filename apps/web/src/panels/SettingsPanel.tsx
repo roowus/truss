@@ -117,6 +117,8 @@ export function SettingsPanel() {
           ))}
         </section>
 
+        <DoubletakeSection />
+
         <NetworkSection />
 
         <PracticesSection />
@@ -131,6 +133,57 @@ export function SettingsPanel() {
 
 function SectionTitle({ children }: { children: React.ReactNode }) {
   return <h2 className="text-[11px] uppercase tracking-[0.1em] font-medium text-[var(--t-dim)] mb-1">{children}</h2>;
+}
+
+/** Integrations — doubletake research cards in the feed. The server polls
+    its /api/chats; finished research (answered / failed / capped) posts one
+    card per chat that links out to the doubletake chat. */
+function DoubletakeSection() {
+  const settings = useDesktops((s) => s.settings);
+  const dt = settings.doubletake;
+  const change = (patch: Partial<typeof dt>) => desktops.updateSettings({ doubletake: { ...dt, ...patch } });
+  return (
+    <section className="mt-8">
+      <SectionTitle>Integrations</SectionTitle>
+      <Row label="Doubletake research" description="When a doubletake item finishes (answered, failed, or capped), a card lands in the feed and opens its chat.">
+        <button
+          role="switch"
+          aria-checked={dt.enabled}
+          onClick={() => change({ enabled: !dt.enabled })}
+          className={cn("w-8 h-4.5 rounded-full relative transition-colors h-[18px]", dt.enabled ? "bg-[var(--t-teal)]/70" : "bg-[var(--t-line2)]")}
+        >
+          <span className={cn("absolute top-0.5 w-3.5 h-3.5 rounded-full bg-white transition-all", dt.enabled ? "left-4" : "left-0.5")} />
+        </button>
+      </Row>
+      {dt.enabled && (
+        <>
+          <div className="py-3 border-b border-[var(--t-line)]">
+            <div className="text-[12.5px] text-[var(--t-fg)]">Base URL</div>
+            <p className="mt-0.5 mb-2 text-[11.5px] text-[var(--t-dim)]">Where this box serves doubletake, e.g. https://doubletake.rewis.</p>
+            <input
+              aria-label="Doubletake base URL"
+              className="t-input font-code w-full"
+              value={dt.baseUrl}
+              onChange={(e) => change({ baseUrl: e.target.value.trim() })}
+              placeholder="https://doubletake.rewis"
+            />
+          </div>
+          <div className="py-3 border-b border-[var(--t-line)]">
+            <div className="text-[12.5px] text-[var(--t-fg)]">Token</div>
+            <p className="mt-0.5 mb-2 text-[11.5px] text-[var(--t-dim)]">Bearer token from doubletake (login or device pairing). Stored in the layout doc on this server.</p>
+            <input
+              aria-label="Doubletake token"
+              type="password"
+              className="t-input font-code w-full"
+              value={dt.token}
+              onChange={(e) => change({ token: e.target.value.trim() })}
+              placeholder="leave empty if /api/chats is open"
+            />
+          </div>
+        </>
+      )}
+    </section>
+  );
 }
 
 /** Network — how other devices and remote hosts reach this server. */
