@@ -671,6 +671,16 @@ export function createDemoBackend(): Backend {
       terminals.delete(tid);
       return { ok: true };
     },
+    async renameTerminal(tid, title) {
+      await net(20);
+      const t = terminals.get(tid);
+      if (!t) throw new ApiError(400, `no such terminal: ${tid}`);
+      const next = title.trim().slice(0, 64);
+      if (!next) throw new ApiError(400, "title must not be blank");
+      t.info.title = next;
+      for (const h of t.listeners) h.onTitle?.(next);
+      return { ok: true };
+    },
     async skills(cwd): Promise<{ skills: SkillInfo[] }> {
       await net(150);
       const base: SkillInfo[] = [
