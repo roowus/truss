@@ -102,8 +102,9 @@ export function AddHostWizard({ onClose }: { onClose: () => void }) {
     ? `curl -fsSL ${serverAddr}/agent/install.sh?host=${created.id} | sh -s -- ${created.token}`
     : "";
 
-  /* the file taildrop delivers — the name mirrors the server's taildropHost */
-  const dropFile = created ? `truss-install-${created.id}.sh` : "";
+  /* the file taildrop delivered — the authoritative name comes back in the
+     taildropHost response (the demo backend names it differently) */
+  const [dropFile, setDropFile] = useState("");
 
   return (
     <div className="fixed inset-0 z-[100] grid place-items-center bg-black/50" onPointerDown={(e) => e.target === e.currentTarget && onClose()}>
@@ -247,7 +248,7 @@ export function AddHostWizard({ onClose }: { onClose: () => void }) {
                     setDropState("sending");
                     setDropErr(null);
                     be?.taildropHost(created.id, pickedPeer!, created.token, serverAddr).then(
-                      () => setDropState("sent"),
+                      (r) => { setDropFile(r.file); setDropState("sent"); },
                       (e) => { setDropState("failed"); setDropErr(e?.message ?? String(e)); },
                     );
                   }}
@@ -275,7 +276,7 @@ export function AddHostWizard({ onClose }: { onClose: () => void }) {
               <span className="text-[10.5px] text-[var(--t-dim)]">needs node ≥ 20 on the remote + the harness CLIs it should host</span>
             </div>
             {dropErr && <p className="text-[11px] text-[var(--t-red)]">Taildrop failed: {dropErr} — use the copy command or the short one instead.</p>}
-            {dropState === "sent" && created && (
+            {dropState === "sent" && dropFile && (
               <div className="rounded-lg border border-[var(--t-line)] bg-[var(--t-bg0)] px-3 py-2 space-y-1.5">
                 <p className="text-[11px] text-[var(--t-teal)]">{dropInstructionLabel(dropFile)}</p>
                 <div className="flex items-center gap-2">
