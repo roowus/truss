@@ -27,6 +27,12 @@ export interface FeedSourceSettings {
   context: boolean;
 }
 
+export interface DoubletakeSettings {
+  enabled: boolean;
+  baseUrl: string;
+  token: string;
+}
+
 export interface UiSettings {
   density: "comfortable" | "compact";
   openMode: "chat" | "daily";
@@ -35,6 +41,8 @@ export interface UiSettings {
   groupMode: "project" | "folder";
   /** which system events auto-post to the feed (read server-side too) */
   feedSources: FeedSourceSettings;
+  /** doubletake integration (research-ready feed cards); read server-side */
+  doubletake: DoubletakeSettings;
 }
 
 interface DesktopState {
@@ -61,6 +69,7 @@ const defaultSettings: UiSettings = {
   defaultCwd: "",
   groupMode: "project",
   feedSources: { permissions: true, workDone: true, taskRuns: true, errors: true, context: true },
+  doubletake: { enabled: false, baseUrl: "", token: "" },
 };
 
 function freshState(): DesktopState {
@@ -107,6 +116,11 @@ function parseSaved(raw: string): DesktopState {
         taskRuns: cfg.feedSources?.taskRuns !== false,
         errors: cfg.feedSources?.errors !== false,
         context: cfg.feedSources?.context !== false,
+      },
+      doubletake: {
+        enabled: cfg.doubletake?.enabled === true,
+        baseUrl: typeof cfg.doubletake?.baseUrl === "string" ? cfg.doubletake.baseUrl : "",
+        token: typeof cfg.doubletake?.token === "string" ? cfg.doubletake.token : "",
       },
     },
     saveStatus: "idle",

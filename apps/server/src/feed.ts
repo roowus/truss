@@ -156,6 +156,12 @@ export function shareFeedItem(id: string, sessionId: string): FeedItem {
   return next;
 }
 
+/** any card with this dedupe prefix? (doubletake's first-enable check) */
+export function hasFeedCards(dedupePrefix: string): boolean {
+  table();
+  return !!store.get(`SELECT id FROM feed_items WHERE dedupe_key LIKE ? LIMIT 1`, `${dedupePrefix}%`);
+}
+
 /** resolve every open card of a type+dedupe prefix (e.g. a perm handled in chat) */
 export function settleFeedWhere(dedupePrefix: string, state: FeedState = "done") {
   table();

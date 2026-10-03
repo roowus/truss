@@ -42,6 +42,7 @@ import { createTask, deleteTask, listTasks, runTask, updateTask, type TaskStatus
 import { createTodo, listTodos, resolveTodoAccess, setTodoBroadcaster, userUpdateTodo } from "./todos.js";
 import { listFeed, setFeedBroadcaster, setFeedState, shareFeedItem } from "./feed.js";
 import { startFeedAutopost } from "./feed-autopost.js";
+import { startDoubletakePoll } from "./integrations/doubletake.js";
 import { composePractices, getGlobalPractices, saveGlobalPractices } from "./practices.js";
 import { createHost, deleteHost, getHost, isHostTombstoned, listHosts, rotateHostToken, setHostRevoked, verifyAgentToken } from "./hosts.js";
 import { netInfo, taildropToPeer, tailscalePeers, tailscaleServe } from "./net.js";
@@ -85,6 +86,8 @@ setBroadcaster((frame: EventFrame) => {
 setFeedBroadcaster((item) => broadcastRaw({ type: "feed.upsert", sessionId: item.sessionId ?? "", item }));
 setTodoBroadcaster((todo) => broadcastRaw({ type: "todo.upsert", sessionId: todo.sessionId ?? "", todo }));
 startFeedAutopost();
+/* doubletake research cards — a no-op until enabled in Settings */
+startDoubletakePoll();
 
 /* pi processes from a previous server run are gone — close their sessions. */
 reconcileOnBoot();

@@ -26,6 +26,7 @@ const TYPE_META: Record<FeedType, { icon: string; color: string; label: string }
   context: { icon: "gauge", color: "var(--t-coral)", label: "context" },
   report: { icon: "wave", color: "var(--t-amber)", label: "report" },
   note: { icon: "chat", color: "var(--t-mute)", label: "note" },
+  doubletake: { icon: "brain", color: "var(--t-violet)", label: "research" },
 };
 
 const IMPORTANCE_RANK: Record<string, number> = { urgent: 0, high: 1, normal: 2, low: 3 };
@@ -190,6 +191,9 @@ function FeedCard({ item, sessions, now, setState }: {
             )}
             {item.type === "todo" && !data.accessRequest && data.todoId && (
               <TodoQuickAction todoId={String(data.todoId)} onDone={() => setState(item.id, "done")} />
+            )}
+            {item.type === "doubletake" && typeof data.chatUrl === "string" && (
+              <Btn size="xs" variant="outline" icon="brain" onClick={() => window.open(data.chatUrl, "_blank", "noopener,noreferrer")}>Open in doubletake</Btn>
             )}
             {s && (
               <Btn size="xs" variant="ghost" icon="chat" onClick={() => openPanel("chat", { sessionId: s.id })}>Open session</Btn>
