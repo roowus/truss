@@ -55,7 +55,10 @@ const cmd = args[0];
 if (cmd === "status") {
   process.stdout.write(JSON.stringify({
     Self: { HostName: "thisbox", DNSName: "thisbox.tail-example.ts.net.", TailscaleIPs: ["100.64.0.1"], Online: true },
-    Peer: { k1: { HostName: "fakebox", DNSName: "${PEER}.", TailscaleIPs: ["100.64.0.2"], Online: true, OS: "linux" } },
+    Peer: {
+      k1: { HostName: "fakebox", DNSName: "${PEER}.", TailscaleIPs: ["100.64.0.2"], Online: true, OS: "linux" },
+      k2: { HostName: "failbox", DNSName: "failbox.tail-example.ts.net.", TailscaleIPs: ["100.64.0.3"], Online: true, OS: "linux" },
+    },
   }));
   process.exit(0);
 }
@@ -156,6 +159,22 @@ test("ssh-install: a CLI failure surfaces as a 502 with the CLI's own message", 
   const r = await post(`/api/hosts/${host.id}/ssh-install`, { peer: "failbox.tail-example.ts.net", token, serverUrl: srv.base });
   assert.equal(r.status, 502, JSON.stringify(r.body));
   assert.match(r.body.error, /ssh is not enabled/, "the peer's own refusal reaches the wizard");
+});
+
+/* ── audit round 4: the ssh target must be a real tailnet device — a raw
+   string in flag position (`--help`) could fake a success on a route whose
+   whole point is unattended remote execution ── */
+
+test("ssh-install rejects a peer that is not on the tailnet BEFORE any CLI invocation", async () => {
+  const sshCallsBefore = fakeCalls().filter((c) => c.argv[0] === "ssh").length;
+
+  const ghost = await post(`/api/hosts/${host.id}/ssh-install`, { peer: "ghost.tail-example.ts.net", token, serverUrl: srv.base });
+  assert.equal(ghost.status, 400, "unknown peer rejected, got " + ghost.status);
+  const flaggy = await post(`/api/hosts/${host.id}/ssh-install`, { peer: "--help", token, serverUrl: srv.base });
+  assert.equal(flaggy.status, 400, "a flag-shaped peer is not a target");
+
+  const sshCallsAfter = fakeCalls().filter((c) => c.argv[0] === "ssh").length;
+  assert.equal(sshCallsAfter, sshCallsBefore, "rejected before tailscale ssh was ever invoked");
 });
 
 /* ── audit round 1 pins: the probe cache, the hostName-only peer match, and

@@ -337,6 +337,13 @@ app.post("/api/hosts/:id/ssh-install", async (req, reply) => {
   } catch (e: any) {
     return reply.code(400).send({ error: e.message });
   }
+  /* the target must be a real tailnet device (audit round 4): a raw string
+     in argv flag position (e.g. `--help`) could make the CLI exit 0 with
+     nothing installed — a fake success on an unattended route */
+  const { peers } = await tailscalePeers();
+  if (!peers.some((p) => p.dnsName === peer || p.hostName === peer)) {
+    return reply.code(400).send({ error: "peer is not on this tailnet" });
+  }
   try {
     await ensureAgentBundle().catch(() => {});
     await tailscaleSshRun(peer, standaloneInstallScript(id, serverUrl, token));
