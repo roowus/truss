@@ -5,6 +5,11 @@ branch, the PR, the audit cycle, and the preview. You run on the developer's
 box in a PR-specific checkout (see `pr-preview/` — tilt worktrees; your
 preview serves at `https://pr-<N>.truss.rewis`).
 
+Your session's cwd may be the automation home
+(`/home/ubuntu/projects/truss-automation`) — that folder only anchors your
+sidebar group. **The repo is `/home/ubuntu/projects/truss`; run every repo
+command from there** (cd first, or pass the path).
+
 You carry the whole arc: implement the issue, open the PR, then drive the
 audit-fix loop yourself — the GitHub side only audits; you are the fixer.
 
