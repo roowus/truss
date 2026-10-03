@@ -72,10 +72,13 @@ export interface Backend {
   purgeSession(id: string): Promise<unknown>;
   archiveSession(id: string, archived: boolean): Promise<unknown>;
   archiveProject(project: string, archived: boolean): Promise<unknown>;
+  /** pin/unpin (issue #86): pinned rows float to the top of their sidebar section */
+  pinSession(id: string, pinned: boolean): Promise<unknown>;
   listTerminals(): Promise<{ terminals: TerminalInfo[] }>;
   createTerminal(body: { cwd?: string; title?: string }): Promise<{ terminal: TerminalInfo }>;
   deleteTerminal(id: string): Promise<unknown>;
   renameTerminal(id: string, title: string): Promise<unknown>;
+  pinTerminal(id: string, pinned: boolean): Promise<unknown>;
   skills(cwd: string): Promise<{ skills: SkillInfo[] }>;
   /** Files panel: workspace browser, confined server-side to `root` */
   listFiles(root: string, path?: string, q?: string): Promise<{ entries: FileEntry[] }>;
@@ -97,6 +100,7 @@ export interface Backend {
   createHost(label: string, note?: string): Promise<{ host: HostInfo; token: string }>;
   rotateHostToken(id: string): Promise<{ token: string }>;
   revokeHost(id: string, revoked: boolean): Promise<unknown>;
+  pinHost(id: string, pinned: boolean): Promise<unknown>;
   deleteHost(id: string): Promise<unknown>;
   /** installer delivery (issue #1): short single-use pairing command, or
      taildrop the standalone script to the picked tailnet device.
@@ -209,6 +213,8 @@ export function createLiveBackend(): Backend {
       req("POST", `/api/sessions/${encodeURIComponent(id)}/archive`, { archived }),
     archiveProject: (project, archived) =>
       req("POST", `/api/projects/archive`, { project, archived }),
+    pinSession: (id, pinned) =>
+      req("POST", `/api/sessions/${encodeURIComponent(id)}/pin`, { pinned }),
     listTerminals: async () => {
       const r = await req<any>("GET", "/api/terminals");
       return { terminals: r.terminals ?? r ?? [] };
@@ -219,6 +225,7 @@ export function createLiveBackend(): Backend {
     },
     deleteTerminal: (id) => req("DELETE", `/api/terminals/${encodeURIComponent(id)}`),
     renameTerminal: (id, title) => req("POST", `/api/terminals/${encodeURIComponent(id)}/rename`, { title }),
+    pinTerminal: (id, pinned) => req("POST", `/api/terminals/${encodeURIComponent(id)}/pin`, { pinned }),
     skills: (cwd) => req("GET", `/api/skills?cwd=${encodeURIComponent(cwd)}`),
     listFiles: (root, path, q) =>
       req("GET", `/api/files?root=${encodeURIComponent(root)}${path ? `&path=${encodeURIComponent(path)}` : ""}${q ? `&q=${encodeURIComponent(q)}` : ""}`),
@@ -237,6 +244,7 @@ export function createLiveBackend(): Backend {
     createHost: (label, note) => req("POST", "/api/hosts", { label, note }),
     rotateHostToken: (id) => req("POST", `/api/hosts/${encodeURIComponent(id)}/token`, {}),
     revokeHost: (id, revoked) => req("POST", `/api/hosts/${encodeURIComponent(id)}/revoke`, { revoked }),
+    pinHost: (id, pinned) => req("POST", `/api/hosts/${encodeURIComponent(id)}/pin`, { pinned }),
     deleteHost: (id) => req("DELETE", `/api/hosts/${encodeURIComponent(id)}`),
     pairHost: (id, token, serverUrl) => req("POST", `/api/hosts/${encodeURIComponent(id)}/pair`, { token, serverUrl }),
     taildropHost: (id, peer, token, serverUrl) => req("POST", `/api/hosts/${encodeURIComponent(id)}/taildrop`, { peer, token, serverUrl }),

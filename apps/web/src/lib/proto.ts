@@ -43,6 +43,8 @@ export interface SessionMeta {
   project?: string;
   state: SessionState;
   archived?: number;
+  /** pinned chats float to the top of their sidebar section (issue #86) */
+  pinned?: boolean;
   /** set while the session sits in the 30-day trash (raw rows from /api/trash) */
   deleted_at?: string | number | null;
   created_at: string | number;
@@ -64,6 +66,8 @@ export interface TerminalInfo {
   title?: string;
   cwd?: string;
   alive?: boolean;
+  /** in-memory pin (issue #86) — dies with the shell, like the shell */
+  pinned?: boolean;
 }
 
 export interface SkillInfo {
@@ -167,6 +171,8 @@ export interface HostInfo {
   createdAt: number;
   lastSeen?: number;
   revoked: boolean;
+  /** pinned hosts float to the top of the sidebar's hosts section (issue #86) */
+  pinned?: boolean;
   note: string;
   online: boolean;
   agent?: AgentInfo;
@@ -240,7 +246,7 @@ type At = string | number;
 export type ProtoEvent =
   | (Base & { type: "session.created"; harness: HarnessId; title: string; cwd: string; model?: string; project?: string; at: At })
   | (Base & { type: "session.state"; state: SessionState; detail?: string })
-  | (Base & { type: "session.updated"; title?: string; project?: string | null; archived?: boolean; model?: string | null; provider?: string | null })
+  | (Base & { type: "session.updated"; title?: string; project?: string | null; archived?: boolean; pinned?: boolean; model?: string | null; provider?: string | null })
   | (Base & { type: "session.deleted" })
   | (Base & { type: "todo.upsert"; todo: TodoItem })
   | (Base & { type: "feed.upsert"; item: FeedItem })

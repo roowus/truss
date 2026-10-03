@@ -18,6 +18,9 @@ interface Term {
   scrollback: string;
   clients: Set<{ send: (s: string) => void }>;
   alive: boolean;
+  /* in-memory like the shell itself (issue #86): a dead shell's pin would
+     mean nothing, so the flag dies with the server */
+  pinned: boolean;
 }
 
 const terms = new Map<string, Term>();
@@ -45,6 +48,7 @@ export function createTerminal(opts: { cwd?: string; shell?: string; title?: str
     scrollback: "",
     clients: new Set(),
     alive: true,
+    pinned: false,
   };
 
   pty.onData((data) => {
@@ -76,7 +80,17 @@ export function createTerminal(opts: { cwd?: string; shell?: string; title?: str
 }
 
 export function listTerminals() {
-  return [...terms.values()].map((t) => ({ id: t.id, title: t.title, cwd: t.cwd, alive: t.alive }));
+  return [...terms.values()].map((t) => ({ id: t.id, title: t.title, cwd: t.cwd, alive: t.alive, pinned: t.pinned }));
+}
+
+/** pin/unpin (issue #86) — floats the shell to the top of the sidebar's
+    shells section. No persistence: shells die with the server, so does the
+    pin. When the #38 lifecycle bus lands, this is where a pin rides a
+    terminal.upsert frame. */
+export function setTerminalPinned(id: string, pinned: boolean) {
+  const t = terms.get(id);
+  if (!t) throw new Error(`no such terminal: ${id}`);
+  t.pinned = pinned;
 }
 
 /** rename a shell and push a title frame so attached tabs repaint live.
