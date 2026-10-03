@@ -1,0 +1,175 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+
+/* SPEC-TESTS for voice-to-input — https://github.com/roowus/truss/issues/15
+   ("Voice to input"). These FAIL on purpose today: they pin the contract a
+   fix must satisfy. (No mic/STT/dictation machinery exists anywhere in the
+   app today — the composer is text-only.)
+
+   The contract: a pure, DOM-free src/lib/voiceInput.ts state machine —
+
+     createVoiceInput({
+       transcribe: (audio: unknown) => Promise<string>,  // injected STT boundary
+       onText: (text: string) => void,                    // inserts into the composer draft
+       maxDurationMs?: number,                            // recordings auto-stop
+     }) → { state(): VoiceState; start(): void; stop(): Promise<void>; cancel(): void }
+
+     VoiceState = "idle" | "recording" | "transcribing" | "error"
+
+   Rules it must honor:
+   - idle → recording → transcribing → idle, with the transcript delivered
+     via onText EXACTLY ONCE per take;
+   - the transcript goes into the composer DRAFT — sending stays the user's
+     click (voice never auto-sends);
+   - recordings auto-stop at maxDurationMs;
+   - cancel() aborts a take: no transcription, no text, back to idle;
+   - a transcription failure lands in "error" with the message, no partial
+     text, and the controller can start again;
+   - start() while busy is a no-op (no double-mic).
+
+   The composer button, waveform UI, and the STT backend choice (browser
+   speech API vs a server endpoint) are acceptance criteria, not here. */
+
+interface VoiceController {
+  state(): "idle" | "recording" | "transcribing" | "error";
+  start(): void;
+  stop(): Promise<void>;
+  cancel(): void;
+}
+interface VoiceInputModule {
+  createVoiceInput(deps: {
+    transcribe: (audio: unknown) => Promise<string>;
+    onText: (text: string) => void;
+    maxDurationMs?: number;
+  }): VoiceController;
+}
+
+async function load(): Promise<VoiceInputModule | null> {
+  const spec = "../src/lib/voiceInput"; // variable specifier: typechecks even before the module exists
+  return import(spec).catch(() => null);
+}
+
+const tick = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+test("src/lib/voiceInput.ts exists", async () => {
+  const mod = await load();
+  assert.ok(mod, "src/lib/voiceInput.ts must export createVoiceInput — see issue #15");
+});
+
+test("a full take: idle → recording → transcribing → idle, transcript delivered once, never auto-sent", async () => {
+  const mod = await load();
+  assert.ok(mod, "voiceInput module must exist (see module test)");
+  const seen: string[] = [];
+  const transcribed: unknown[] = [];
+  const v = mod.createVoiceInput({
+    transcribe: async (audio) => {
+      transcribed.push(audio);
+      await tick(20);
+      return "  ship the release  ";
+    },
+    onText: (t) => seen.push(t),
+  });
+
+  assert.equal(v.state(), "idle");
+  v.start();
+  assert.equal(v.state(), "recording");
+  await v.stop();
+  assert.equal(v.state(), "idle", "settles back to idle after a successful take");
+  assert.equal(transcribed.length, 1, "the recorded audio went to the STT boundary once");
+  assert.equal(seen.length, 1, "transcript delivered exactly once");
+  assert.equal(seen[0], "ship the release", "transcript is trimmed before it lands in the draft");
+  /* "never auto-sends" is structural: the controller's only output is the
+     onText draft insert — there is no send path to pin against */
+});
+
+test("stop() mid-transcription waits are safe; state during transcribe is observable", async () => {
+  const mod = await load();
+  assert.ok(mod, "voiceInput module must exist (see module test)");
+  let resolveStt: (s: string) => void = () => {};
+  const v = mod.createVoiceInput({
+    transcribe: () => new Promise<string>((r) => (resolveStt = r)),
+    onText: () => {},
+  });
+  v.start();
+  const p = v.stop();
+  await tick(10);
+  assert.equal(v.state(), "transcribing", "the UI can show a working state while STT runs");
+  resolveStt("hello");
+  await p;
+  assert.equal(v.state(), "idle");
+});
+
+test("recordings auto-stop at maxDurationMs", async () => {
+  const mod = await load();
+  assert.ok(mod, "voiceInput module must exist (see module test)");
+  const seen: string[] = [];
+  const v = mod.createVoiceInput({
+    transcribe: async () => "capped take",
+    onText: (t) => seen.push(t),
+    maxDurationMs: 60,
+  });
+  v.start();
+  assert.equal(v.state(), "recording");
+  await tick(140);
+  assert.equal(v.state(), "idle", "the cap ended the take by itself");
+  assert.deepEqual(seen, ["capped take"], "the capped take still transcribes + lands");
+});
+
+test("cancel() aborts: no transcription, no text, back to idle", async () => {
+  const mod = await load();
+  assert.ok(mod, "voiceInput module must exist (see module test)");
+  let sttCalls = 0;
+  const seen: string[] = [];
+  const v = mod.createVoiceInput({
+    transcribe: async () => {
+      sttCalls++;
+      return "should never land";
+    },
+    onText: (t) => seen.push(t),
+  });
+  v.start();
+  v.cancel();
+  assert.equal(v.state(), "idle");
+  await tick(30);
+  assert.equal(sttCalls, 0, "a cancelled take never reaches the STT boundary");
+  assert.deepEqual(seen, [], "and never produces text");
+});
+
+test("transcription failure → error state with the message, nothing inserted, can start again", async () => {
+  const mod = await load();
+  assert.ok(mod, "voiceInput module must exist (see module test)");
+  const seen: string[] = [];
+  const v = mod.createVoiceInput({
+    transcribe: async () => {
+      throw new Error("mic unavailable");
+    },
+    onText: (t) => seen.push(t),
+  });
+  v.start();
+  await v.stop();
+  assert.equal(v.state(), "error", "failures are visible, not silent");
+  assert.deepEqual(seen, [], "no partial text on failure");
+
+  /* and the controller recovers */
+  v.start();
+  assert.equal(v.state(), "recording", "a failed take doesn't brick the mic button");
+  v.cancel();
+});
+
+test("start() while recording/transcribing is a no-op (no double-mic)", async () => {
+  const mod = await load();
+  assert.ok(mod, "voiceInput module must exist (see module test)");
+  let sttCalls = 0;
+  const v = mod.createVoiceInput({
+    transcribe: async () => {
+      sttCalls++;
+      return "one take";
+    },
+    onText: () => {},
+  });
+  v.start();
+  v.start(); // ignored
+  assert.equal(v.state(), "recording");
+  await v.stop();
+  assert.equal(sttCalls, 1, "exactly one transcription happened");
+});
