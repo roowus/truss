@@ -100,9 +100,9 @@ function recognitionRecorder(Ctor: SpeechRecognitionCtor): VoiceRecorder {
 /* MediaRecorder-backed take: raw capture; the transcript comes from the
    server route. stop() resolves with the recorded Blob.
 
-   The platform pieces are injected (mediaRecorderCapture) so the cancel
-   semantics are testable in node — the cancel-during-permission-prompt race
-   below was audit finding B2. */
+   The platform pieces are injected (mediaRecorderCapture) so the startup
+   races are testable in node — the cancel/stop-during-permission-prompt
+   races below were audit findings B2 and B5. */
 
 export interface MediaStreamLike {
   getTracks(): { stop(): void }[];
@@ -122,7 +122,14 @@ export function mediaRecorderCapture(deps: {
   let stream: MediaStreamLike | null = null;
   let rec: MediaRecorderLike | null = null;
   let chunks: Blob[] = [];
-  let cancelled = false; // a cancel() that landed while the permission prompt was open
+  /* generation counter for capture startup: getUserMedia can outlive the
+     take (a slow permission prompt), and stop() OR cancel() landing in that
+     window must invalidate the pending start — otherwise its late
+     continuation starts a recording into a take nobody will stop, and the
+     mic stays live until unmount (audit findings B2 and B5). Per-generation
+     rather than a flag so overlapping startups can't clear each other's
+     invalidation. */
+  let gen = 0;
   const release = () => {
     stream?.getTracks().forEach((t) => t.stop());
     stream = null;
@@ -130,12 +137,11 @@ export function mediaRecorderCapture(deps: {
   };
   return {
     async start() {
-      cancelled = false;
+      const my = ++gen;
       const s = await deps.getUserMedia();
-      /* cancelled while the prompt was up: the take is already gone, so
-         release the just-granted mic instead of starting an orphaned
-         recording nobody will stop */
-      if (cancelled) {
+      /* the take ended while the prompt was up: release the just-granted
+         mic instead of starting an orphaned recording */
+      if (my !== gen) {
         s.getTracks().forEach((t) => t.stop());
         return;
       }
@@ -149,7 +155,10 @@ export function mediaRecorderCapture(deps: {
     },
     stop() {
       const r = rec;
-      if (!r) return Promise.resolve(new Blob());
+      if (!r) {
+        gen++; // capture startup still pending: the take ends empty, and the late start is invalidated
+        return Promise.resolve(new Blob());
+      }
       return new Promise<Blob>((res) => {
         r.onstop = () => {
           const blob = new Blob(chunks, { type: r.mimeType || "audio/webm" });
@@ -165,7 +174,7 @@ export function mediaRecorderCapture(deps: {
       });
     },
     cancel() {
-      cancelled = true;
+      gen++;
       if (rec) {
         try {
           rec.ondataavailable = null;

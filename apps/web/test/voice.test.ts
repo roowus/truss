@@ -183,3 +183,50 @@ test("mediaRecorderCapture records chunks and stops with the blob, tracks releas
   assert.equal(blob.size, 7);
   assert.equal(pf.track.stopped, true, "stopping releases the mic");
 });
+
+/* ── audit round 2, B5: stop() during capture startup ── */
+
+test("B5: stop() while capture startup is pending releases the mic and starts nothing", async () => {
+  const pf = fakePlatform();
+  let resolveGum: (s: MediaStreamLike) => void = () => {};
+  const rec = mediaRecorderCapture({
+    getUserMedia: () => new Promise<MediaStreamLike>((r) => (resolveGum = r)),
+    createRecorder: pf.createRecorder,
+  });
+  const started = rec.start();
+  const empty = (await rec.stop()) as Blob; // mic clicked again before startup finished
+  assert.equal(empty.size, 0, "the take ends empty");
+  resolveGum(pf.stream); // the prompt/startup resolves afterwards
+  await started;
+  assert.equal(pf.track.stopped, true, "the late mic grant is released, not recorded");
+  assert.equal(pf.recorders.length, 0, "no orphaned recording starts");
+});
+
+test("B5 follow-through: overlapping startups cannot clear each other's invalidation", async () => {
+  /* take 1 cancelled mid-prompt, take 2 started before take 1's prompt
+     resolves: the stale grant must be released, the fresh one must record */
+  const resolvers: ((s: MediaStreamLike) => void)[] = [];
+  const tracks = [
+    { stopped: false, stop() { this.stopped = true; } },
+    { stopped: false, stop() { this.stopped = true; } },
+  ];
+  const streams = tracks.map((t) => ({ getTracks: () => [t] }));
+  const pf = fakePlatform();
+  const rec = mediaRecorderCapture({
+    getUserMedia: () => new Promise<MediaStreamLike>((r) => resolvers.push(r)),
+    createRecorder: pf.createRecorder,
+  });
+  const s1 = rec.start();
+  rec.cancel?.(); // take 1 dies at the prompt
+  const s2 = rec.start(); // take 2 starts before take 1's grant arrives
+  resolvers[0]?.(streams[0]); // stale grant first
+  await s1;
+  assert.equal(tracks[0].stopped, true, "the stale grant is released");
+  assert.equal(pf.recorders.length, 0, "no recorder from the stale startup");
+  resolvers[1]?.(streams[1]);
+  await s2;
+  assert.equal(tracks[1].stopped, false, "the fresh take's mic is live");
+  assert.equal(pf.recorders.length, 1, "exactly one recorder, from the fresh take");
+  rec.cancel?.();
+  assert.equal(tracks[1].stopped, true, "and it releases cleanly");
+});

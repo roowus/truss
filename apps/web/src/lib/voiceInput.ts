@@ -127,7 +127,10 @@ export function createVoiceInput(deps: VoiceInputDeps): VoiceController {
       try {
         const started = deps.recorder?.start();
         if (started) Promise.resolve(started).catch((e) => {
-          if (take !== gen) return;
+          /* the take may already be over (a fast stop() while the mic
+             prompt was up): a late capture failure only matters while this
+             take is still the recording one */
+          if (take !== gen || state !== "recording") return;
           clearCap();
           fail(gen, e);
         });
