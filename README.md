@@ -66,6 +66,10 @@ pnpm -C apps/server start   # serves the app + REST + WS on 127.0.0.1:4040
 | `TRUSS_DATA_DIR` | `apps/server/data` | where the SQLite store lives (sessions, transcripts, todos, feed, layout) |
 | `TRUSS_AGENT_TOKEN` | `truss-dev` | shared secret for remote node agents |
 | `TRUSS_WEB_DIST` | `apps/web/dist` | override the served web build |
+| `TRUSS_TRANSCRIBE_URL` | unset | OpenAI-compatible `/audio/transcriptions` endpoint behind `POST /api/transcribe` (voice dictation). Unset: dictation uses the browser's own speech recognition where available |
+| `TRUSS_TRANSCRIBE_MODEL` | `whisper-1` | model field sent to the transcription endpoint |
+| `TRUSS_TRANSCRIBE_API_KEY` | unset | bearer token for the transcription endpoint |
+| `TRUSS_TRANSCRIBE_TIMEOUT_MS` | `120000` | deadline for one transcription request |
 
 **Multiple devices:** serve it over your private network (tailscale serve, your LAN, an SSH tunnel). All devices stay in sync on their own.
 

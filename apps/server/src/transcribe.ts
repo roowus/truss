@@ -3,21 +3,25 @@
    multipart POST with `file` + `model`, expecting { text } back.
 
    Config (env, read per request so tests and late config both work):
-     TRUSS_TRANSCRIBE_URL      /audio/transcriptions-style endpoint URL
-     TRUSS_TRANSCRIBE_MODEL    model field (default "whisper-1")
-     TRUSS_TRANSCRIBE_API_KEY  bearer token, optional */
+     TRUSS_TRANSCRIBE_URL        /audio/transcriptions-style endpoint URL
+     TRUSS_TRANSCRIBE_MODEL      model field (default "whisper-1")
+     TRUSS_TRANSCRIBE_API_KEY    bearer token, optional
+     TRUSS_TRANSCRIBE_TIMEOUT_MS upstream deadline in ms (default 120000) */
 
 export interface TranscribeConfig {
   url?: string;
   model?: string;
   apiKey?: string;
+  timeoutMs?: number;
 }
 
 export function transcribeConfigFromEnv(env: NodeJS.ProcessEnv = process.env): TranscribeConfig {
+  const timeoutMs = Number(env.TRUSS_TRANSCRIBE_TIMEOUT_MS);
   return {
     ...(env.TRUSS_TRANSCRIBE_URL ? { url: env.TRUSS_TRANSCRIBE_URL } : {}),
     ...(env.TRUSS_TRANSCRIBE_MODEL ? { model: env.TRUSS_TRANSCRIBE_MODEL } : {}),
     ...(env.TRUSS_TRANSCRIBE_API_KEY ? { apiKey: env.TRUSS_TRANSCRIBE_API_KEY } : {}),
+    ...(Number.isFinite(timeoutMs) && timeoutMs > 0 ? { timeoutMs } : {}),
   };
 }
 
@@ -48,11 +52,20 @@ export async function transcribeAudio(
   const form = new FormData();
   form.set("file", new Blob([new Uint8Array(audio)], { type }), `take.${extForMime(mime)}`);
   form.set("model", cfg.model ?? "whisper-1");
-  const res = await fetchImpl(cfg.url, {
-    method: "POST",
-    headers: cfg.apiKey ? { authorization: `Bearer ${cfg.apiKey}` } : {},
-    body: form,
-  });
+  let res: Response;
+  try {
+    /* bounded: a stalled endpoint must surface as a 502, not park the
+       request until the fetch defaults give up */
+    res = await fetchImpl(cfg.url, {
+      method: "POST",
+      headers: cfg.apiKey ? { authorization: `Bearer ${cfg.apiKey}` } : {},
+      body: form,
+      signal: AbortSignal.timeout(cfg.timeoutMs ?? 120_000),
+    });
+  } catch (e) {
+    if (e instanceof Error && e.name === "TimeoutError") throw new Error("transcription endpoint timed out");
+    throw e;
+  }
   if (!res.ok) {
     const detail = (await res.text().catch(() => "")).slice(0, 200);
     throw new Error(`transcription endpoint answered ${res.status}${detail ? `: ${detail}` : ""}`);

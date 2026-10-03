@@ -98,11 +98,31 @@ function recognitionRecorder(Ctor: SpeechRecognitionCtor): VoiceRecorder {
 }
 
 /* MediaRecorder-backed take: raw capture; the transcript comes from the
-   server route. stop() resolves with the recorded Blob. */
-function mediaRecorder(): VoiceRecorder {
-  let stream: MediaStream | null = null;
-  let rec: MediaRecorder | null = null;
+   server route. stop() resolves with the recorded Blob.
+
+   The platform pieces are injected (mediaRecorderCapture) so the cancel
+   semantics are testable in node — the cancel-during-permission-prompt race
+   below was audit finding B2. */
+
+export interface MediaStreamLike {
+  getTracks(): { stop(): void }[];
+}
+export interface MediaRecorderLike {
+  mimeType: string;
+  ondataavailable: ((e: { data: Blob }) => void) | null;
+  onstop: (() => void) | null;
+  start(): void;
+  stop(): void;
+}
+
+export function mediaRecorderCapture(deps: {
+  getUserMedia: () => Promise<MediaStreamLike>;
+  createRecorder: (stream: MediaStreamLike) => MediaRecorderLike;
+}): VoiceRecorder {
+  let stream: MediaStreamLike | null = null;
+  let rec: MediaRecorderLike | null = null;
   let chunks: Blob[] = [];
+  let cancelled = false; // a cancel() that landed while the permission prompt was open
   const release = () => {
     stream?.getTracks().forEach((t) => t.stop());
     stream = null;
@@ -110,11 +130,18 @@ function mediaRecorder(): VoiceRecorder {
   };
   return {
     async start() {
-      if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined")
-        throw new Error("this browser can't capture microphone audio");
-      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      cancelled = false;
+      const s = await deps.getUserMedia();
+      /* cancelled while the prompt was up: the take is already gone, so
+         release the just-granted mic instead of starting an orphaned
+         recording nobody will stop */
+      if (cancelled) {
+        s.getTracks().forEach((t) => t.stop());
+        return;
+      }
+      stream = s;
       chunks = [];
-      rec = new MediaRecorder(stream);
+      rec = deps.createRecorder(s);
       rec.ondataavailable = (e) => {
         if (e.data.size) chunks.push(e.data);
       };
@@ -138,6 +165,7 @@ function mediaRecorder(): VoiceRecorder {
       });
     },
     cancel() {
+      cancelled = true;
       if (rec) {
         try {
           rec.ondataavailable = null;
@@ -149,6 +177,19 @@ function mediaRecorder(): VoiceRecorder {
       release();
     },
   };
+}
+
+function mediaRecorder(): VoiceRecorder {
+  return mediaRecorderCapture({
+    getUserMedia: () => {
+      if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined")
+        throw new Error("this browser can't capture microphone audio");
+      return navigator.mediaDevices.getUserMedia({ audio: true });
+    },
+    /* the DOM MediaRecorder is structurally compatible at runtime; its
+       handler types are just wider than the seam's */
+    createRecorder: (s) => new MediaRecorder(s as MediaStream) as unknown as MediaRecorderLike,
+  });
 }
 
 /* the STT boundary: a string payload is already a transcript (browser

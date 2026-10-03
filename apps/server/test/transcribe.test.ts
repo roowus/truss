@@ -14,13 +14,15 @@ import { bootServer, type TestServer } from "./server-harness.js";
    - configured → multipart proxy: the audio bytes and the model field reach
      the endpoint, a bearer token rides along when set, and { text } comes
      back verbatim;
-   - an upstream failure → 502 with the endpoint's message, never a hang. */
+   - an upstream failure → 502 with the endpoint's message, and a stalled
+     endpoint → 502 too: the proxy fetch is deadline-bound, never a hang. */
 
 let srv: TestServer;
 let stub: Server;
 interface StubCapture { contentType: string; auth: string | undefined; body: Buffer }
 const stubSeen: StubCapture[] = [];
 let stubReply: { status: number; json: unknown } = { status: 200, json: { text: "hello world" } };
+let stubHangs = false;
 
 before(async () => {
   srv = await bootServer("transcribe");
@@ -33,6 +35,7 @@ before(async () => {
         auth: req.headers.authorization as string | undefined,
         body: Buffer.concat(chunks),
       });
+      if (stubHangs) return; // a stalled endpoint: never answers
       res.writeHead(stubReply.status, { "content-type": "application/json" });
       res.end(JSON.stringify(stubReply.json));
     });
@@ -44,6 +47,8 @@ after(async () => {
   delete process.env.TRUSS_TRANSCRIBE_URL;
   delete process.env.TRUSS_TRANSCRIBE_MODEL;
   delete process.env.TRUSS_TRANSCRIBE_API_KEY;
+  delete process.env.TRUSS_TRANSCRIBE_TIMEOUT_MS;
+  stub.closeAllConnections();
   await new Promise((r) => stub.close(r));
   await srv.close();
 });
@@ -103,6 +108,23 @@ test("upstream failure surfaces as 502 with the endpoint's message", async () =>
   assert.equal(r.status, 502);
   const body = (await r.json()) as { error?: string };
   assert.match(body.error ?? "", /429/);
+});
+
+test("a stalled endpoint hits the deadline and surfaces as 502, not a hang", async () => {
+  process.env.TRUSS_TRANSCRIBE_URL = stubUrl();
+  process.env.TRUSS_TRANSCRIBE_TIMEOUT_MS = "50";
+  stubHangs = true;
+  try {
+    const started = Date.now();
+    const r = await post({ audioBase64: Buffer.from("x").toString("base64") });
+    assert.equal(r.status, 502);
+    const body = (await r.json()) as { error?: string };
+    assert.match(body.error ?? "", /timed out/);
+    assert.ok(Date.now() - started < 10_000, "the request came back on the deadline, not on the fetch defaults");
+  } finally {
+    stubHangs = false;
+    delete process.env.TRUSS_TRANSCRIBE_TIMEOUT_MS;
+  }
 });
 
 function stubUrl(): string {

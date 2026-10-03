@@ -95,6 +95,11 @@ export function createVoiceInput(deps: VoiceInputDeps): VoiceController {
   }
 
   function beginStop(gen: number): Promise<void> {
+    /* re-entry guard: state only becomes "transcribing" after the recorder
+       settles, so a double-click or the cap timer can land inside that
+       window — a second runTake on the same take would transcribe and
+       deliver the transcript twice */
+    if (inflight) return inflight;
     clearCap();
     const p = runTake(gen).finally(() => {
       if (inflight === p) inflight = null;
@@ -141,6 +146,10 @@ export function createVoiceInput(deps: VoiceInputDeps): VoiceController {
     cancel() {
       take++; // invalidate whatever is in flight
       clearCap();
+      /* detach a still-settling take: its promise resolves on its own (the
+         generation check discards the result), and the NEXT take's stop()
+         must not be handed this stale promise by the re-entry guard */
+      inflight = null;
       if (state === "recording") deps.recorder?.cancel?.();
       // a transcription already running can't be aborted — its result is
       // discarded by the generation check instead
