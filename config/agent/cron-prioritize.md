@@ -17,9 +17,10 @@ issue right now, and if so, which one. Cheap and deterministic: no wandering.
    - is already being worked: a PR body or title references it
      (`gh pr list --repo roowus/truss --state open --json number,title,body`
      and match `#<issue>`), or a branch named for it exists
-   - needs planning, not coding: labeled `new feature` or `area: platform`
-     without a concrete suggested approach in the body (read the body if in
-     doubt — those are the ones a human designs first)
+   - needs planning, not coding: labeled `new feature` or `area: platform`.
+     HARD exclusion while the pipeline is young — regardless of how concrete
+     the body's suggested approach is. The developer designs those first and
+     pulls the label when they want one built. (Bugs and enhancements only.)
    - is labeled `question`, `duplicate`, `wontfix`, `invalid`
 3. Sort what remains: `priority: high` first, then `medium`, then `low`;
    ties broken by oldest first.
