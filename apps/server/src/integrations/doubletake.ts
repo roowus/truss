@@ -1,5 +1,5 @@
 import { store } from "../db.js";
-import { postFeed } from "../feed.js";
+import { hasFeedCards, postFeed } from "../feed.js";
 
 /**
  * Doubletake integration — "your research is ready" cards in the feed.
@@ -27,6 +27,8 @@ export interface DtChat {
   sourceUrl?: string;
   platform?: string;
   tags?: string[];
+  /** ISO timestamp of the last chat message; null while untouched */
+  lastMessageAt?: string;
 }
 
 export interface FeedCardInput {
@@ -60,6 +62,7 @@ export function parseDoubletakeChats(json: unknown): DtChat[] {
       sourceUrl: typeof c.sourceUrl === "string" ? c.sourceUrl : undefined,
       platform: typeof c.platform === "string" ? c.platform : undefined,
       tags: Array.isArray(c.tags) ? c.tags.filter((t): t is string => typeof t === "string") : [],
+      lastMessageAt: typeof c.lastMessageAt === "string" ? c.lastMessageAt : undefined,
     });
   }
   return out;
@@ -123,9 +126,13 @@ export function doubletakeSettings(): DtSettings {
     if (!raw) return def;
     const doc = JSON.parse(raw);
     const d = doc?.settings?.doubletake ?? {};
+    const baseUrl = typeof d.baseUrl === "string" ? d.baseUrl.replace(/\/+$/, "") : "";
     return {
       enabled: d.enabled === true,
-      baseUrl: typeof d.baseUrl === "string" ? d.baseUrl.replace(/\/+$/, "") : "",
+      /* the layout doc is agent-writable — only http(s) may drive a
+         server-side fetch and the card's window.open link; anything else
+         reads as unset (polling stays off) */
+      baseUrl: /^https?:\/\//.test(baseUrl) ? baseUrl : "",
       token: typeof d.token === "string" ? d.token : "",
     };
   } catch {
@@ -151,19 +158,34 @@ export async function pollDoubletakeOnce(
     signal: AbortSignal.timeout(15_000),
   });
   if (!res.ok) throw new Error(`doubletake /api/chats answered ${res.status}`);
-  const fresh = diffNewChats(knownIds, parseDoubletakeChats(await res.json()));
+  const chats = parseDoubletakeChats(await res.json());
+  /* First-enable flood guard: an empty seen-set with no dt cards in the feed
+     means the first poll after the integration was turned on. Research that
+     finished long ago (stale lastMessageAt) is archived straight to "done" —
+     the dedupe key lands without nagging the inbox over old history, and the
+     archived card keeps a later restart from re-carding it. Anything recent
+     or undated cards normally, so research that finishes right after the
+     toggle still shows up. */
+  const firstEnable = knownIds.size === 0 && !hasFeedCards("dt:");
+  const backlogBefore = Date.now() - 24 * 3600_000;
+  const fresh = diffNewChats(knownIds, chats);
   let posted = 0;
   for (const chat of fresh) {
-    knownIds.add(chat.id);
     const card = mapDoubletakeChat(chat);
+    /* in flight: leave the id unseen so a later poll cards it when the
+       research finishes */
     if (!card) continue;
+    knownIds.add(chat.id);
+    const at = chat.lastMessageAt ? Date.parse(chat.lastMessageAt) : NaN;
+    const backlog = firstEnable && Number.isFinite(at) && at < backlogBefore;
     const { created } = postFeed({
       ...card,
       type: "doubletake",
       importance: card.importance as "low" | "normal" | "high" | "urgent",
       data: { ...card.data, chatUrl: `${cfg.baseUrl}/chat/${chat.id}` },
+      state: backlog ? "done" : "unread",
     });
-    if (created) posted++;
+    if (created && !backlog) posted++;
   }
   return posted;
 }
