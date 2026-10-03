@@ -189,6 +189,15 @@ export interface NetInfo {
   lan: string[];
 }
 
+/** installer last mile (issue #91): one way to get the agent onto the
+   remote, ordered by what the user must type there (ssh = 0 leads) */
+export interface DeliveryOption {
+  kind: "ssh" | "taildrop" | "pairing";
+  label: string;
+  command: string;
+  typedChars: number;
+}
+
 /* ── Git panel ── */
 export interface GitChange {
   path: string;

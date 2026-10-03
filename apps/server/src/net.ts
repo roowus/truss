@@ -17,6 +17,20 @@ function sh(cmd: string, args: string[]): Promise<string> {
   });
 }
 
+/** sh with a stdin payload (the installer script travels on stdin) */
+function shIn(cmd: string, args: string[], input: string, timeoutMs: number): Promise<string> {
+  return new Promise((res, rej) => {
+    const p = execFile(cmd, args, { timeout: timeoutMs }, (err, stdout, stderr) => {
+      if (err) rej(new Error((stderr || err.message || "failed").trim().split("\n")[0]));
+      else res(stdout);
+    });
+    /* the child may exit before reading everything — an EPIPE on stdin is
+       the same failure the callback already reports, not a crash */
+    p.stdin?.on("error", () => {});
+    p.stdin?.end(input);
+  });
+}
+
 export interface NetInfo {
   port: number;
   tailscale: {
@@ -150,4 +164,41 @@ export async function taildropToPeer(peer: string, files: string[]): Promise<voi
   if (!target) throw new Error("no target device (peer) given");
   if (!Array.isArray(files) || files.length === 0) throw new Error("no files to send");
   await sh("tailscale", ["file", "cp", ...files, `${target}:`]);
+}
+
+/* ── tailscale ssh: the zero-typing last mile (issue #91) ── */
+
+const SSH_PROBE_TTL_MS = 2 * 60 * 1000; // a peer's answer is fresh for 2 min
+const sshProbes = new Map<string, { ok: boolean; at: number }>();
+
+/** dry probe: can this server drive `tailscale ssh <peer>`? Runs a harmless
+   `true` on the peer (ssh is either on for us or the command never runs), so
+   detection never changes remote state. Cached briefly so the wizard doesn't
+   re-probe on every render. Never throws — any failure just means "no". */
+export async function tailscaleSshOk(peer: string): Promise<boolean> {
+  const target = (peer ?? "").trim();
+  if (!target) return false;
+  const hit = sshProbes.get(target);
+  if (hit && Date.now() - hit.at < SSH_PROBE_TTL_MS) return hit.ok;
+  let ok = false;
+  try {
+    await sh("tailscale", ["ssh", target, "true"]);
+    ok = true;
+  } catch {
+    ok = false;
+  }
+  sshProbes.set(target, { ok, at: Date.now() });
+  return ok;
+}
+
+/** run a script on the peer (`tailscale ssh <peer> sh -s`, script on stdin).
+   The zero-typing install path: the server executes, the user consented in
+   the wizard. Installs can download and configure a service, so the timeout
+   is generous. Validates before touching the CLI; CLI failures reject with
+   the CLI's own first error line. */
+export async function tailscaleSshRun(peer: string, script: string): Promise<void> {
+  const target = (peer ?? "").trim();
+  if (!target) throw new Error("no target device (peer) given");
+  if (!script) throw new Error("no script to run");
+  await shIn("tailscale", ["ssh", target, "sh", "-s"], script, 180000);
 }

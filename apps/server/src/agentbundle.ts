@@ -55,9 +55,32 @@ function b64(s: string | Buffer) {
   return Buffer.from(s).toString("base64");
 }
 
+/* serverUrl is request/body-controlled and lands inside a shell script that
+   can run unattended on a remote peer (taildrop, ssh-install) — the unquoted
+   env heredoc below would honor `$()`/backticks, and a newline would inject
+   whole script lines. One choke point, so every delivery route inherits the
+   guard: a plain http(s) URL — host (dns/ipv4/ipv6), optional port, optional
+   simple path — and nothing the shell can read as syntax. (issue #91 audit) */
+const SERVER_URL_RE = /^https?:\/\/[A-Za-z0-9.\-[\]:]+(:\d+)?(\/[A-Za-z0-9._~\/-]*)?$/;
+export function assertSafeServerUrl(serverUrl: string): void {
+  if (!SERVER_URL_RE.test(serverUrl ?? "")) {
+    throw new Error("serverUrl must be a plain http(s) URL — host, optional port and path, no shell characters");
+  }
+}
+
+/* the label is free text (shown in the UI, unicode welcome) but it is ALSO
+   embedded in this shell script — in a comment, where a newline would inject
+   a whole line, and in the unquoted systemd-unit heredoc, where $() would
+   expand on the peer. The script can run unattended (taildrop, ssh-install),
+   so the embed form is stripped to plain display characters. (issue #91
+   audit, round 3) */
+const scriptSafeLabel = (s: string) => s.replace(/[^A-Za-z0-9 ._-]/g, " ").replace(/\s+/g, " ").trim() || "remote host";
+
 export function installScript(hostId: string, serverUrl: string): string {
   const host = getHost(hostId);
   if (!host) throw new Error(`no such host: ${hostId}`);
+  assertSafeServerUrl(serverUrl);
+  const label = scriptSafeLabel(host.label);
   /* http(s) for the curl line; the agent dials ws(s) */
   const wsUrl = serverUrl.replace(/^http/, "ws");
   if (!existsSync(bundlePath())) throw new Error("agent bundle isn't built yet — the server builds it at boot, retry in a few seconds");
@@ -66,7 +89,7 @@ export function installScript(hostId: string, serverUrl: string): string {
   /* the token is NOT embedded — it arrives as the script's $1, shown once in
      the wizard, and lands chmod 600 in the env file */
   return `#!/bin/sh
-# Truss node-agent installer — host "${host.label.replace(/"/g, "")}" (${host.id})
+# Truss node-agent installer — host "${label}" (${host.id})
 # usage: curl -fsSL ${serverUrl}/agent/install.sh?host=${host.id} | sh -s -- <token-from-the-wizard>
 set -eu
 
@@ -114,7 +137,7 @@ if command -v systemctl >/dev/null 2>&1 && systemctl --user >/dev/null 2>&1; the
   mkdir -p "$HOME/.config/systemd/user"
   cat > "$UNIT" <<__UNIT__
 [Unit]
-Description=Truss node agent (${host.label.replace(/"/g, "")})
+Description=Truss node agent (${label})
 After=network-online.target
 
 [Service]

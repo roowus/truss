@@ -279,6 +279,11 @@ class FakeShell {
 }
 
 /* ---------------- the demo backend ---------------- */
+
+/* mirrors the server's installerDropName (issue #91): one rule, one place —
+   the demo's taildropHost and deliveryOptions must never disagree */
+const demoDropName = (hostId: string) => `t-${(String(hostId).toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 4) || "host")}.sh`;
+
 export function createDemoBackend(): Backend {
   let seq = 0;
   let virtualClock: number | null = null;
@@ -747,7 +752,22 @@ export function createDemoBackend(): Backend {
       return { ok: true };
     },
     pairHost: async (_id, _t, serverUrl) => ({ code: "k3xm7q", expiresAt: Date.now() + 600_000, url: `${serverUrl}/i/k3xm7q`, command: `curl -fsSL ${serverUrl}/i/k3xm7q | sh` }),
-    taildropHost: async () => ({ ok: true, file: "truss-install-demo.sh" }),
+    taildropHost: async (id) => {
+      const file = demoDropName(id);
+      return { ok: true, file, command: `sh ~/Downloads/${file}`, typedChars: `sh ~/Downloads/${file}`.length };
+    },
+    deliveryOptions: async (id, peer, _t, serverUrl) => ({
+      options: [
+        ...(peer
+          ? (() => {
+              const command = `sh ~/Downloads/${demoDropName(id)}`;
+              return [{ kind: "taildrop" as const, label: "Send the installer to the device, then run it", command, typedChars: command.length }];
+            })()
+          : []),
+        { kind: "pairing" as const, label: "Type a short command with a one-time code", command: `curl -fsSL ${serverUrl}/i/xxxxxx | sh`, typedChars: `curl -fsSL ${serverUrl}/i/xxxxxx | sh`.length },
+      ].sort((a, b) => a.typedChars - b.typedChars),
+    }),
+    sshInstall: async () => ({ ok: true }),
     metrics: async () => {
       const t = Date.now();
       /* typed as the real shape: the monitor table renders this fixture with
