@@ -222,8 +222,15 @@ function NetworkSection() {
         )}
       </div>
       {net.tailscale.installed && (
-        <Row label="Tailscale serve" description="Expose Truss on your tailnet with a real https name (tailscale serve). Agents and browsers then reach it at the https name instead of ip:port.">
-          <Btn size="xs" variant={net.tailscale.serveOn ? "outline" : "amber"} disabled={busy} onClick={async () => {
+        <Row label="Tailscale serve" description={net.tailscale.canServe === false
+          ? "This server's user can't write tailscale's serve config — the toggle stays off until then."
+          : "Expose Truss on your tailnet with a real https name (tailscale serve). Agents and browsers then reach it at the https name instead of ip:port."}>
+          {/* issue #37: grey + guide when the operator isn't set — never a
+              bare 400 after the click */}
+          {net.tailscale.canServe === false && (
+            <span className="text-[10.5px] text-[var(--t-dim)] font-mono">needs: sudo tailscale set --operator=$USER</span>
+          )}
+          <Btn size="xs" variant={net.tailscale.serveOn ? "outline" : "amber"} disabled={busy || net.tailscale.canServe === false} title={net.tailscale.canServe === false ? "run: sudo tailscale set --operator=$USER (then this works)" : undefined} onClick={async () => {
             setBusy(true);
             setErr("");
             try {

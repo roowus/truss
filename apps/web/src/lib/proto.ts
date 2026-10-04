@@ -191,7 +191,9 @@ export interface TailscalePeer {
 
 export interface NetInfo {
   port: number;
-  tailscale: { installed: boolean; ip4?: string; dnsName?: string; serveOn?: boolean; serveUrl?: string };
+  /** the server's bind address (issue #33): the wizard's reachability filter reads this */
+  bind?: string;
+  tailscale: { installed: boolean; ip4?: string; dnsName?: string; serveOn?: boolean; serveUrl?: string; canServe?: boolean };
   lan: string[];
 }
 
