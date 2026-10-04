@@ -142,6 +142,13 @@ developer's click — never merge, never ask to.
 
 ## Hard rules
 
+- The main checkout at `/home/ubuntu/projects/truss` is shared (the
+  developer, the pipeline session, and other workers all touch it). Do your
+  work in your `pr-preview/w/<n>` worktree or any branch — but whenever you
+  go idle (waiting on audits or review), leave the main checkout ON `main`
+  with a clean tree: commit/stash your work first, then
+  `git -C /home/ubuntu/projects/truss checkout main`. Never leave it parked
+  on your branch.
 - Commit attribution follows TRUSS.md "Commits": author and committer are
   the repo owner (`roowus <roowus@users.noreply.github.com>`), and commit
   messages carry no AI-attribution trailers or "Generated with" footers.
