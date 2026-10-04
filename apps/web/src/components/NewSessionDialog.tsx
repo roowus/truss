@@ -35,23 +35,17 @@ export function NewSessionDialog({ onClose, preset }: { onClose: () => void; pre
     if (!harness && harnesses[0]) setHarness(harnesses[0].id);
   }, [harnesses]);
 
-  /* first boot on a fresh server: lazy adapters (hermes/dsh) have no catalog
-     yet and the picker would show only "harness default" (issue #101). Ask
-     the server for a one-shot probe when any harness's picker is empty; the
-     filled catalog lands via the models.updated broadcast and a refetch.
-     The ref fires it at most once per dialog open; the harnesses dep covers
-     the mount-before-boot-fetch race (audit round 1) without re-firing on
-     every models update. */
+  /* fallback for the boot-time probe (store.init probes as soon as the
+     harness list lands, so the picker is normally filled before the dialog
+     ever opens). A dialog can still see an empty probeable catalog when the
+     boot fetch failed or a harness registered later — ask once per open; the
+     predicate lives in the store, and the server bounds repeats. */
   const probedRef = useRef(false);
   useEffect(() => {
     if (probedRef.current || !harnesses.length) return;
-    /* only probeable harnesses can gain a catalog from the ask — pi without
-       models.json or a remote adapter is legitimately empty, and probing
-       those would be a wasted round trip per dialog open (audit round 2) */
-    if (!harnesses.some((h) => h.probeable && !models.some((m) => m.harness === h.id))) return;
     probedRef.current = true;
-    void store.refreshHarnesses(true);
-  }, [harnesses, models]);
+    void store.probeEmptyCatalogs();
+  }, [harnesses]);
 
   const hModels = models.filter((m) => m.harness === harness);
   useEffect(() => setModel(hModels[0] ? `${hModels[0].provider}/${hModels[0].model}` : ""), [harness, models.length]);

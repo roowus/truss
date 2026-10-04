@@ -285,6 +285,25 @@ class Store {
       const s = this.state.sessions[id];
       if (s.state === "running" || s.state === "spawning") void this.ensureHydrated(id);
     }
+    /* a lazy catalog's probe takes about a second (harness process boot) —
+       fire it at page boot, not when the dialog opens, so the picker is
+       already filled by the time the user looks at it */
+    void this.probeEmptyCatalogs();
+  }
+
+  /**
+   * Ask the server to probe probeable harnesses whose catalog is empty
+   * (first boot on a fresh server, issue #101). Harnesses with a
+   * legitimately empty catalog (pi without models.json, remote adapters) are
+   * not probeable, so the ask never fires on their account. The probe runs
+   * server-side in the background; the filled catalog lands via the
+   * models.updated broadcast and a refetch.
+   */
+  async probeEmptyCatalogs() {
+    const { harnesses, models } = this.state;
+    if (harnesses.some((h) => h.probeable && !models.some((m) => m.harness === h.id))) {
+      await this.refreshHarnesses(true);
+    }
   }
 
   private onConn(s: ConnStatus) {
