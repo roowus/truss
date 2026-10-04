@@ -25,7 +25,7 @@ interface FakeAgent {
   close: () => void;
 }
 
-async function connectAgent(host: string, token: string, opts: { adapters?: { id: string }[] } = {}): Promise<FakeAgent> {
+async function connectAgent(host: string, token: string, opts: { adapters?: { id: string }[]; sessions?: string[] } = {}): Promise<FakeAgent> {
   const ws = new WebSocket(`${srv.wsBase}/agent/connect?host=${host}&token=${encodeURIComponent(token)}`);
   const received: Record<string, unknown>[] = [];
   ws.onmessage = (e) => {
@@ -70,7 +70,14 @@ async function connectAgent(host: string, token: string, opts: { adapters?: { id
     ws.onerror = () => rej(new Error("ws connect failed"));
   });
   const send = (o: unknown) => ws.send(JSON.stringify(o));
-  send({ type: "hello", hostname: `remote-${host}`, adapters: opts.adapters ?? [{ id: "pi", capabilities: { permissions: false, subagents: false, streaming: true, queueWhileRunning: true } }] });
+  send({
+    type: "hello",
+    hostname: `remote-${host}`,
+    adapters: opts.adapters ?? [{ id: "pi", capabilities: { permissions: false, subagents: false, streaming: true, queueWhileRunning: true } }],
+    /* protocol-2 reattach handshake — present only when the test passes a
+       session list (the default exercises the legacy protocol-1 shape) */
+    ...(opts.sessions ? { sessions: opts.sessions, protocol: 2 } : {}),
+  });
   return { ws, received, send, close: () => ws.close() };
 }
 
@@ -203,11 +210,14 @@ test("metrics: /api/metrics includes the remote host via the tunnel; dead host i
   assert.ok(!m2.body.agents[hostId], "disconnected host serves no stale metrics");
 });
 
-test("one host's disconnect kills only ITS sessions (agentBye regression)", async () => {
+test("a tunnel blip wipes NOTHING: sessions survive offline, sends fail loudly, reconcile on reconnect", async () => {
+  /* issue #100, item 7: every blip used to be total session loss. Now the
+     disconnect alone errors nothing — the reattach handshake at the next
+     hello decides what actually died on the agent. */
   const mk = async (label: string) => {
     const c = await api("/api/hosts", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ label }) });
     const agent = await connectAgent(c.body.host.id, c.body.token);
-    return { id: c.body.host.id as string, agent };
+    return { id: c.body.host.id as string, token: c.body.token as string, agent };
   };
   const A = await mk("host A");
   const B = await mk("host B");
@@ -224,16 +234,27 @@ test("one host's disconnect kills only ITS sessions (agentBye regression)", asyn
   const sidA = await mkSess(A.id, "A session");
   const sidB = await mkSess(B.id, "B session");
 
-  /* kill A */
+  /* the blip: A drops. Neither session errors — A's may come back. */
   A.agent.close();
   await waitFor(async () => {
-    const s = await api(`/api/sessions/${sidA}`);
-    return s.body.session.state === "error" || null;
-  }, "A's session erroring");
-
-  /* B's session is untouched and still works */
+    const h = await api("/api/harnesses");
+    return !h.body.harnesses.some((x: { id: string }) => x.id === `pi@${A.id}`) || null;
+  }, "A's harness unregistered");
+  const aMeta = await api(`/api/sessions/${sidA}`);
+  assert.notEqual(aMeta.body.session.state, "error", "a blip must not error the session (issue #100)");
   const bMeta = await api(`/api/sessions/${sidB}`);
   assert.notEqual(bMeta.body.session.state, "error", "B's session survived A's disconnect");
+
+  /* a send into the dead tunnel FAILS LOUDLY (no more ghost turns) */
+  const ghost = await api(`/api/sessions/${sidA}/prompt`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ text: "hello void" }),
+  });
+  assert.equal(ghost.status, 409, "offline send refuses loudly");
+  assert.match(String(ghost.body?.error ?? ""), /offline|not delivered/i);
+
+  /* B is untouched and still works */
   await api(`/api/sessions/${sidB}/prompt`, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -245,7 +266,76 @@ test("one host's disconnect kills only ITS sessions (agentBye regression)", asyn
     return list.some((e: Record<string, unknown>) => e.type === "msg.chunk" && String(e.text).includes("still alive over B")) || null;
   }, "B answers after A died");
 
+  /* A comes back WITHOUT the session (its process restarted — the session
+     really is gone): reconcile errors it now, at hello, not at the blip */
+  const a2 = await connectAgent(A.id, A.token, { sessions: [] });
+  await waitFor(async () => {
+    const s = await api(`/api/sessions/${sidA}`);
+    return s.body.session.state === "error" || null;
+  }, "A's session erroring at reconcile");
+  a2.close();
+
   B.agent.close();
+});
+
+test("an agent that kept its sessions across the blip reattaches them — prompts flow again", async () => {
+  const c = await api("/api/hosts", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ label: "reattach rig" }) });
+  const hostId = c.body.host.id as string;
+  const token = c.body.token as string;
+  const agent = await connectAgent(hostId, token);
+
+  const cs = await api("/api/sessions", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ harness: `pi@${hostId}`, cwd: "/tmp", title: "reattach me" }),
+  });
+  const sid = cs.body.session.id as string;
+  await waitFor(() => agent.received.some((m) => m.type === "spawn"), "spawned");
+
+  /* the blip, then the SAME agent process returns with the session alive */
+  agent.close();
+  await waitFor(async () => !(await api("/api/hosts")).body.hosts.find((h: { id: string }) => h.id === hostId)?.online || null, "offline");
+  const agent2 = await connectAgent(hostId, token, { sessions: [sid] });
+  await waitFor(async () => (await api("/api/hosts")).body.hosts.find((h: { id: string }) => h.id === hostId)?.online || null, "back online");
+
+  const meta = await api(`/api/sessions/${sid}`);
+  assert.notEqual(meta.body.session.state, "error", "reattached, not errored");
+
+  /* and the tunnel carries prompts to it again (no respawn — the agent gets
+     a send frame for the session it kept) */
+  await api(`/api/sessions/${sid}/prompt`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ text: "after the blip" }),
+  });
+  await waitFor(() => agent2.received.some((m) => m.type === "send" && m.text === "after the blip"), "send frame at the reattached agent");
+  assert.ok(!agent2.received.some((m) => m.type === "spawn"), "no respawn — the harness kept running");
+
+  agent2.close();
+});
+
+test("the server tells a reattached agent to dispose sessions it forgot", async () => {
+  /* disposed server-side while the agent was away: the harness process would
+     leak on the remote without the reconcile's dispose frame */
+  const c = await api("/api/hosts", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ label: "leak rig" }) });
+  const hostId = c.body.host.id as string;
+  const token = c.body.token as string;
+  const agent = await connectAgent(hostId, token);
+  const cs = await api("/api/sessions", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ harness: `pi@${hostId}`, cwd: "/tmp", title: "doomed" }),
+  });
+  const sid = cs.body.session.id as string;
+  await waitFor(() => agent.received.some((m) => m.type === "spawn"), "spawned");
+
+  agent.close();
+  await waitFor(async () => !(await api("/api/hosts")).body.hosts.find((h: { id: string }) => h.id === hostId)?.online || null, "offline");
+  const del = await api(`/api/sessions/${sid}`, { method: "DELETE" }); // closed server-side mid-blip
+  assert.equal(del.status, 200, "the mid-blip close lands");
+  const agent2 = await connectAgent(hostId, token, { sessions: [sid] });
+  await waitFor(() => agent2.received.some((m) => m.type === "dispose" && m.sessionId === sid), "dispose frame for the forgotten session");
+  agent2.close();
 });
 
 test("revoking a host kills its channel and future connects get 4403", async () => {

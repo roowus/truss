@@ -137,3 +137,47 @@ test("requestMetrics rejects for unknown hosts; agentFrame ignores stray frames"
     cleanup();
   }
 });
+
+test("a spawn waiter is rejected fast when its agent drops mid-spawn (no 30s lie)", async () => {
+  const { cleanup } = await freshServer("rem-spawn-drop");
+  try {
+    const remote = await import("../src/remote.js");
+    let adapter: any = null;
+    remote.wireRemoteRegistry({
+      register: (id, a) => {
+        adapter = a;
+      },
+      unregister: () => {},
+      sessionGone: () => {},
+    });
+    const socket = fakeSocket([]);
+    remote.agentHello("h-drop", "drop-host", [{ id: "pi", capabilities: CAPS }], socket);
+    /* the spawn frame goes out; the agent dies before acking */
+    const outcome = adapter
+      .spawn({ sessionId: "s-drop", cwd: "/tmp" })
+      .then(() => "resolved", (e: Error) => e.message);
+    remote.agentBye("h-drop", socket);
+    assert.match(await outcome, /disconnected/, "the waiter hears the truth immediately (issue #100, item 10)");
+  } finally {
+    cleanup();
+  }
+});
+
+test("a replaced connection's stale close cannot reap the new registration", async () => {
+  const { cleanup } = await freshServer("rem-stale-close");
+  try {
+    const remote = await import("../src/remote.js");
+    remote.wireRemoteRegistry({ register: () => {}, unregister: () => {}, sessionGone: () => {} });
+    const oldSock = fakeSocket([]);
+    const newSock = fakeSocket([]);
+    remote.agentHello("h-race", "race-host", [{ id: "pi", capabilities: CAPS }], oldSock);
+    /* the agent reconnects; the OLD socket's close event lands after */
+    remote.agentHello("h-race", "race-host", [{ id: "pi", capabilities: CAPS }], newSock);
+    remote.agentBye("h-race", oldSock);
+    assert.ok(remote.listAgents().some((x) => x.hostId === "h-race"), "the live registration survives the stale close");
+    remote.agentBye("h-race", newSock);
+    assert.ok(!remote.listAgents().some((x) => x.hostId === "h-race"), "the real close still reaps");
+  } finally {
+    cleanup();
+  }
+});

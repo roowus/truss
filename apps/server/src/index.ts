@@ -49,7 +49,7 @@ import { createHost, deleteHost, getHost, isHostTombstoned, listHosts, rotateHos
 import { assertDialableServerUrl, netInfo, taildropToPeer, tailscalePeers, tailscaleServe, tailscaleSshOk, tailscaleSshRun } from "./net.js";
 import { deliveryOptions, installerDropName } from "./installer.js";
 import { mintPairing, redeemPairing, redeemRateOk } from "./pairing.js";
-import { agentBundleError, assertSafeServerUrl, ensureAgentBundle, standaloneInstallScript, installScript } from "./agentbundle.js";
+import { agentBundleError, agentBundleHash, assertSafeServerUrl, ensureAgentBundle, standaloneInstallScript, installScript } from "./agentbundle.js";
 import { registerMcpPerms } from "./mcp-perms.js";
 import { importDshSessions } from "./import-dsh.js";
 import { registerMcpTruss } from "./mcp-truss.js";
@@ -145,6 +145,9 @@ heartbeat.unref();
 
 /* ── node-agent channel (remote hosts dial OUT to here) ── */
 const AGENT_TOKEN = process.env.TRUSS_AGENT_TOKEN ?? "truss-dev";
+/* tunnel protocol level: 1 = pre-handshake agents (hello had no sessions
+   list, versions, or header auth); 2 = the issue #100 handshake */
+const AGENT_PROTOCOL = 2;
 
 wireRemoteRegistry({
   register: registerAdapter,
@@ -156,7 +159,13 @@ wireRemoteRegistry({
 });
 
 app.get("/agent/connect", { websocket: true }, (socket, req) => {
-  const { host, token } = req.query as { host?: string; token?: string };
+  const q = req.query as { host?: string; token?: string };
+  /* the token rides the Authorization header on protocol-2 agents — in the
+     query string it lands in every access log (issue #100, item 13). The
+     query param stays as the legacy path for pre-handshake agents. */
+  const bearer = req.headers.authorization?.startsWith("Bearer ") ? req.headers.authorization.slice(7) : undefined;
+  const host = q.host;
+  const token = bearer ?? q.token;
   /* per-host tokens (hosts table) first; the shared env token is a dev
      fallback that auto-registers the host into the same registry */
   if (!host || !token || !verifyAgentToken(host, token, AGENT_TOKEN)) {
@@ -213,18 +222,41 @@ app.get("/agent/connect", { websocket: true }, (socket, req) => {
         String(msg.hostname ?? host),
         (msg.adapters ?? []) as { id: string; capabilities: never }[],
         socket,
+        /* the reattach + version handshake (issue #100): which sessions
+           survived on the agent, its protocol level, its bundle hash */
+        {
+          sessions: Array.isArray(msg.sessions) ? (msg.sessions as unknown[]).map(String) : undefined,
+          protocol: typeof msg.protocol === "number" ? msg.protocol : undefined,
+          bundleHash: typeof msg.bundleHash === "string" ? msg.bundleHash : undefined,
+        },
       );
+      /* welcome: the server's half of the handshake — the agent warns its
+         operator when its bundle differs from the one the server builds */
+      socket.send(JSON.stringify({ type: "welcome", protocol: AGENT_PROTOCOL, bundleHash: agentBundleHash() ?? undefined }));
       return;
     }
     agentFrame(host, msg);
   });
   socket.on("close", () => {
     clearInterval(heartbeat);
-    if (helloed) agentBye(host);
+    /* the socket arg guards the reconnect race: a replaced connection's
+       stale close must not reap the new registration (issue #100) */
+    if (helloed) agentBye(host, socket);
   });
 });
 
-app.get("/api/agents", async () => ({ agents: listAgents() }));
+app.get("/api/agents", async () => {
+  const current = agentBundleHash();
+  return {
+    agents: listAgents().map((a) => ({
+      ...a,
+      /* installed agents never auto-update (issue #100 item 18) — but now
+         the skew is at least VISIBLE: the agent's bundle hash vs the one
+         this server builds right now */
+      bundleCurrent: !current || !a.bundleHash ? undefined : a.bundleHash === current,
+    })),
+  };
+});
 
 /* ── network reachability + the agent installer ── */
 app.get("/api/net", async () => netInfo(PORT));
@@ -458,7 +490,12 @@ app.post("/api/hosts", async (req, reply) => {
 app.post("/api/hosts/:id/token", async (req, reply) => {
   const { id } = req.params as { id: string };
   try {
-    return rotateHostToken(id);
+    const out = rotateHostToken(id);
+    /* the old token is dead from this moment — drop the live channel too
+       (issue #100 item 11): it would otherwise keep hosting sessions until
+       the agent happened to disconnect */
+    dropAgent(id);
+    return out;
   } catch (e: any) {
     return reply.code(400).send({ error: e.message ?? String(e) });
   }
@@ -467,6 +504,9 @@ app.post("/api/hosts/:id/revoke", async (req) => {
   const { id } = req.params as { id: string };
   const { revoked } = (req.body ?? {}) as { revoked?: boolean };
   setHostRevoked(id, revoked !== false);
+  /* revoking must kill the live channel, not just future connects (issue
+     #100 item 11) — un-revoking drops nothing (there is nothing to drop) */
+  if (revoked !== false) dropAgent(id);
   return { ok: true };
 });
 app.post("/api/hosts/:id/pin", async (req, reply) => {

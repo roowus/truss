@@ -1,4 +1,5 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { dataDir } from "./db.js";
@@ -17,6 +18,14 @@ const bundlePath = () => join(dataDir, "agent-bundle.mjs");
 
 let building: Promise<void> | null = null;
 let lastError: string | null = null;
+let bundleHash: string | null = null;
+
+/** short hash of the bundle this server currently builds — the version the
+   handshake (issue #100) compares an installed agent's self-reported hash
+   against, so agent/server skew is detectable instead of silent */
+export function agentBundleHash(): string | null {
+  return bundleHash;
+}
 
 export function ensureAgentBundle(): Promise<void> {
   if (building) return building;
@@ -38,6 +47,7 @@ export function ensureAgentBundle(): Promise<void> {
       },
       logLevel: "silent",
     });
+    bundleHash = createHash("sha256").update(readFileSync(bundlePath())).digest("hex").slice(0, 12);
     lastError = null;
   })().catch((e) => {
     lastError = e?.message ?? String(e);
