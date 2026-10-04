@@ -1,7 +1,9 @@
 # Per-PR preview environment — one worktree per PR, web dev server + server.
 # Usage: PR_NUMBER=43 tilt up (from this dir; the worktree lives at ./w/<pr>)
-# Ports: server = 5000 + pr, web dev = 6000 + pr (deterministic, matches the
-# caddy route pr-<N>.truss.rewis -> the web port).
+# Ports: server = 5000 + pr, web dev = 6000 + pr (deterministic). TLS+routing
+# need NO per-PR step: caddy's wildcard `*.truss.rewis` site mints on demand
+# (gated by the pr-router's /ask, which only allows pr-<digits>) and proxies
+# to the router (127.0.0.1:6099), which fans out to the web port by name.
 #
 # What tilt gives you here: one `tilt up` boots both processes with live
 # reload (tsx watch on the server, vite on the web), restarts on file change,
