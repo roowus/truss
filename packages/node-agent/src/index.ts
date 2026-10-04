@@ -23,6 +23,7 @@
 import { hostname as osHostname } from "node:os";
 import { createHash } from "node:crypto";
 import WebSocket from "ws";
+import { dialFailureHint } from "./dialHint.js";
 import type { HarnessAdapter, AdapterHandle, SessionOpts } from "../../../apps/server/src/adapters/types.js";
 import { piAdapter } from "../../../apps/server/src/adapters/pi.js";
 import { claudeAdapter } from "../../../apps/server/src/adapters/claude.js";
@@ -62,6 +63,10 @@ interface LiveEntry {
 const live = new Map<string, LiveEntry>();
 let ws: WebSocket | null = null;
 let reconnectDelay = 1000;
+/* consecutive dial failures — drives dialFailureHint (issue #100): the raw
+   ECONNREFUSED loop told the user nothing; after a few tries the log names
+   the cause and both fixes */
+let dialFailures = 0;
 
 function sendFrame(frame: Record<string, unknown>) {
   if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify(frame));
@@ -72,8 +77,11 @@ function connect() {
   console.log(`[node-agent] connecting to ${SERVER} as ${HOST_ID}…`);
   ws = new WebSocket(url);
 
+  let opened = false;
   ws.on("open", () => {
+    opened = true;
     reconnectDelay = 1000;
+    dialFailures = 0;
     sendFrame({
       type: "hello",
       hostId: HOST_ID,
@@ -181,6 +189,16 @@ function connect() {
       console.log("[node-agent] this host was deleted on the server; not retrying — re-add it (new id + token) and restart the agent");
       return;
     }
+    /* 4403 = revoked/bad token: retrying at the normal cadence spams a line
+       the user can't act on every 15s (issue #100). Explain once, then keep
+       a slow watch — an admin un-revoking lets it reconnect on its own. */
+    if (code === 4403) {
+      console.log(
+        "[node-agent] the server refuses this host's token (revoked or rotated) — fix it in the host panel (rotate/enable), update ~/.truss/agent-*.env, restart the agent. Checking again every 60s.",
+      );
+      setTimeout(connect, 60000);
+      return;
+    }
     console.log(`[node-agent] disconnected (${code} ${reason}); retrying in ${reconnectDelay}ms`);
     setTimeout(connect, reconnectDelay);
     reconnectDelay = Math.min(reconnectDelay * 2, 15000);
@@ -188,6 +206,14 @@ function connect() {
 
   ws.on("error", (err: Error) => {
     console.error(`[node-agent] ws error: ${err.message}`);
+    /* a dead dial must explain itself within a few attempts (issue #100) —
+       the user should never have to decode ECONNREFUSED. Only errors before
+       the socket ever opened count as dial failures. */
+    if (opened) return;
+    const code = (err as NodeJS.ErrnoException).code ?? /ECONNREFUSED|ETIMEDOUT|EHOSTUNREACH|ENETUNREACH/.exec(err.message)?.[0] ?? "";
+    dialFailures += 1;
+    const hint = dialFailureHint({ code, url: SERVER, attempts: dialFailures });
+    if (hint) console.error(`[node-agent] ${hint}`);
   });
 }
 
