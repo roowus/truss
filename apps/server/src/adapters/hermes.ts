@@ -108,19 +108,25 @@ export const hermesAdapter: HarnessAdapter = {
          #97). The watcher claims its id so two cold resumes can't both
          adopt the first one reported. */
       const watching = client.watchForSessionUpdate(Number(process.env.TRUSS_ACP_RESUME_WATCH_MS) || 5000);
-      const r = (await client.call("session/resume", {
-        sessionId: opts.resumeRef,
-        cwd: opts.cwd,
-        mcpServers: [],
-      })) as { sessionId?: string; models?: HermesModelState } | null;
-      const sessionId = r?.sessionId ?? (await watching.promise);
-      watching.cancel();
-      if (!sessionId) {
-        throw new Error(
-          `session/resume answered without a sessionId and no session/update followed; refusing to adopt the dead ref ${opts.resumeRef}`,
-        );
+      try {
+        const r = (await client.call("session/resume", {
+          sessionId: opts.resumeRef,
+          cwd: opts.cwd,
+          mcpServers: [],
+        })) as { sessionId?: string; models?: HermesModelState } | null;
+        const sessionId = r?.sessionId ?? (await watching.promise);
+        if (!sessionId) {
+          throw new Error(
+            `session/resume answered without a sessionId and no session/update followed; refusing to adopt the dead ref ${opts.resumeRef}`,
+          );
+        }
+        res = { sessionId, models: r?.models };
+      } finally {
+        /* a rejected resume call must not leave the watcher armed to its
+           timeout — a late fire would hold a claim only a future onSession
+           for that id could release */
+        watching.cancel();
       }
-      res = { sessionId, models: r?.models };
     } else {
       res = (await client.call("session/new", { cwd: resolveCwd(opts.cwd).cwd, mcpServers: trussMcp(opts.sessionId) })) as {
         sessionId: string;

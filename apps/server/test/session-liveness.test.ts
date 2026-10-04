@@ -367,9 +367,58 @@ test("an idless resume ACK adopts the sessionId from the session/update that fol
   }
 });
 
+/* ── 7. a rejected resume leaves no watcher or claim behind (audit B1) ── */
+
+/* fake: answers initialize, then ERRORS the session/resume call */
+const REJ_DIR = mkdtempSync(join(tmpdir(), "truss-resrej-"));
+const REJ_FAKE = `
+let b = "";
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (c) => {
+  b += c; let i;
+  while ((i = b.indexOf("\\n")) >= 0) {
+    const l = b.slice(0, i).trim(); b = b.slice(i + 1);
+    if (!l) continue;
+    let r; try { r = JSON.parse(l); } catch { continue; }
+    if (r.id == null || !r.method) continue;
+    if (r.method === "initialize") process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: r.id, result: { protocolVersion: 1 } }) + "\\n");
+    else if (r.method === "session/resume") process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: r.id, error: { code: -32602, message: "no such session" } }) + "\\n");
+    else process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: r.id, result: {} }) + "\\n");
+  }
+});
+`;
+writeFileSync(join(REJ_DIR, "rej.cjs"), REJ_FAKE);
+const REJ_BIN = join(REJ_DIR, "rej-bin.sh");
+writeFileSync(REJ_BIN, `#!/bin/sh\nexec ${process.execPath} ${join(REJ_DIR, "rej.cjs")}\n`, { mode: 0o755 });
+
+test("a resume call that rejects leaves the watcher cancelled and no id claim behind", async () => {
+  const { cleanup } = await freshServer("resrej");
+  const hermes: any = await import("../src/adapters/hermes.js");
+  hermes.client.launch.command = REJ_BIN;
+  hermes.client.proc?.kill("SIGKILL");
+  await tick(100);
+  try {
+    await assert.rejects(
+      () => hermes.hermesAdapter.spawn({ sessionId: "t-resrej", cwd: "/tmp", resumeRef: "dead-ref" }),
+      /no such session/i,
+      "the harness's own error surfaces",
+    );
+    await tick(50);
+    assert.equal(
+      hermes.client.sessionWatchers.size,
+      0,
+      "a rejected resume must not leave the watcher armed — its late fire would hold a claim only a future onSession could release",
+    );
+    assert.equal(hermes.client.watchClaims.size, 0, "no id claim survives the rejection");
+  } finally {
+    hermes.client.proc?.kill("SIGKILL");
+    cleanup();
+  }
+});
+
 import { after } from "node:test";
 after(() => {
-  for (const d of [DIR, PISH_DIR, DEATH_DIR, LAZY_DIR])
+  for (const d of [DIR, PISH_DIR, DEATH_DIR, LAZY_DIR, REJ_DIR])
     try {
       rmSync(d, { recursive: true, force: true });
     } catch {}
