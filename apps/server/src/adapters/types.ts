@@ -65,6 +65,14 @@ export interface HarnessAdapter {
   };
   /** models this adapter can offer right now (for the composer model chip) */
   listModels(): Promise<{ provider: string; model: string; label: string }[]>;
+  /**
+   * One-shot catalog probe for adapters that discover models lazily (from
+   * session/new responses): open a throwaway session, harvest its model
+   * catalog, close it again. sessions.listModels calls it in the background
+   * when the catalog is empty (first boot on a fresh server — issue #101).
+   * Resolves true when the catalog changed; never rejects.
+   */
+  probeModels?(): Promise<boolean>;
   spawn(opts: SessionOpts): Promise<AdapterHandle>;
   send(handle: AdapterHandle, text: string): void;
   interrupt(handle: AdapterHandle): void;

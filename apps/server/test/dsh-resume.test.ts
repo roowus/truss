@@ -16,6 +16,11 @@ import { join } from "node:path";
 const LOG_DIR = mkdtempSync(join(tmpdir(), "truss-fake-dsh-"));
 const LOG = join(LOG_DIR, "set-config.log");
 
+/* the adapter now persists its discovered catalog to kv (issue #101) —
+   isolate the DB before the import below opens it */
+const DATA_DIR = mkdtempSync(join(tmpdir(), "truss-test-dsh-resume-data-"));
+process.env.TRUSS_DATA_DIR = DATA_DIR;
+
 const CATALOG = {
   configOptions: [
     {
@@ -102,5 +107,6 @@ test("cleanup: sentinel close lets the fake exit", async () => {
 after(() => {
   try {
     rmSync(LOG_DIR, { recursive: true, force: true });
+    rmSync(DATA_DIR, { recursive: true, force: true });
   } catch {}
 });

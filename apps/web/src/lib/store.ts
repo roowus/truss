@@ -285,6 +285,25 @@ class Store {
       const s = this.state.sessions[id];
       if (s.state === "running" || s.state === "spawning") void this.ensureHydrated(id);
     }
+    /* a lazy catalog's probe takes about a second (harness process boot) —
+       fire it at page boot, not when the dialog opens, so the picker is
+       already filled by the time the user looks at it */
+    void this.probeEmptyCatalogs();
+  }
+
+  /**
+   * Ask the server to probe probeable harnesses whose catalog is empty
+   * (first boot on a fresh server, issue #101). Harnesses with a
+   * legitimately empty catalog (pi without models.json, remote adapters) are
+   * not probeable, so the ask never fires on their account. The probe runs
+   * server-side in the background; the filled catalog lands via the
+   * models.updated broadcast and a refetch.
+   */
+  async probeEmptyCatalogs() {
+    const { harnesses, models } = this.state;
+    if (harnesses.some((h) => h.probeable && !models.some((m) => m.harness === h.id))) {
+      await this.refreshHarnesses(true);
+    }
   }
 
   private onConn(s: ConnStatus) {
@@ -320,9 +339,9 @@ class Store {
     }
   }
 
-  async refreshHarnesses() {
+  async refreshHarnesses(probe = false) {
     try {
-      const { harnesses, models } = await this.be.harnesses();
+      const { harnesses, models } = await this.be.harnesses({ probe });
       this.set({ harnesses, models });
     } catch (e: any) {
       this.toast("error", "Could not load harnesses", e?.message ?? String(e));
@@ -446,6 +465,13 @@ class Store {
       if (isNew && ev.item.state === "unread" && ev.item.importance !== "low") {
         this.toast("info", ev.item.type === "permission" ? "Decision needed" : "Feed", ev.item.title);
       }
+      return;
+    }
+    if (ev.type === "models.updated") {
+      /* a lazy harness catalog (hermes/dsh) just filled in on the server
+         (first-boot probe, issue #101) — refetch so an open New Session
+         dialog sees the models appear instead of a stuck "harness default" */
+      void this.refreshHarnesses();
       return;
     }
     const id = ev.sessionId;

@@ -13,6 +13,9 @@ export interface Capabilities {
 export interface HarnessInfo {
   id: HarnessId;
   capabilities: Capabilities;
+  /** the adapter can fill an empty model catalog on request (lazy ACP
+      discovery: hermes, dsh) — the New Session dialog probes only these */
+  probeable?: boolean;
 }
 
 export interface ModelInfo {
@@ -250,6 +253,7 @@ export type ProtoEvent =
   | (Base & { type: "session.deleted" })
   | (Base & { type: "todo.upsert"; todo: TodoItem })
   | (Base & { type: "feed.upsert"; item: FeedItem })
+  | (Base & { type: "models.updated"; harness: HarnessId })
   | (Base & { type: "msg.start"; messageId: string; role: "user" | "assistant" | "system"; at: At; attachments?: PromptAttachment[] })
   | (Base & { type: "msg.chunk"; messageId: string; text: string; channel?: string })
   | (Base & { type: "msg.done"; messageId: string; stopReason?: string })
