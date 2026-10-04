@@ -72,6 +72,13 @@ export class AcpClient {
   private sessionClaims = new Map<string, SessionHandler[]>();
   private ready: Promise<void> | null = null;
   private exitListenersAttached = false;
+  /* one per live session the adapters register — when the shared process
+     dies, every session it served gets a terminal error event and a closed
+     queue, so the event pump ends and the session leaves `live`. Without
+     this a process death strands every session: pumps hang, live entries
+     persist, and prompts address harness ids the replacement process never
+     heard of (the ghost-prompt black hole, issue #97). */
+  private processExitListeners = new Set<(err: Error) => void>();
 
   constructor(
     private launch: AcpLaunchSpec,
@@ -205,13 +212,44 @@ export class AcpClient {
     this.sessionClaims.clear();
     this.proc = null;
     this.ready = null;
+    /* tell the sessions AFTER the maps are cleared: their teardown closes
+       queues and ends pumps, and must not interact with the registry */
+    for (const fn of [...this.processExitListeners]) {
+      try {
+        fn(err);
+      } catch {
+        /* a dying session's teardown must not take the flush down */
+      }
+    }
+  }
+
+  /** adapters register one listener per live session handle; the return
+      value unsubscribes (dispose calls it). Fired from flushFor when the
+      shared server process dies. */
+  onProcessExit(fn: (err: Error) => void): () => void {
+    this.processExitListeners.add(fn);
+    return () => {
+      this.processExitListeners.delete(fn);
+    };
   }
 
   private dispatch(rec: Frame) {
     /* server→client requests (permission prompts) carry both id and method */
     if (rec.id != null && rec.method) {
       const sid = (rec.params as { sessionId?: string } | undefined)?.sessionId;
-      if (sid) this.sessionHandlers.get(sid)?.(rec);
+      const handler = sid ? this.sessionHandlers.get(sid) : undefined;
+      if (handler) {
+        handler(rec);
+      } else {
+        /* never drop a request unanswered: the harness BLOCKS awaiting the
+           response, and the turn call is unbudgeted by design — a dropped
+           permission ask wedges the session busy forever (issue #97). An
+           error answer lets the harness fail the tool call and move on. */
+        this.respondError(
+          rec.id!,
+          `no live session ${sid ?? "(none given)"} on this client — ${rec.method} cannot be routed`,
+        );
+      }
       return;
     }
     if (rec.id != null && this.pending.has(String(rec.id))) {
@@ -297,6 +335,11 @@ export class AcpClient {
     this.proc?.stdin?.write(JSON.stringify({ jsonrpc: "2.0", id, result }) + "\n");
   }
 
+  /** answer a server→client request with an error (the unroutable path) */
+  respondError(id: string | number, message: string) {
+    this.proc?.stdin?.write(JSON.stringify({ jsonrpc: "2.0", id, error: { code: -32000, message } }) + "\n");
+  }
+
   onSession(dshSessionId: string, fn: SessionHandler) {
     /* first live registration wins: sessions multiplex on this one client
        keyed by the harness session id, and resume/respawn reuse the stored
@@ -374,6 +417,10 @@ export class AcpClient {
  */
 export function disposeAcpSession(client: AcpClient, h: AcpSessionState) {
   const owned = Boolean(h.onFrame && client.ownsSession(h.acpSessionId, h.onFrame));
+  /* stop hearing process exits — a disposed session's queue is closing
+     below, and a later exit must not push into it */
+  h.offProcessExit?.();
+  h.offProcessExit = null;
   /* offSession even when the key was never ours: a registration that was
      refused leaves a claim behind, and a handle going away must not leave
      the client ready to hand the key to a queue that is about to close */
@@ -423,6 +470,12 @@ export interface AcpSessionState extends AdapterHandle {
   /** the handler this state registered on the shared client — dispose checks
      it still owns the key before tearing the session down */
   onFrame: SessionHandler | null;
+  /** unsubscribe for the client's process-exit notification, registered at
+      spawn; dispose calls it so a dead session stops hearing process exits */
+  offProcessExit: (() => void) | null;
+  /** text content streamed so far this turn — an instant settle with zero
+      text is the ghost black hole (issue #97), never a silent success */
+  turnTextChars: number;
   /** the harness session came from the stored resume ref rather than a fresh
      session/new, so it is shared with any retry that resumes the same ref */
   resumed: boolean;
@@ -441,6 +494,8 @@ export function makeSessionState(sessionId: string, acpSessionId: string, model:
     toolStartedAt: new Map(),
     pendingPerms: new Set(),
     onFrame: null,
+    offProcessExit: null,
+    turnTextChars: 0,
     resumed: false,
   };
 }
@@ -456,6 +511,7 @@ export function handleAcpUpdate(h: AcpSessionState, update: AcpUpdate) {
   switch (update.sessionUpdate) {
     case "agent_message_chunk": {
       if (h.currentMessageId && update.content?.text) {
+        h.turnTextChars += update.content.text.length;
         emit({
           type: "msg.chunk",
           sessionId: sid,
@@ -532,6 +588,7 @@ export function beginAcpTurn(h: AcpSessionState) {
   const sid = h.sessionId;
   h.turnCallId = `turn-${Date.now()}`;
   h.turnStartedAt = Date.now();
+  h.turnTextChars = 0;
   h.currentMessageId = `m-${Date.now()}`;
   h.queue.push({ type: "session.state", sessionId: sid, state: "running" });
   h.queue.push({
@@ -579,6 +636,40 @@ export function settleAcpTurn(
   }
   h.busy = false;
   h.queue.push({ type: "session.state", sessionId: sid, state: "idle" });
+}
+
+/**
+ * A prompt settle under this many milliseconds with zero streamed text is the
+ * ghost black hole: the harness answered a session it does not have with a
+ * fake instant success (probe evidence in issue #97 — 13-55ms, no content).
+ * The bar sits far under any real model round trip; real turns stream text
+ * or take real time, and both are untouched.
+ */
+export const GHOST_SETTLE_MS = 100;
+
+/**
+ * Read the session/prompt result and decide whether the turn really ran.
+ * ACP settlements are silent-success shaped by default — hermes-acp answers
+ * prompts for dead sessions with an instant `{"stopReason":"refusal"}` and
+ * no error, so settling `ok: true` on any resolution renders the chat alive
+ * while nothing works. Both ghost shapes become loud failures: the
+ * trajectory row gets a failure status and the transcript says why.
+ */
+export function classifyAcpSettle(
+  h: AcpSessionState,
+  result: unknown,
+): { ok: boolean; detail?: string } {
+  const stopReason = (result as { stopReason?: string } | null)?.stopReason;
+  if (stopReason === "refusal") {
+    return {
+      ok: false,
+      detail: "refused: the harness never engaged — its session is gone (resend to resume)",
+    };
+  }
+  if (h.turnTextChars === 0 && Date.now() - h.turnStartedAt < GHOST_SETTLE_MS) {
+    return { ok: false, detail: "empty: the harness returned nothing" };
+  }
+  return { ok: true };
 }
 
 /** The busy-guard message adapters share when a second prompt arrives mid-turn. */

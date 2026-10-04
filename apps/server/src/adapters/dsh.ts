@@ -7,6 +7,7 @@ import {
   AcpClient,
   beginAcpTurn,
   busyNote,
+  classifyAcpSettle,
   disposeAcpSession,
   handleAcpUpdate,
   makeSessionState,
@@ -155,7 +156,15 @@ export const dshAdapter: HarnessAdapter = {
         cwd: opts.cwd,
         mcpServers: [],
       })) as { sessionId?: string; configOptions?: AcpConfigOption[] } | null;
-      res = { sessionId: r?.sessionId ?? opts.resumeRef, configOptions: r?.configOptions };
+      /* an ACK without a sessionId is not a resume — adopting the requested
+         (dead) ref re-arms the ghost: every later frame is unroutable and
+         prompts settle instantly-empty forever (issue #97) */
+      if (!r?.sessionId) {
+        throw new Error(
+          `session/resume answered without a sessionId — refusing to adopt the dead ref ${opts.resumeRef}`,
+        );
+      }
+      res = { sessionId: r.sessionId, configOptions: r.configOptions };
     } else {
       res = (await client.call("session/new", { cwd: resolveCwd(opts.cwd).cwd, mcpServers: trussMcp(opts.sessionId) })) as {
         sessionId: string;
@@ -185,6 +194,20 @@ export const dshAdapter: HarnessAdapter = {
     h.resumed = Boolean(opts.resumeRef);
     h.onFrame = (rec) => handleServerMessage(h, rec);
     client.onSession(res.sessionId, h.onFrame);
+    /* the shared process dying strands every session it served: close the
+       queue with a terminal error so the event pump ends, the session leaves
+       `live`, and the next prompt resumes instead of writing into a dead
+       handle (issue #97). push-after-close is a no-op, so a dispose racing
+       the exit is safe. */
+    h.offProcessExit = client.onProcessExit((err) => {
+      h.queue.push({
+        type: "session.state",
+        sessionId: opts.sessionId,
+        state: "error",
+        detail: `dsh process died: ${err.message}`,
+      });
+      h.queue.close();
+    });
     h.queue.push({ type: "session.state", sessionId: opts.sessionId, state: "idle" });
     return h;
   },
@@ -211,7 +234,9 @@ export const dshAdapter: HarnessAdapter = {
            not fail and lose its output (issue #12 budgets the spawn phase) */
         0,
       )
-      .then(() => settleAcpTurn(h, { ok: true }))
+      /* read the result before settling: an instant refusal/empty settle is
+         the ghost black hole, a loud failure, never a silent 200 (#97) */
+      .then((result) => settleAcpTurn(h, classifyAcpSettle(h, result)))
       .catch((err: Error) => settleAcpTurn(h, { ok: false, detail: err.message }));
   },
 

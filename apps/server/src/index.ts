@@ -71,6 +71,14 @@ import {
 import { collectMetrics } from "@truss/proto";
 import { registerAdapter, unregisterAdapter } from "./sessions.js";
 
+/* Node crashes the process on an unhandled rejection by default — one
+   adapter hiccup would take every session down with it (issue #97). The
+   event pumps guard their own known failure points; this is the backstop
+   for everything else: log loudly, keep serving. */
+process.on("unhandledRejection", (err) => {
+  console.error("unhandledRejection (kept alive):", err);
+});
+
 const PORT = Number(process.env.TRUSS_PORT ?? 4040);
 const app = Fastify({ logger: process.env.TRUSS_TEST ? false : true });
 
