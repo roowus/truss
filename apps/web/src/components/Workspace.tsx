@@ -102,12 +102,19 @@ function TrussTab({ api, params }: IDockviewPanelHeaderProps<{ sessionId?: strin
   const [view, setView] = useState<ChromeTabView>({ showTitle: true, showClose: "always", closeOverIcon: false });
   const measureRef = useRef<() => void>(() => {});
   useEffect(() => {
-    const tab = rootRef.current?.closest(".dv-tab") as HTMLElement | null;
-    if (!tab) return;
+    /* The dockview tab element is resolved LAZILY, on every measure — never
+       captured once. Dragging a tab to rearrange it destroys and recreates
+       that element around this same component, so a captured reference goes
+       stale and every later write lands on a detached node (the round-4
+       bug: the dragged tab kept its natural width forever). */
+    const findTab = () => rootRef.current?.closest(".dv-tab") as HTMLElement | null;
     let ro: ResizeObserver | null = null;
     let mo: MutationObserver | null = null;
     let observed: Element | null = null;
+    let raf = 0;
     const measure = () => {
+      const tab = findTab();
+      if (!tab) return;
       const strip = tab.closest(".dv-tabs-container");
       const header = tab.closest(".dv-tabs-and-actions-container");
       if (!strip || !header) return;
@@ -135,17 +142,25 @@ function TrussTab({ api, params }: IDockviewPanelHeaderProps<{ sessionId?: strin
     };
     measureRef.current = measure;
     const attach = () => {
-      const header = tab.closest(".dv-tabs-and-actions-container");
-      const strip = tab.closest(".dv-tabs-container");
-      if (!header || header === observed) return;
-      ro?.disconnect();
-      mo?.disconnect();
-      observed = header;
-      ro = new ResizeObserver(measure);
-      ro.observe(header);
-      if (strip) {
+      const tab = findTab();
+      const header = tab?.closest(".dv-tabs-and-actions-container");
+      const strip = tab?.closest(".dv-tabs-container");
+      /* after a drag the recreated element can mount a frame or two before
+         it lands in the strip — retry until connected (bounded; unmount
+         cancels) */
+      if (!header || !strip) {
+        raf = requestAnimationFrame(attach);
+        return;
+      }
+      if (header !== observed) {
+        ro?.disconnect();
+        mo?.disconnect();
+        observed = header;
+        ro = new ResizeObserver(measure);
+        ro.observe(header);
         mo = new MutationObserver(() => {
-          if (tab.closest(".dv-tabs-and-actions-container") !== observed) attach();
+          const t = findTab();
+          if (t?.closest(".dv-tabs-and-actions-container") !== observed) attach();
           measure();
         });
         mo.observe(strip, { childList: true });
@@ -154,11 +169,15 @@ function TrussTab({ api, params }: IDockviewPanelHeaderProps<{ sessionId?: strin
     };
     attach();
     return () => {
+      cancelAnimationFrame(raf);
       ro?.disconnect();
       mo?.disconnect();
       measureRef.current = () => {};
-      tab.style.width = "";
-      tab.style.flex = "";
+      const tab = findTab();
+      if (tab) {
+        tab.style.width = "";
+        tab.style.flex = "";
+      }
     };
   }, []);
   /* active flips change only the X's mode (width is active-independent) —
