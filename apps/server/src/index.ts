@@ -11,6 +11,7 @@ import {
   closeSession,
   createSession,
   deleteSession,
+  forgetLive,
   setProjectArchived,
   setSessionArchived,
   setSessionPinned,
@@ -154,6 +155,10 @@ wireRemoteRegistry({
   unregister: unregisterAdapter,
   sessionGone: (sessionId, detail) => {
     if (store.getSession(sessionId)) store.setSessionState(sessionId, "error");
+    /* the live entry must die with it (audit B1): otherwise sendPrompt's
+       live.get() hit skips the error→resume gate and the next prompt
+       vanishes into an agent that no longer knows the session */
+    forgetLive(sessionId);
     app.log.warn(`remote session ${sessionId} lost: ${detail}`);
   },
 });

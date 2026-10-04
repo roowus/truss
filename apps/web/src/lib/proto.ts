@@ -199,6 +199,8 @@ export interface NetInfo {
   port: number;
   /** the server's bind address (issue #33): the wizard's reachability filter reads this */
   bind?: string;
+  /** operator-declared front door (TRUSS_PUBLIC_URL) — a proxy/DNS name that forwards to the server (audit B2) */
+  publicUrl?: string;
   tailscale: { installed: boolean; ip4?: string; dnsName?: string; serveOn?: boolean; serveUrl?: string; canServe?: boolean };
   lan: string[];
 }

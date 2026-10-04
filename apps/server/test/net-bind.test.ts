@@ -32,3 +32,37 @@ test("netInfo reports the server's bind address (loopback vs all-interfaces)", a
     cleanup();
   }
 });
+
+test("TRUSS_PUBLIC_URL is the operator's declared front door (audit B2): surfaced and dialable on any bind", async () => {
+  const { cleanup } = await freshServer("net-public");
+  try {
+    process.env.TRUSS_PUBLIC_URL = "https://truss.example.com";
+    const net = await import("../src/net.js");
+
+    const info = await net.netInfo(4040, "127.0.0.1");
+    assert.equal(info.publicUrl, "https://truss.example.com", "netInfo surfaces it");
+
+    /* a proxy/DNS front door is dialable even on a loopback bind — without
+       this escape hatch, proxied deployments can't pair at all */
+    net.assertDialableServerUrl("https://truss.example.com", {
+      port: 4040,
+      bind: "127.0.0.1",
+      publicUrl: info.publicUrl,
+      tailscale: { installed: false },
+      lan: [],
+    });
+    /* trailing slash normalizes */
+    net.assertDialableServerUrl("https://truss.example.com/", {
+      port: 4040, bind: "127.0.0.1", publicUrl: "https://truss.example.com", tailscale: { installed: false }, lan: [],
+    });
+    /* …but it is not a wildcard: other off-host names still refuse */
+    assert.throws(
+      () => net.assertDialableServerUrl("https://other.example.com", { port: 4040, bind: "127.0.0.1", publicUrl: "https://truss.example.com", tailscale: { installed: false }, lan: [] }),
+      /unreachable/,
+    );
+    delete process.env.TRUSS_PUBLIC_URL;
+  } finally {
+    delete process.env.TRUSS_PUBLIC_URL;
+    cleanup();
+  }
+});

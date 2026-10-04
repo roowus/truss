@@ -17,11 +17,15 @@ export interface ReachableAddress {
 
 const LOOPBACK = new Set(["127.0.0.1", "::1", "[::1]", "localhost"]);
 
-export function reachableAddresses(net: Pick<NetInfo, "port" | "tailscale" | "lan"> & { bind?: string }): ReachableAddress[] {
+export function reachableAddresses(net: Pick<NetInfo, "port" | "tailscale" | "lan"> & { bind?: string; publicUrl?: string }): ReachableAddress[] {
   const out: ReachableAddress[] = [];
   const bind = (net.bind ?? "").trim();
   const all = !bind || bind === "0.0.0.0" || bind === "::";
   const loopback = LOOPBACK.has(bind);
+
+  /* the operator's declared front door (TRUSS_PUBLIC_URL — a proxy/DNS name)
+     is reachable by declaration, whatever the bind (audit B2) */
+  if (net.publicUrl) out.push({ value: net.publicUrl, label: `${net.publicUrl} (public url)` });
 
   /* serve https is reachable from the tailnet no matter the local bind */
   if (net.tailscale.serveOn && net.tailscale.serveUrl) {

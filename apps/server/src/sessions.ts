@@ -593,3 +593,16 @@ export async function listModels() {
 export function isLive(sessionId: string) {
   return live.has(sessionId);
 }
+
+/**
+ * Forget a live entry whose harness is ALREADY dead — the remote-tunnel
+ * reconcile (remote.ts reapSession via sessionGone) uses it when the agent
+ * came back without the session. Without this, sendPrompt's live.get() hit
+ * short-circuits the error→resume gate and the prompt vanishes into an agent
+ * that no longer knows the session: a ghost turn (issue #100 audit, B1).
+ * Never dispose here — the process is gone; disposing would send frames
+ * about nothing.
+ */
+export function forgetLive(sessionId: string) {
+  live.delete(sessionId);
+}

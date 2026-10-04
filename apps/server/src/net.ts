@@ -37,6 +37,10 @@ export interface NetInfo {
   /** the address the server listens on (issue #33: the wizard must not offer
      addresses the server can't answer — a loopback bind kills tailnet URLs) */
   bind: string;
+  /** operator-declared front door (TRUSS_PUBLIC_URL): a reverse proxy or
+     public DNS name that forwards here. Dialability can't discover a proxy
+     from the bind, so it trusts exactly this and nothing else (audit B2). */
+  publicUrl?: string;
   tailscale: {
     installed: boolean;
     ip4?: string;
@@ -107,6 +111,8 @@ export async function tailscalePeers(): Promise<{ self?: TailscalePeer; peers: T
 
 export async function netInfo(port: number, bindHost?: string): Promise<NetInfo> {
   const out: NetInfo = { port, bind: bindHost ?? process.env.TRUSS_HOST ?? "0.0.0.0", tailscale: { installed: false }, lan: [] };
+  const pub = (process.env.TRUSS_PUBLIC_URL ?? "").trim().replace(/\/+$/, "");
+  if (pub) out.publicUrl = pub;
   for (const [name, addrs] of Object.entries(networkInterfaces())) {
     if (name === "lo") continue;
     for (const a of addrs ?? []) {
@@ -215,8 +221,10 @@ export async function tailscaleServe(on: boolean, port: number): Promise<NetInfo
      wildcard bind    → any address of this machine (loopback, LAN ips,
                         the tailnet ip/name)
      specific ip bind → that ip only (its tailnet magic-dns name aliases it)
-   …plus, on any bind, the tailscale-serve URL (serve proxies tailnet https
-   into the local port), and the port must be the server's own. */
+   …plus, on any bind: the tailscale-serve URL (serve proxies tailnet https
+   into the local port) and the operator-declared TRUSS_PUBLIC_URL (a reverse
+   proxy / DNS front door the bind can't reveal). The port must be the
+   server's own. */
 
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "::1", "localhost"]);
 const isLoopbackBind = (bind: string) => LOOPBACK_HOSTS.has(bind) || bind === "[::1]";
@@ -224,15 +232,19 @@ const isWildcardBind = (bind: string) => !bind || bind === "0.0.0.0" || bind ===
 
 export function assertDialableServerUrl(
   serverUrl: string,
-  net: { port: number; bind?: string; tailscale: NetInfo["tailscale"]; lan: string[] },
+  net: { port: number; bind?: string; publicUrl?: string; tailscale: NetInfo["tailscale"]; lan: string[] },
 ): void {
   /* the #91 syntax contract composes — garbage still dies here first */
   assertSafeServerUrl(serverUrl);
 
-  /* tailscale serve proxies the tailnet's 443 into the local port — reachable
-     on any bind */
-  const serve = net.tailscale.serveOn ? net.tailscale.serveUrl?.replace(/\/$/, "") : undefined;
-  if (serve && serverUrl.replace(/\/$/, "") === serve) return;
+  /* bind-independent answers (audit B2): tailscale serve proxies the
+     tailnet's 443 into the local port; TRUSS_PUBLIC_URL is the operator's
+     word that a proxy/DNS name forwards here — without it, proxied
+     deployments couldn't pair at all */
+  const serve = net.tailscale.serveOn ? net.tailscale.serveUrl?.replace(/\/+$/, "") : undefined;
+  if (serve && serverUrl.replace(/\/+$/, "") === serve) return;
+  const pub = net.publicUrl?.replace(/\/+$/, "");
+  if (pub && serverUrl.replace(/\/+$/, "") === pub) return;
 
   const u = new URL(serverUrl);
   const host = u.hostname; // URL() strips ipv6 brackets

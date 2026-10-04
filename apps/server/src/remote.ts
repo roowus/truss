@@ -18,7 +18,7 @@ import type { HarnessId, ProtoEvent } from "@truss/proto";
 interface AgentInfo {
   hostId: string;
   hostname: string;
-  socket: { send: (s: string) => void; close: () => void };
+  socket: { send: (s: string) => void; close: () => void; readyState?: number };
   adapters: { id: string; capabilities: HarnessAdapter["capabilities"] }[];
   /** version handshake (issue #100): the agent reports its protocol level
      and the hash of the bundle it runs — skew against the server's current
@@ -143,7 +143,13 @@ class RemoteAdapter implements HarnessAdapter {
      route, and the session resumes on its own once the agent is back. */
   private socketOrThrow(): AgentInfo["socket"] {
     const agent = agents.get(this.hostId);
-    if (!agent) throw new Error(`node-agent ${this.hostId} is offline — the prompt was NOT delivered; it will reconnect on its own, retry in a moment`);
+    /* registry membership alone is not enough (audit B6): a half-open socket
+       (CLOSING/CLOSED, heartbeat hasn't reaped it yet) swallows sends
+       silently — ws only reports failure via callback. readyState is
+       optional in the type for the test stub; a real ws always has it. */
+    if (!agent || (agent.socket.readyState !== undefined && agent.socket.readyState !== 1)) {
+      throw new Error(`node-agent ${this.hostId} is offline — the prompt was NOT delivered; it will reconnect on its own, retry in a moment`);
+    }
     return agent.socket;
   }
 
@@ -268,6 +274,19 @@ export function agentBye(hostId: string, socket?: AgentInfo["socket"]) {
     if (p.hostId !== hostId) continue;
     pendingMetrics.delete(reqId);
     p.res({ error: `node-agent ${hostId} disconnected` });
+  }
+  /* protocol-1 agents dispose every harness at close and hello with no
+     session list — their sessions can never reattach, so waiting for the
+     reconcile just leaks the queues (audit B5). Reap them at the blip, the
+     pre-handshake behavior. Protocol-2 sessions stay: the agent kept them
+     alive and its next hello reattaches. */
+  if (!agent.protocol || agent.protocol < 2) {
+    for (const [sessionId, q] of eventQueues) {
+      if (queueHost.get(sessionId) !== hostId) continue;
+      reapSession(sessionId, q, `node-agent ${hostId} disconnected`);
+    }
+    console.log(`[remote] agent ${hostId} gone (protocol 1 — its sessions were disposed at close)`);
+    return;
   }
   console.log(`[remote] agent ${hostId} away (sessions stay resumable across the blip)`);
 }

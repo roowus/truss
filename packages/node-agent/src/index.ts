@@ -78,6 +78,9 @@ let reconnectDelay = 1000;
    ECONNREFUSED loop told the user nothing; after a few tries the log names
    the cause and both fixes */
 let dialFailures = 0;
+/* the 4403 explanation prints once per revocation stretch — the hourly log
+   stays readable while the slow watch runs */
+let revokedNoted = false;
 
 /* tunnel protocol level + this bundle's identity (issue #100 version
    handshake): the bundle is this file compiled — hashing our own source at
@@ -145,6 +148,7 @@ function connect() {
     lastContact = Date.now();
     reconnectDelay = 1000;
     dialFailures = 0;
+    revokedNoted = false;
     sendFrame({
       type: "hello",
       hostId: HOST_ID,
@@ -286,9 +290,14 @@ function connect() {
        the user can't act on every 15s (issue #100). Explain once, then keep
        a slow watch — an admin un-revoking lets it reconnect on its own. */
     if (code === 4403) {
-      console.log(
-        "[node-agent] the server refuses this host's token (revoked or rotated) — fix it in the host panel (rotate/enable), update ~/.truss/agent-*.env, restart the agent. Checking again every 60s.",
-      );
+      if (!revokedNoted) {
+        revokedNoted = true;
+        console.log(
+          "[node-agent] the server refuses this host's token (revoked or rotated) — fix it in the host panel (rotate/enable), update ~/.truss/agent-*.env, restart the agent. Checking again every 60s.",
+        );
+      } else {
+        console.log("[node-agent] still refused (4403); next check in 60s");
+      }
       setTimeout(connect, 60000);
       return;
     }

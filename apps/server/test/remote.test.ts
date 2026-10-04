@@ -181,3 +181,48 @@ test("a replaced connection's stale close cannot reap the new registration", asy
     cleanup();
   }
 });
+
+test("protocol-1 agents reap their sessions at disconnect; protocol-2 sessions wait for reattach (audit B5)", async () => {
+  const { cleanup } = await freshServer("rem-proto-reap");
+  try {
+    const remote = await import("../src/remote.js");
+    let adapter: any = null;
+    const gone: string[] = [];
+    remote.wireRemoteRegistry({
+      register: (id, a) => {
+        adapter = a;
+      },
+      unregister: () => {},
+      sessionGone: (id) => void gone.push(id),
+    });
+
+    const spawnOn = async (host: string, socket: ReturnType<typeof fakeSocket>, sid: string, meta?: { protocol: number }) => {
+      const sent = (socket as any).__sent ?? [];
+      remote.agentHello(host, `${host}-host`, [{ id: "pi", capabilities: CAPS }], socket, meta as never);
+      const p = adapter.spawn({ sessionId: sid, cwd: "/tmp" });
+      const frame = JSON.parse(sent[sent.length - 1]) as { reqId: string };
+      remote.agentFrame(host, { type: "spawned", reqId: frame.reqId, ok: true });
+      await p;
+    };
+
+    /* protocol 1 (hello carried no version handshake): its sessions died with
+       the tunnel — reap at the blip, the pre-#100 behavior */
+    const s1sent: string[] = [];
+    const s1 = fakeSocket(s1sent);
+    (s1 as any).__sent = s1sent;
+    await spawnOn("h-p1", s1, "s-p1");
+    remote.agentBye("h-p1", s1);
+    assert.deepEqual(gone, ["s-p1"], "protocol-1 session reaped at the blip");
+
+    /* protocol 2: the agent kept the harness alive — nothing reaps until the
+       next hello's reconcile */
+    const s2sent: string[] = [];
+    const s2 = fakeSocket(s2sent);
+    (s2 as any).__sent = s2sent;
+    await spawnOn("h-p2", s2, "s-p2", { protocol: 2 });
+    remote.agentBye("h-p2", s2);
+    assert.deepEqual(gone, ["s-p1"], "protocol-2 session survives the blip");
+  } finally {
+    cleanup();
+  }
+});

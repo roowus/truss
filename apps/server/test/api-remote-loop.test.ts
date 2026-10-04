@@ -74,9 +74,11 @@ async function connectAgent(host: string, token: string, opts: { adapters?: { id
     type: "hello",
     hostname: `remote-${host}`,
     adapters: opts.adapters ?? [{ id: "pi", capabilities: { permissions: false, subagents: false, streaming: true, queueWhileRunning: true } }],
-    /* protocol-2 reattach handshake — present only when the test passes a
-       session list (the default exercises the legacy protocol-1 shape) */
-    ...(opts.sessions ? { sessions: opts.sessions, protocol: 2 } : {}),
+    /* protocol-2 reattach handshake (sessions defaults to empty: nothing
+       survived a previous connection). Protocol-1 agents are covered by the
+       unit pin in remote.test.ts. */
+    sessions: opts.sessions ?? [],
+    protocol: 2,
   });
   return { ws, received, send, close: () => ws.close() };
 }
@@ -273,6 +275,17 @@ test("a tunnel blip wipes NOTHING: sessions survive offline, sends fail loudly, 
     const s = await api(`/api/sessions/${sidA}`);
     return s.body.session.state === "error" || null;
   }, "A's session erroring at reconcile");
+
+  /* audit B1 regression: a prompt into the reaped session must NOT vanish —
+     before forgetLive, the stale live entry answered 200 while the agent
+     (which no longer knows the session) no-oped the send: a ghost turn */
+  const ghost2 = await api(`/api/sessions/${sidA}/prompt`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ text: "anyone home?" }),
+  });
+  assert.equal(ghost2.status, 409, "the lost session refuses loudly (never 200-and-vanish)");
+  assert.ok(!a2.received.some((m) => m.type === "send" && m.text === "anyone home?"), "no send frame reached the agent");
   a2.close();
 
   B.agent.close();
@@ -348,7 +361,11 @@ test("revoking a host kills its channel and future connects get 4403", async () 
 
   await api(`/api/hosts/${hostId}/revoke`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ revoked: true }) });
 
-  /* existing socket may linger until close; a NEW connect must be refused */
+  /* audit B4 pin: revoke drops the LIVE channel itself (issue #100 item 11)
+     — the test does not close the socket; the server must */
+  await waitFor(async () => !(await api("/api/hosts")).body.hosts.find((h: { id: string }) => h.id === hostId)?.online || null, "server dropped the live channel on revoke");
+
+  /* a NEW connect must be refused */
   a1.close();
   await new Promise((r) => setTimeout(r, 50));
   const ws = new WebSocket(`${srv.wsBase}/agent/connect?host=${hostId}&token=${encodeURIComponent(token)}`);
@@ -365,4 +382,43 @@ test("revoking a host kills its channel and future connects get 4403", async () 
     ws2.onerror = () => {};
   });
   assert.equal(code2, 4403, "env token cannot bypass revocation");
+});
+
+test("rotating a host's token drops its live channel too (audit B4, item 11)", async () => {
+  const c = await api("/api/hosts", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ label: "rotate rig" }) });
+  const hostId = c.body.host.id as string;
+  const a1 = await connectAgent(hostId, c.body.token);
+  await waitFor(async () => (await api("/api/hosts")).body.hosts.find((h: { id: string }) => h.id === hostId)?.online || null, "online");
+
+  const rot = await api(`/api/hosts/${hostId}/token`, { method: "POST" });
+  assert.equal(rot.status, 200, "rotate lands");
+
+  /* the test never closes the socket — the server must (the old token died) */
+  await waitFor(async () => !(await api("/api/hosts")).body.hosts.find((h: { id: string }) => h.id === hostId)?.online || null, "server dropped the live channel on rotate");
+  a1.close();
+});
+
+test("protocol-2 auth: the token rides the Authorization header, not the query (audit B3, item 13)", async () => {
+  /* node's built-in WebSocket can't set headers — ws can (devDependency) */
+  const { default: WS } = await import("ws");
+  const c = await api("/api/hosts", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ label: "header rig" }) });
+  const hostId = c.body.host.id as string;
+  const token = c.body.token as string;
+
+  const ws = new WS(`${srv.wsBase}/agent/connect?host=${hostId}`, { headers: { authorization: `Bearer ${token}` } });
+  await new Promise<void>((res, rej) => {
+    ws.on("open", () => res());
+    ws.on("error", rej);
+  });
+  ws.send(JSON.stringify({ type: "hello", hostname: "header-host", adapters: [], protocol: 2, sessions: [] }));
+  await waitFor(async () => (await api("/api/hosts")).body.hosts.find((h: { id: string }) => h.id === hostId)?.online || null, "header-auth hello registered");
+  ws.close();
+
+  /* a WRONG bearer must not pass even with a valid query token absent */
+  const bad = new WS(`${srv.wsBase}/agent/connect?host=${hostId}`, { headers: { authorization: "Bearer nope" } });
+  const code = await new Promise<number>((res) => {
+    bad.on("close", (c2) => res(c2));
+    bad.on("error", () => {});
+  });
+  assert.equal(code, 4403, "bad bearer refused");
 });
