@@ -3,7 +3,7 @@ import { store, useApp } from "@/lib/store";
 import { ago, until } from "@/lib/format";
 import { peerAlreadyAdded } from "@/lib/device";
 import { dropInstructionLabel } from "@/lib/installInstruction";
-import { buildInstallCommand } from "@/lib/installCommand";
+import { buildInstallCommand, agentRunCommand } from "@/lib/installCommand";
 import { reachableAddresses, reachableTailscaleReturn } from "@/lib/reachability";
 import type { DeliveryOption, NetInfo, TailscalePeer } from "@/lib/proto";
 import { Btn, Icon, Select, Spinner } from "./ui";
@@ -395,6 +395,17 @@ export function AddHostWizard({ onClose }: { onClose: () => void }) {
                 <Spinner size={20} />
                 <h3 className="mt-3 text-[14px] font-medium text-[var(--t-fg)]">Waiting for {label}…</h3>
                 <p className="mt-1 text-[11.5px] text-[var(--t-dim)]">The agent dials out to this server, so no inbound ports or firewall holes are needed. This page flips the moment it connects.</p>
+                {/* no systemd on the remote (macOS): the installer only laid
+                    the files down — the run command must be HERE, not just in
+                    the installer's stdout (issue #100, found in manual test) */}
+                <div className="mt-4 rounded-lg border border-[var(--t-line)] bg-[var(--t-bg0)] p-3 text-left">
+                  <p className="text-[11.5px] text-[var(--t-mute)] leading-relaxed">No systemd on the remote (macOS)? The installer doesn't start anything there — run the agent yourself:</p>
+                  <div className="mt-2 font-mono text-[11px] leading-relaxed text-[var(--t-fg2)] break-all select-all">{agentRunCommand(created.id)}</div>
+                  <div className="mt-2 flex justify-end">
+                    <Btn size="xs" variant="outline" icon="copy" onClick={() => { void navigator.clipboard.writeText(agentRunCommand(created.id)); store.toast("ok", "Copied", "run it on the remote host"); }}>Copy</Btn>
+                  </div>
+                  <p className="mt-1 text-[10.5px] text-[var(--t-dim)] leading-relaxed">It stays in the foreground on purpose — it <i>is</i> the service. Give it its own terminal tab (or append <span className="font-mono">&amp;</span> to background it); Ctrl+C stops it.</p>
+                </div>
                 <div className="mt-4 flex justify-center gap-2">
                   <Btn variant="ghost" onClick={() => setStep(2)}>Back to the command</Btn>
                   <Btn variant="outline" onClick={onClose}>Finish later</Btn>

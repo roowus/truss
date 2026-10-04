@@ -4,6 +4,7 @@ import { store, useApp, useNow } from "@/lib/store";
 import { desktops, useDesktops, type HostPreference } from "@/lib/desktops";
 import { ago, harnessStyle, hostOf, shortPath } from "@/lib/format";
 import { openPanel, renameHostPanels } from "@/lib/workspace";
+import { agentRunCommand } from "@/lib/installCommand";
 import { Btn, HarnessMark, Icon, Select, StateDot } from "@/components/ui";
 import { cn } from "@/utils/cn";
 
@@ -100,7 +101,7 @@ export function HostPanel({ params }: IDockviewPanelProps<{ hostId: string }>) {
           /* issue #100: re-running the frozen env recirculates a dead address
              forever, undetected — the banner now names that failure mode */
           <div className="mt-5 rounded-lg border border-[var(--t-line2)] bg-[var(--t-bg0)] px-3 py-2.5 text-[12px] text-[var(--t-mute)] leading-relaxed">
-            Offline. On the host: <span className="font-mono text-[var(--t-fg2)]">set -a; . ~/.truss/agent-{hostId}.env; set +a; node ~/.truss/node-agent.mjs</span>
+            Offline. On the host: <span className="font-mono text-[var(--t-fg2)]">{agentRunCommand(hostId)}</span>
             {host.revoked && <span className="text-[var(--t-red)]"> — its token is revoked; rotate it below to allow reconnection.</span>}
             {" If the agent's log loops connection refused, the env file's frozen address is one this server can't answer — re-copy a fresh install command from the add-host wizard instead of re-running the old env."}
           </div>

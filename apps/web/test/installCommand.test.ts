@@ -118,3 +118,13 @@ test("SHELL ROUND-TRIP: the pasted line works under failglob (= zsh's default), 
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("agentRunCommand: the wizard's waiting step and the host panel share one string (issue #100 manual test)", async () => {
+  /* the installer prints the run command to the remote's stdout, but a
+     systemd-less host (macOS) starts nothing — the wizard must SHOW it */
+  const mod = await load();
+  assert.ok(mod, "installCommand module must exist (see module test)");
+  const run = (mod as unknown as { agentRunCommand(h: string): string }).agentRunCommand("3139d6c3");
+  assert.equal(run, "set -a; . ~/.truss/agent-3139d6c3.env; set +a; node ~/.truss/node-agent.mjs");
+  assert.ok(!/[?*$`()[\]<>]/.test(run), "no glob/expansion metacharacters — zsh-safe like the install command (the semicolons are the intended separators)");
+});
