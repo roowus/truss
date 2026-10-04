@@ -31,6 +31,12 @@ export interface AgentInfo {
   hostId: string;
   hostname: string;
   adapters: string[];
+  /** version handshake (issue #100): protocol level + the agent's bundle
+     hash; bundleCurrent compares it against the server's current build
+     (undefined when either side predates the handshake) */
+  protocol?: number;
+  bundleHash?: string;
+  bundleCurrent?: boolean;
 }
 
 export interface SessionMeta {

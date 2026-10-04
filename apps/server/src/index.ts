@@ -245,18 +245,18 @@ app.get("/agent/connect", { websocket: true }, (socket, req) => {
   });
 });
 
-app.get("/api/agents", async () => {
+/* installed agents never auto-update (issue #100 item 18) — but the skew is
+   now VISIBLE: each agent's self-reported bundle hash against the one this
+   server builds right now */
+function decoratedAgents() {
   const current = agentBundleHash();
-  return {
-    agents: listAgents().map((a) => ({
-      ...a,
-      /* installed agents never auto-update (issue #100 item 18) — but now
-         the skew is at least VISIBLE: the agent's bundle hash vs the one
-         this server builds right now */
-      bundleCurrent: !current || !a.bundleHash ? undefined : a.bundleHash === current,
-    })),
-  };
-});
+  return listAgents().map((a) => ({
+    ...a,
+    bundleCurrent: !current || !a.bundleHash ? undefined : a.bundleHash === current,
+  }));
+}
+
+app.get("/api/agents", async () => ({ agents: decoratedAgents() }));
 
 /* ── network reachability + the agent installer ── */
 app.get("/api/net", async () => netInfo(PORT));
@@ -467,12 +467,13 @@ app.get("/api/metrics", async () => {
 
 /* ── registered remote hosts (registry + per-host tokens) ── */
 app.get("/api/hosts", async () => {
-  const live = new Set(listAgents().map((a) => a.hostId));
+  const agentsNow = decoratedAgents();
+  const live = new Set(agentsNow.map((a) => a.hostId));
   return {
     hosts: listHosts().map((h) => ({
       ...h,
       online: live.has(h.id),
-      agent: listAgents().find((a) => a.hostId === h.id),
+      agent: agentsNow.find((a) => a.hostId === h.id),
     })),
   };
 });
