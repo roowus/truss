@@ -27,7 +27,7 @@ import { MonitorPanel } from "@/panels/MonitorPanel";
 import { HostPanel } from "@/panels/HostPanel";
 import { SettingsPanel } from "@/panels/SettingsPanel";
 import { DesktopStrip } from "./DesktopStrip";
-import { chromeTabLayout, type ChromeTabView } from "@/lib/chromeTabs";
+import { chromeTabLayout, chromeTabsAvailableWidth, type ChromeTabView } from "@/lib/chromeTabs";
 import { tabClosePlacement } from "@/lib/tabClose";
 import { TabPicker } from "./TabPicker";
 import { Btn, Icon, StateDot, TrussLogo } from "./ui";
@@ -72,6 +72,8 @@ function TrussTab({ api, params }: IDockviewPanelHeaderProps<{ sessionId?: strin
   /* active (focused) tab — an ultra-cramped strip shows an X only here
      (hover-revealed); inactive slivers get none */
   const [active, setActive] = useState(api.isActive);
+  const activeRef = useRef(active);
+  activeRef.current = active;
   useEffect(() => {
     setActive(api.isActive);
     const d = api.onDidActiveChange?.(() => setActive(api.isActive));
@@ -87,11 +89,18 @@ function TrussTab({ api, params }: IDockviewPanelHeaderProps<{ sessionId?: strin
      one included — and that one uniform width decides the title and the
      close X (the Chrome matrix). The verdict is a pure function of strip
      width × tab count, never of the X's mode or the title's length, so it
-     cannot oscillate and needs no hysteresis. Re-resolved on strip resize,
-     tab add/remove, drags between strips (observers re-attach), and active
-     flips. */
+     cannot oscillate and needs no hysteresis.
+
+     The width fed to it must be EXOGENOUS: the header row minus its fixed
+     action trays. Dockview content-sizes the tabs container itself
+     (flex: 0 1 auto beside a flex-grow void), so measuring that container
+     while also writing tab widths into it is a feedback loop that ratcheted
+     every tab narrower on each click (the round-2 bug). We therefore
+     observe the header for resizes (sash/window) and the strip's childList
+     only for tab add/remove — never the strip's own width. */
   const rootRef = useRef<HTMLDivElement>(null);
   const [view, setView] = useState<ChromeTabView>({ showTitle: true, showClose: "always", closeOverIcon: false });
+  const measureRef = useRef<() => void>(() => {});
   useEffect(() => {
     const tab = rootRef.current?.closest(".dv-tab") as HTMLElement | null;
     if (!tab) return;
@@ -100,15 +109,22 @@ function TrussTab({ api, params }: IDockviewPanelHeaderProps<{ sessionId?: strin
     let observed: Element | null = null;
     const measure = () => {
       const strip = tab.closest(".dv-tabs-container");
-      if (!strip) return;
+      const header = tab.closest(".dv-tabs-and-actions-container");
+      if (!strip || !header) return;
       const tabEls = [...strip.querySelectorAll(".dv-tab")] as HTMLElement[];
       const self = tabEls.indexOf(tab);
       if (self < 0) return;
+      const stripWidth = chromeTabsAvailableWidth(
+        header.clientWidth,
+        [...header.querySelectorAll(":scope > .dv-pre-actions-container, :scope > .dv-left-actions-container, :scope > .dv-right-actions-container")].map(
+          (el) => (el as HTMLElement).offsetWidth,
+        ),
+      );
       const layout = chromeTabLayout({
-        stripWidth: strip.clientWidth,
+        stripWidth,
         tabs: tabEls.map((el, i) => ({
           id: String(i),
-          active: i === self ? active : el.classList.contains("dv-active-tab"),
+          active: i === self ? activeRef.current : el.classList.contains("dv-active-tab"),
         })),
       });
       /* uniform width straight onto the dockview tab element — every tab
@@ -117,17 +133,19 @@ function TrussTab({ api, params }: IDockviewPanelHeaderProps<{ sessionId?: strin
       tab.style.flex = "0 0 auto";
       setView(layout.perTab[String(self)]);
     };
+    measureRef.current = measure;
     const attach = () => {
+      const header = tab.closest(".dv-tabs-and-actions-container");
       const strip = tab.closest(".dv-tabs-container");
-      if (strip === observed) return;
+      if (!header || header === observed) return;
       ro?.disconnect();
       mo?.disconnect();
-      observed = strip;
+      observed = header;
+      ro = new ResizeObserver(measure);
+      ro.observe(header);
       if (strip) {
-        ro = new ResizeObserver(measure);
-        ro.observe(strip);
         mo = new MutationObserver(() => {
-          if (tab.closest(".dv-tabs-container") !== observed) attach();
+          if (tab.closest(".dv-tabs-and-actions-container") !== observed) attach();
           measure();
         });
         mo.observe(strip, { childList: true });
@@ -138,9 +156,15 @@ function TrussTab({ api, params }: IDockviewPanelHeaderProps<{ sessionId?: strin
     return () => {
       ro?.disconnect();
       mo?.disconnect();
+      measureRef.current = () => {};
       tab.style.width = "";
       tab.style.flex = "";
     };
+  }, []);
+  /* active flips change only the X's mode (width is active-independent) —
+     re-measure without re-attaching the observers */
+  useEffect(() => {
+    measureRef.current();
   }, [active]);
   return (
     <div
@@ -166,7 +190,8 @@ function TrussTab({ api, params }: IDockviewPanelHeaderProps<{ sessionId?: strin
       >
         <Icon name={KIND_ICON[kind] ?? "layout"} size={12} />
       </span>
-      {view.showTitle && <span className="truncate min-w-0 max-w-[200px]">{title}</span>}
+      {/* the tab's name, fading out at the cut when it overflows (Chrome-style, no ellipsis) */}
+      {view.showTitle && <span className="min-w-0 overflow-hidden whitespace-nowrap t-fade-r">{title}</span>}
       {view.showTitle && meta && kind === "chat" && <StateDot state={meta.state} size={6} />}
       {view.showTitle && pending > 0 && (
         <span className="inline-flex items-center gap-0.5 min-w-4 h-4 px-1 rounded-full bg-[var(--t-amber)] text-[#1b1305] text-[9.5px] font-bold t-pulse-soft shrink-0" title={`${pending} permission request(s) waiting`}>

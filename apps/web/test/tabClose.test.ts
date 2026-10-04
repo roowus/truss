@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { tabClosePlacement } from "../src/lib/tabClose";
-import { chromeTabLayout, CHROME_TAB_ICON, CHROME_TAB_MAX, CHROME_TAB_TITLE_MIN } from "../src/lib/chromeTabs";
+import { chromeTabLayout, chromeTabsAvailableWidth, CHROME_TAB_ICON, CHROME_TAB_MAX, CHROME_TAB_TITLE_MIN } from "../src/lib/chromeTabs";
 
 /* The X's PLACEMENT contract over the Chrome-parity layout (issue #95).
    chromeTabs.test.ts pins the width/visibility matrix; this file pins where
@@ -72,4 +72,16 @@ test("invariant sweep: the X NEVER sits on title text; over-the-icon only at sli
       }
     }
   }
+});
+
+test("strip width comes from the header minus its action trays, never the content-sized tabs container (round-2 regression)", () => {
+  /* dockview content-sizes .dv-scrollable (flex: 0 1 auto beside a flex-grow
+     void): measuring IT while writing tab widths into it fed back on itself
+     and ratcheted every tab narrower on each click. The exogenous source is
+     the header row minus the fixed trays ("+" / maximize buttons). */
+  assert.equal(chromeTabsAvailableWidth(810, [0, 0, 56]), 754);
+  assert.equal(chromeTabsAvailableWidth(810, []), 810, "no trays: the whole header is tab space");
+  assert.equal(chromeTabsAvailableWidth(40, [56]), 0, "trays wider than the header clamp to 0, never negative");
+  assert.equal(chromeTabsAvailableWidth(0, [0]), 0, "hidden strip: 0 in, 0 out");
+  assert.equal(chromeTabsAvailableWidth(Number.NaN, [Number.NaN]), 0, "non-finite measurements degrade to 0, never NaN");
 });

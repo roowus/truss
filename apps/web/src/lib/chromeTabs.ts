@@ -51,6 +51,20 @@ export interface ChromeTabView {
   closeOverIcon: boolean;
 }
 
+/**
+ * The width a strip's tabs may occupy: the header row minus its fixed
+ * action trays (the "+" / maximize buttons), never negative. The UI must
+ * measure THIS — never the tabs container's own width. Dockview
+ * content-sizes that container (flex: 0 1 auto next to a flex-grow void),
+ * so reading it while also writing tab widths into it is a feedback loop
+ * that ratchets the strip narrower on every click.
+ */
+export function chromeTabsAvailableWidth(headerWidth: number, trayWidths: number[]): number {
+  let w = Number.isFinite(headerWidth) ? headerWidth : 0;
+  for (const t of trayWidths) w -= Number.isFinite(t) ? t : 0;
+  return Math.max(0, w);
+}
+
 export function chromeTabLayout(input: { stripWidth: number; tabs: ChromeTabInput[] }): {
   width: number;
   perTab: Record<string, ChromeTabView>;

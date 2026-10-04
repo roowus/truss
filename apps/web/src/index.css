@@ -109,6 +109,11 @@ body {
 .truss-dock .dv-watermark { background: var(--t-bg1); }
 
 /* ---------------- utilities ---------------- */
+/* text that fades out at its right cut instead of an ellipsis (tab titles) */
+.t-fade-r {
+  mask-image: linear-gradient(to right, black calc(100% - 14px), transparent 100%);
+  -webkit-mask-image: linear-gradient(to right, black calc(100% - 14px), transparent 100%);
+}
 .t-scroll { scrollbar-width: thin; scrollbar-color: var(--t-line2) transparent; }
 .t-scroll::-webkit-scrollbar { width: 9px; height: 9px; }
 .t-scroll::-webkit-scrollbar-thumb { background: var(--t-line2); border-radius: 9px; border: 2px solid transparent; background-clip: content-box; }
