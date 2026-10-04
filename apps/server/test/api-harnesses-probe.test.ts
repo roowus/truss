@@ -74,4 +74,18 @@ test("GET /api/harnesses stays read-only; POST /api/harnesses/probe probes empty
   );
   await new Promise((r) => setTimeout(r, 100));
   assert.deepEqual(probes.sort(), ["dsh", "hermes"], "the ask reaches every empty probeable adapter once");
+
+  /* audit round 3: text/plain is CORS-safelisted (no preflight) and fastify 5
+     parses it by default, so without the content-type gate a cross-site form
+     POST could still fire the probe */
+  const asForm = await fetch(`${srv.base}/api/harnesses/probe`, {
+    method: "POST",
+    headers: { "content-type": "text/plain" },
+    body: "{}",
+  });
+  assert.equal(asForm.status, 415, "non-JSON content types are refused");
+  const noType = await fetch(`${srv.base}/api/harnesses/probe`, { method: "POST" });
+  assert.equal(noType.status, 415, "a missing content type is refused");
+  await new Promise((r) => setTimeout(r, 100));
+  assert.deepEqual(probes.sort(), ["dsh", "hermes"], "refused requests never probe");
 });
