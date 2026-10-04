@@ -67,10 +67,16 @@ test("pinAffordance: pinned = solid + always-visible + unpin action; unpinned = 
 test("one descriptor per row — the indicator and the button are the same element", async () => {
   const mod = await loadAffordance();
   assert.ok(mod, "pinAffordance module must exist (see affordance test)");
-  /* structural: the function returns ONE descriptor, so a row can only ever
-     render one pin affordance — the two-glyph row can't come back */
-  assert.ok(!Array.isArray(mod.pinAffordance(true)), "singular");
-  assert.ok(!Array.isArray(mod.pinAffordance(false)), "singular");
+  /* structural: the function returns ONE fixed-shape descriptor, so a row
+     can only ever render one pin affordance — the two-glyph row can't come
+     back (hardened in PR #102 audit round 1: the issue's Array.isArray
+     asserts were trivially true for any object return) */
+  for (const d of [mod.pinAffordance(true), mod.pinAffordance(false)]) {
+    assert.deepEqual(Object.keys(d).sort(), ["actionLabel", "icon", "visible"], "singular: one descriptor, no parallel affordances");
+    assert.ok(d.icon === "pin" || d.icon === "pinSolid", "icon is one of the honest pair");
+    assert.ok(d.visible === "always" || d.visible === "hover", "visibility is always or hover");
+    assert.equal(typeof d.actionLabel, "string");
+  }
 });
 
 test("the icon registry ships honest solid + outline pins", async () => {
