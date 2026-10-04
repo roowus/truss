@@ -99,7 +99,8 @@ export interface FeedItem {
 }
 
 /* broadcast-only (feed/todos persist in their own tables; replay = REST) */
-export interface TodoUpsert {  type: "todo.upsert";
+export interface TodoUpsert {
+  type: "todo.upsert";
   sessionId: string; // owner session or "" — carried for the frame shape only
   todo: TodoItem;
 }

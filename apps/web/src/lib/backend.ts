@@ -51,7 +51,9 @@ export interface TerminalConn {
 export interface Backend {
   mode: "live" | "demo";
   /** probe: ask the server to one-shot-probe lazy adapters whose catalog is
-     empty (first boot, issue #101) — only the New Session dialog passes it */
+     empty (first boot, issue #101) — only the New Session dialog passes it.
+     Probing rides a POST (JSON body → preflight → not cross-site
+     triggerable), never a GET param. */
   harnesses(opts?: { probe?: boolean }): Promise<HarnessesResp>;
   agents(): Promise<{ agents: AgentInfo[] }>;
   listSessions(): Promise<{ sessions: SessionMeta[] }>;
@@ -192,7 +194,7 @@ const wsUrl = (path: string) =>
 export function createLiveBackend(): Backend {
   return {
     mode: "live",
-    harnesses: (opts) => req("GET", opts?.probe ? "/api/harnesses?probe=1" : "/api/harnesses"),
+    harnesses: (opts) => (opts?.probe ? req("POST", "/api/harnesses/probe", {}) : req("GET", "/api/harnesses")),
     agents: () => req<{ agents: AgentInfo[] }>("GET", "/api/agents"),
     listSessions: () => req("GET", "/api/sessions"),
     createSession: (b) => req("POST", "/api/sessions", b),

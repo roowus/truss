@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
 import type { AdapterHandle, HarnessAdapter, SessionOpts } from "./types.js";
 import { resolveCwd } from "./types.js";
-import { readCatalogCache, writeCatalogCache, type CatalogModel } from "./model-catalog-cache.js";
+import { lazyCatalog, type CatalogModel } from "./model-catalog-cache.js";
 import {
   AcpClient,
   beginAcpTurn,
@@ -112,50 +112,19 @@ function parseModelOptions(opts: AcpConfigOption[] | undefined): CatalogModel[] 
 
 /* same lazy-discovery shape as hermes (issue #101): the catalog arrives with
    session/new's configOptions and lived in module memory only, so a restart
-   emptied the picker until the first session boot. Persist + hydrate. */
-const CATALOG_KV_KEY = "models:dsh";
-
-let discoveredModels: CatalogModel[] = readCatalogCache(CATALOG_KV_KEY);
-
-function setDiscovered(models: CatalogModel[]) {
-  discoveredModels = models;
-  writeCatalogCache(CATALOG_KV_KEY, models);
-}
-
-/* first boot on a fresh server: probe once in the background (throwaway
-   session, no MCP servers, closed again) so the picker fills without waiting
-   for somebody to spawn — see the hermes adapter for the same dance. dsh's
-   boot pays its plugin stack (seconds), which is exactly why this must stay
-   out of the picker request's path. */
-let probeInflight: Promise<boolean> | null = null;
-let lastProbeAt = 0;
-const PROBE_COOLDOWN_MS = 30_000;
-
-async function probeModels(): Promise<boolean> {
-  if (discoveredModels.length) return false;
-  if (probeInflight) return probeInflight;
-  if (Date.now() - lastProbeAt < PROBE_COOLDOWN_MS) return false;
-  lastProbeAt = Date.now();
-  probeInflight = (async () => {
-    try {
-      await client.ensure();
-      const res = (await client.call("session/new", { cwd: homedir(), mcpServers: [] })) as {
-        sessionId: string;
-        configOptions?: AcpConfigOption[];
-      };
-      await client.call("session/close", { sessionId: res.sessionId }).catch(() => undefined);
-      const models = parseModelOptions(res.configOptions);
-      if (!models.length) return false;
-      setDiscovered(models);
-      return true;
-    } catch {
-      return false; /* no dsh here — the picker stays on "harness default" */
-    } finally {
-      probeInflight = null;
-    }
-  })();
-  return probeInflight;
-}
+   emptied the picker until the first session boot. The shared lazyCatalog
+   persists every discovery, hydrates on load, and probes on first boot.
+   dsh's boot pays its plugin stack (seconds), which is exactly why the probe
+   must stay out of the picker request's path. */
+const catalog = lazyCatalog("models:dsh", async () => {
+  await client.ensure();
+  const res = (await client.call("session/new", { cwd: homedir(), mcpServers: [] })) as {
+    sessionId: string;
+    configOptions?: AcpConfigOption[];
+  };
+  await client.call("session/close", { sessionId: res.sessionId }).catch(() => undefined);
+  return parseModelOptions(res.configOptions);
+});
 
 function handleServerMessage(h: AcpSessionState, rec: { method?: string; params?: Record<string, unknown>; id?: string | number }) {
   const sid = h.sessionId;
@@ -185,10 +154,10 @@ export const dshAdapter: HarnessAdapter = {
   capabilities: { permissions: true, subagents: false, streaming: true, queueWhileRunning: false },
 
   async listModels() {
-    return discoveredModels;
+    return catalog.list();
   },
 
-  probeModels,
+  probeModels: catalog.probe,
 
   async spawn(opts: SessionOpts): Promise<AcpSessionState> {
     await client.ensure();
@@ -213,7 +182,7 @@ export const dshAdapter: HarnessAdapter = {
     }
 
     const models = parseModelOptions(res.configOptions);
-    if (models.length) setDiscovered(models);
+    if (models.length) catalog.set(models);
 
     const model = models.find((m) => m.model === opts.model)?.label ?? opts.model ?? "deepseek";
 

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { store, useApp } from "@/lib/store";
 import { useDesktops } from "@/lib/desktops";
 import { harnessStyle, hostOf, shortPath } from "@/lib/format";
@@ -39,11 +39,16 @@ export function NewSessionDialog({ onClose, preset }: { onClose: () => void; pre
      yet and the picker would show only "harness default" (issue #101). Ask
      the server for a one-shot probe when any harness's picker is empty; the
      filled catalog lands via the models.updated broadcast and a refetch.
-     Runs once per dialog open — the server guards repeat probes. */
+     The ref fires it at most once per dialog open; the harnesses dep covers
+     the mount-before-boot-fetch race (audit round 1) without re-firing on
+     every models update. */
+  const probedRef = useRef(false);
   useEffect(() => {
-    if (harnesses.some((h) => !models.some((m) => m.harness === h.id))) void store.refreshHarnesses(true);
-    // run-once on mount; latest harnesses/models are not the trigger
-  }, []);
+    if (probedRef.current || !harnesses.length) return;
+    if (!harnesses.some((h) => !models.some((m) => m.harness === h.id))) return;
+    probedRef.current = true;
+    void store.refreshHarnesses(true);
+  }, [harnesses, models]);
 
   const hModels = models.filter((m) => m.harness === harness);
   useEffect(() => setModel(hModels[0] ? `${hModels[0].provider}/${hModels[0].model}` : ""), [harness, models.length]);

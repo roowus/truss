@@ -2,7 +2,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type { AdapterHandle, HarnessAdapter, SessionOpts } from "./types.js";
 import { resolveCwd } from "./types.js";
-import { readCatalogCache, writeCatalogCache, type CatalogModel } from "./model-catalog-cache.js";
+import { lazyCatalog, type CatalogModel } from "./model-catalog-cache.js";
 import {
   AcpClient,
   beginAcpTurn,
@@ -59,16 +59,18 @@ interface HermesModelState {
 
 /* the picker catalog is lazy: hermes reports it only in session/new and
    session/resume responses, kept in module memory — a server restart emptied
-   the picker until the next session booted (issue #101). Persist every
-   discovery and hydrate on load. */
-const CATALOG_KV_KEY = "models:hermes";
-
-let discoveredModels: CatalogModel[] = readCatalogCache(CATALOG_KV_KEY);
-
-function setDiscovered(models: CatalogModel[]) {
-  discoveredModels = models;
-  writeCatalogCache(CATALOG_KV_KEY, models);
-}
+   the picker until the next session booted (issue #101). The shared
+   lazyCatalog persists every discovery, hydrates on load, and probes on
+   first boot (one throwaway session/new, no MCP servers, closed again). */
+const catalog = lazyCatalog("models:hermes", async () => {
+  await client.ensure();
+  const res = (await client.call("session/new", { cwd: homedir(), mcpServers: [] })) as {
+    sessionId: string;
+    models?: HermesModelState;
+  };
+  await client.call("session/close", { sessionId: res.sessionId }).catch(() => undefined);
+  return mapModels(res.models);
+});
 
 function mapModels(state: HermesModelState | undefined): CatalogModel[] {
   return (state?.availableModels ?? []).map((m) => ({
@@ -76,41 +78,6 @@ function mapModels(state: HermesModelState | undefined): CatalogModel[] {
     model: m.modelId,
     label: m.name ?? m.modelId,
   }));
-}
-
-/* First boot on a fresh server: nothing discovered, nothing persisted — the
-   picker would sit empty until somebody spawns a session. Probe instead: one
-   throwaway session/new with no MCP servers, harvest the model state, close
-   it again. Concurrent picker fetches share one in-flight probe, and a
-   missing/wedged harness isn't re-probed on every fetch. */
-let probeInflight: Promise<boolean> | null = null;
-let lastProbeAt = 0;
-const PROBE_COOLDOWN_MS = 30_000;
-
-async function probeModels(): Promise<boolean> {
-  if (discoveredModels.length) return false;
-  if (probeInflight) return probeInflight;
-  if (Date.now() - lastProbeAt < PROBE_COOLDOWN_MS) return false;
-  lastProbeAt = Date.now();
-  probeInflight = (async () => {
-    try {
-      await client.ensure();
-      const res = (await client.call("session/new", { cwd: homedir(), mcpServers: [] })) as {
-        sessionId: string;
-        models?: HermesModelState;
-      };
-      await client.call("session/close", { sessionId: res.sessionId }).catch(() => undefined);
-      const models = mapModels(res.models);
-      if (!models.length) return false;
-      setDiscovered(models);
-      return true;
-    } catch {
-      return false; /* no hermes here — the picker stays on "harness default" */
-    } finally {
-      probeInflight = null;
-    }
-  })();
-  return probeInflight;
 }
 
 function handleServerMessage(
@@ -141,10 +108,10 @@ export const hermesAdapter: HarnessAdapter = {
   capabilities: { permissions: true, subagents: false, streaming: true, queueWhileRunning: false },
 
   async listModels() {
-    return discoveredModels;
+    return catalog.list();
   },
 
-  probeModels,
+  probeModels: catalog.probe,
 
   async spawn(opts: SessionOpts): Promise<AcpSessionState> {
     await client.ensure();
@@ -169,7 +136,7 @@ export const hermesAdapter: HarnessAdapter = {
       };
     }
 
-    if (res.models?.availableModels?.length) setDiscovered(mapModels(res.models));
+    if (res.models?.availableModels?.length) catalog.set(mapModels(res.models));
 
     const model = opts.model ?? res.models?.currentModelId ?? "default";
 

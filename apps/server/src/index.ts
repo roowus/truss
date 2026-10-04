@@ -471,14 +471,17 @@ app.delete("/api/hosts/:id", async (req, reply) => {
 
 /* ── REST ── */
 
-/* ?probe=1 lets the New Session dialog ask lazy adapters (hermes/dsh) for a
-   one-shot catalog probe when their picker would be empty (issue #101). It is
-   opt-in so plain fetches — boot, reconnect resyncs, MCP — never spawn
-   harness processes. */
-app.get("/api/harnesses", async (req) => {
-  const probe = (req.query as Record<string, string | undefined>).probe === "1";
-  return { harnesses: listHarnesses(), models: await listModels({ probe }) };
-});
+/* the probe ask is a JSON POST, not a GET param: ?probe=1 on the plain GET
+   would be the API's first side-effectful GET, and cross-site triggerable
+   without a preflight (audit round 1). POST + content-type: application/json
+   matches the exposure of every other spawning route — no CORS headers are
+   served, so the preflight refuses cross-origin callers. */
+app.get("/api/harnesses", async () => ({ harnesses: listHarnesses(), models: await listModels() }));
+
+app.post("/api/harnesses/probe", async () => ({
+  harnesses: listHarnesses(),
+  models: await listModels({ probe: true }),
+}));
 
 app.get("/api/sessions", async () => ({
   sessions: store.listSessions().map((s) => ({ ...s, live: isLive(s.id) })),
