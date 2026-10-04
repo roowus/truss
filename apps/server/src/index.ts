@@ -46,7 +46,7 @@ import { startFeedAutopost } from "./feed-autopost.js";
 import { startDoubletakePoll } from "./integrations/doubletake.js";
 import { composePractices, getGlobalPractices, saveGlobalPractices } from "./practices.js";
 import { createHost, deleteHost, getHost, isHostTombstoned, listHosts, rotateHostToken, setHostPinned, setHostRevoked, verifyAgentToken } from "./hosts.js";
-import { netInfo, taildropToPeer, tailscalePeers, tailscaleServe, tailscaleSshOk, tailscaleSshRun } from "./net.js";
+import { assertDialableServerUrl, netInfo, taildropToPeer, tailscalePeers, tailscaleServe, tailscaleSshOk, tailscaleSshRun } from "./net.js";
 import { deliveryOptions, installerDropName } from "./installer.js";
 import { mintPairing, redeemPairing, redeemRateOk } from "./pairing.js";
 import { agentBundleError, assertSafeServerUrl, ensureAgentBundle, standaloneInstallScript, installScript } from "./agentbundle.js";
@@ -228,6 +228,17 @@ app.get("/api/agents", async () => ({ agents: listAgents() }));
 
 /* ── network reachability + the agent installer ── */
 app.get("/api/net", async () => netInfo(PORT));
+
+/* the delivery routes mint installs embedding a return address — validate
+   against the server's ACTUAL bound socket (ephemeral in tests), never the
+   configured port alone (issue #100): a syntax-valid address this server
+   doesn't answer must be refused with guidance, not minted into a doomed
+   install */
+async function currentNet() {
+  const addr = app.server.address();
+  const port = typeof addr === "object" && addr ? addr.port : PORT;
+  return netInfo(port, process.env.TRUSS_HOST ?? "0.0.0.0");
+}
 app.get("/api/net/tailscale/peers", async () => tailscalePeers());
 app.post("/api/net/tailscale-serve", async (req, reply) => {
   const { on } = (req.body ?? {}) as { on?: boolean };
@@ -244,6 +255,10 @@ app.get("/agent/install.sh", async (req, reply) => {
     if (!host) throw new Error("missing host");
     const proto = req.headers["x-forwarded-proto"] === "https" ? "https" : "http";
     const serverUrl = server ?? `${proto}://${req.headers.host ?? `127.0.0.1:${PORT}`}`;
+    /* the URL lands frozen into the host's env file — refuse one this server
+       can't answer (issue #100). The fallback derives from the Host header,
+       which a proxy can rewrite; dialability rejects the poisoned form too. */
+    assertDialableServerUrl(serverUrl, await currentNet());
     await ensureAgentBundle().catch(() => {});
     const script = installScript(host, serverUrl);
     return reply.header("Content-Type", "text/x-shellscript; charset=utf-8").send(script);
@@ -263,9 +278,13 @@ app.post("/api/hosts/:id/pair", async (req, reply) => {
      before minting a code that stands for it */
   if (!verifyAgentToken(id, token, "")) return reply.code(403).send({ error: "token doesn't match this host" });
   /* the URL is embedded in the redeem-time script — reject shell syntax at
-     mint, not after the user already typed the command (issue #91 audit) */
+     mint, not after the user already typed the command (issue #91 audit).
+     And it must be an address THIS server answers (issue #100): a
+     syntax-valid dead address mints a doomed install whose agent loops
+     ECONNREFUSED forever — that was the user's Mac. */
   try {
     assertSafeServerUrl(serverUrl);
+    assertDialableServerUrl(serverUrl, await currentNet());
   } catch (e: any) {
     return reply.code(400).send({ error: e.message });
   }
@@ -280,6 +299,7 @@ app.post("/api/hosts/:id/taildrop", async (req, reply) => {
   if (!verifyAgentToken(id, token, "")) return reply.code(403).send({ error: "token doesn't match this host" });
   try {
     assertSafeServerUrl(serverUrl); // the URL lands inside the dropped script
+    assertDialableServerUrl(serverUrl, await currentNet()); // and it must answer (issue #100)
   } catch (e: any) {
     return reply.code(400).send({ error: e.message });
   }
@@ -332,9 +352,11 @@ app.post("/api/hosts/:id/ssh-install", async (req, reply) => {
   if (!verifyAgentToken(id, token, "")) return reply.code(403).send({ error: "token doesn't match this host" });
   /* CRITICAL gate (issue #91 audit): this route executes the script on the
      peer with no human reading it — the URL embedded in that script must be
-     a plain URL, rejected before the CLI is ever invoked */
+     a plain URL, rejected before the CLI is ever invoked. It must also be
+     dialable (issue #100): ssh-install freezes it into the peer's env file. */
   try {
     assertSafeServerUrl(serverUrl);
+    assertDialableServerUrl(serverUrl, await currentNet());
   } catch (e: any) {
     return reply.code(400).send({ error: e.message });
   }

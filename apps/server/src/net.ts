@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
-import { networkInterfaces } from "node:os";
+import { networkInterfaces, userInfo } from "node:os";
+import { assertSafeServerUrl } from "./agentbundle.js";
 
 /**
  * Network reachability helper for the add-host wizard: what addresses can a
@@ -33,12 +34,17 @@ function shIn(cmd: string, args: string[], input: string, timeoutMs: number): Pr
 
 export interface NetInfo {
   port: number;
+  /** the address the server listens on (issue #33: the wizard must not offer
+     addresses the server can't answer — a loopback bind kills tailnet URLs) */
+  bind: string;
   tailscale: {
     installed: boolean;
     ip4?: string;
     dnsName?: string;
     serveOn?: boolean;
     serveUrl?: string;
+    /** can this process write the serve config? (operator/root — issue #37) */
+    canServe?: boolean;
   };
   lan: string[]; // private IPv4s of this host
 }
@@ -99,8 +105,8 @@ export async function tailscalePeers(): Promise<{ self?: TailscalePeer; peers: T
   }
 }
 
-export async function netInfo(port: number): Promise<NetInfo> {
-  const out: NetInfo = { port, tailscale: { installed: false }, lan: [] };
+export async function netInfo(port: number, bindHost?: string): Promise<NetInfo> {
+  const out: NetInfo = { port, bind: bindHost ?? process.env.TRUSS_HOST ?? "0.0.0.0", tailscale: { installed: false }, lan: [] };
   for (const [name, addrs] of Object.entries(networkInterfaces())) {
     if (name === "lo") continue;
     for (const a of addrs ?? []) {
@@ -136,22 +142,142 @@ export async function netInfo(port: number): Promise<NetInfo> {
     } catch {
       /* status parse failed — ip4 is enough */
     }
+    /* can we write serve config at all? (issue #37 — the Settings toggle must
+       know before the user clicks) */
+    try {
+      const prefs = await sh("tailscale", ["debug", "prefs"]);
+      const operator = parsePrefsOperator(prefs);
+      const user = userInfo().username;
+      out.tailscale.canServe = canServeWith(operator, user, typeof process.getuid === "function" && process.getuid() === 0);
+    } catch {
+      /* prefs unreadable — report nothing */
+    }
   } catch {
     /* tailscale not installed */
   }
   return out;
 }
 
+/* ── serve-config capability (issue #37): tailscaled's LocalAPI refuses
+   serve writes from non-root, non-operator users — probe instead of 400ing ── */
+
+/** `tailscale debug prefs` JSON → OperatorUser (null when unset/garbage; never throws) */
+export function parsePrefsOperator(prefsJson: string): string | null {
+  try {
+    const j = JSON.parse(prefsJson);
+    const u = j?.OperatorUser;
+    return typeof u === "string" && u.trim() ? u.trim() : null;
+  } catch {
+    return null;
+  }
+}
+
+/** root always can; the operator can; anyone else can't */
+export function canServeWith(operator: string | null, user: string, isRoot: boolean): boolean {
+  if (isRoot) return true;
+  if (operator && operator === user) return true;
+  return false;
+}
+
+/** map tailscaled's denial to the one-line remediation, keeping the original text */
+export function serveErrorHint(stderr: string, user: string): string {
+  if (!/access denied|denied|not permitted|operation not permitted/i.test(stderr)) return stderr;
+  return `${stderr} — this server's user (${user}) can't write tailscale's serve config. Run \`sudo tailscale set --operator=${user}\` once (or run Truss as root), then retry Settings → Network.`;
+}
+
 /** expose Truss on the tailnet at https://<machine>.<tailnet>.ts.net */
 export async function tailscaleServe(on: boolean, port: number): Promise<NetInfo["tailscale"]> {
-  if (on) {
-    /* serve https on the tailnet's 443 → local http port (flags vary a bit
-       across CLIs; this is the stable modern form) */
-    await sh("tailscale", ["serve", "--bg", "--https=443", `http://127.0.0.1:${port}`]);
-  } else {
-    await sh("tailscale", ["serve", "--https=443", "off"]);
+  try {
+    if (on) {
+      /* serve https on the tailnet's 443 → local http port (flags vary a bit
+         across CLIs; this is the stable modern form) */
+      await sh("tailscale", ["serve", "--bg", "--https=443", `http://127.0.0.1:${port}`]);
+    } else {
+      await sh("tailscale", ["serve", "--https=443", "off"]);
+    }
+  } catch (err) {
+    /* denials name the fix (issue #37): the operator one-liner, not a bare 400 */
+    throw new Error(serveErrorHint(err instanceof Error ? err.message : String(err), userInfo().username));
   }
   return (await netInfo(port)).tailscale;
+}
+
+/* ── return-address validation (issue #100) ─────────────────────────────
+   Syntax was never enough: the user's Mac installed an agent whose env froze
+   TRUSS_SERVER=ws://<tailnet-ip>:4040 while the server listened on
+   127.0.0.1 only — a syntax-valid address that answers nowhere, minted with
+   a 200. The delivery routes run this BEFORE minting anything, so a doomed
+   address gets refused with the fix named instead of an install loop.
+
+   A URL is dialable iff THIS server answers it given the bind:
+     loopback bind    → loopback hosts only (a loopback server answers
+                        nothing off-host)
+     wildcard bind    → any address of this machine (loopback, LAN ips,
+                        the tailnet ip/name)
+     specific ip bind → that ip only (its tailnet magic-dns name aliases it)
+   …plus, on any bind, the tailscale-serve URL (serve proxies tailnet https
+   into the local port), and the port must be the server's own. */
+
+const LOOPBACK_HOSTS = new Set(["127.0.0.1", "::1", "localhost"]);
+const isLoopbackBind = (bind: string) => LOOPBACK_HOSTS.has(bind) || bind === "[::1]";
+const isWildcardBind = (bind: string) => !bind || bind === "0.0.0.0" || bind === "::" || bind === "[::]";
+
+export function assertDialableServerUrl(
+  serverUrl: string,
+  net: { port: number; bind?: string; tailscale: NetInfo["tailscale"]; lan: string[] },
+): void {
+  /* the #91 syntax contract composes — garbage still dies here first */
+  assertSafeServerUrl(serverUrl);
+
+  /* tailscale serve proxies the tailnet's 443 into the local port — reachable
+     on any bind */
+  const serve = net.tailscale.serveOn ? net.tailscale.serveUrl?.replace(/\/$/, "") : undefined;
+  if (serve && serverUrl.replace(/\/$/, "") === serve) return;
+
+  const u = new URL(serverUrl);
+  const host = u.hostname; // URL() strips ipv6 brackets
+  const port = u.port ? Number(u.port) : u.protocol === "https:" ? 443 : 80;
+  const bind = (net.bind ?? "").trim();
+
+  const steer = `turn on tailscale serve on the server (Settings → Network) and use its https URL, or restart the server with TRUSS_HOST=0.0.0.0 so it listens on the network`;
+
+  if (isLoopbackBind(bind)) {
+    if (LOOPBACK_HOSTS.has(host)) {
+      if (port !== net.port) {
+        throw new Error(`${serverUrl} is unreachable: this server listens on port ${net.port}, not ${port}`);
+      }
+      return;
+    }
+    throw new Error(
+      `${serverUrl} is unreachable: this server is bound to ${bind} (loopback) and answers nothing off-host — ${steer}`,
+    );
+  }
+
+  if (isWildcardBind(bind)) {
+    const local =
+      LOOPBACK_HOSTS.has(host) ||
+      net.lan.includes(host) ||
+      (!!net.tailscale.ip4 && host === net.tailscale.ip4) ||
+      (!!net.tailscale.dnsName && host === net.tailscale.dnsName);
+    if (!local) {
+      throw new Error(
+        `${serverUrl} is unreachable: ${host} is not an address this server listens on — check the address, or ${steer}`,
+      );
+    }
+  } else if (host !== bind) {
+    /* a specific bind answers on its own address only; the tailnet ip and
+       its magic-dns name are the same interface */
+    const tailnetAlias = !!net.tailscale.ip4 && bind === net.tailscale.ip4 && host === net.tailscale.dnsName;
+    if (!tailnetAlias) {
+      throw new Error(
+        `${serverUrl} is unreachable: this server is bound to ${bind} and answers only there — use that address, or ${steer}`,
+      );
+    }
+  }
+
+  if (port !== net.port) {
+    throw new Error(`${serverUrl} is unreachable: this server listens on port ${net.port}, not ${port} — fix the port, or ${steer}`);
+  }
 }
 
 /** push files to a tailnet device via Taildrop (`tailscale file cp`).
