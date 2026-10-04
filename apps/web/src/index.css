@@ -95,11 +95,16 @@ body {
 .truss-dock .dv-tabs-and-actions-container { overflow: hidden; }
 .truss-dock .dv-tab { padding: 0 !important; }
 
-/* ── chrome-style tab strip: tabs compress to fit — no horizontal scroll,
-   no overflow dropdown. The close button pops onto the tab itself on hover
-   only (active tab included — nothing pinned). ── */
+/* ── chrome-style tab strip (lib/chromeTabs.ts): every tab gets the SAME
+   explicit width — the strip shared evenly, clamped between the icon floor
+   and Chrome's standard 240px — set inline by the tab component. No
+   horizontal scroll, no overflow dropdown; past the icon floor the strip
+   clips like Chrome. The close X is pinned only on the roomy active tab;
+   everywhere else it hover-reveals (over the icon on slivers). ── */
 .truss-dock .dv-tabs-container { overflow: hidden; }
 .truss-dock .dv-scrollable > .dv-scrollbar-horizontal { display: none; }
+/* flex-shrink is only the pre-measure fallback; the component's inline
+   width + flex:none wins once chromeTabLayout has run */
 .truss-dock .dv-tab { flex-shrink: 1; min-width: 0; overflow: hidden; }
 .truss-dock .dv-watermark { background: var(--t-bg1); }
 

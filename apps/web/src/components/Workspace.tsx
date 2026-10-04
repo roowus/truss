@@ -27,7 +27,8 @@ import { MonitorPanel } from "@/panels/MonitorPanel";
 import { HostPanel } from "@/panels/HostPanel";
 import { SettingsPanel } from "@/panels/SettingsPanel";
 import { DesktopStrip } from "./DesktopStrip";
-import { isOvercrowded, tabCloseBehavior } from "@/lib/tabClose";
+import { chromeTabLayout, type ChromeTabView } from "@/lib/chromeTabs";
+import { tabClosePlacement } from "@/lib/tabClose";
 import { TabPicker } from "./TabPicker";
 import { Btn, Icon, StateDot, TrussLogo } from "./ui";
 import { harnessStyle } from "@/lib/format";
@@ -81,39 +82,40 @@ function TrussTab({ api, params }: IDockviewPanelHeaderProps<{ sessionId?: strin
   const meta = useApp((s) => (sid ? s.sessions[sid] : undefined));
   const pending = useApp((s) => (sid ? s.views[sid]?.pending.length ?? 0 : 0));
   const color = meta ? harnessStyle(meta.harness).color : undefined;
-  /* Space-aware close button: inline + always visible when the tab has room;
-     a hover popup only when the strip is overcrowded and has squeezed the tab
-     below its natural width. The probe row below is out-of-flow and never
-     compressed, so it reports the natural content width regardless of the
-     strip's squeeze — no measurement oscillation when the X flips modes. */
+  /* Chrome-parity tab layout (lib/chromeTabs.ts): the strip's width is
+     shared evenly across its tabs — every tab the same width, the active
+     one included — and that one uniform width decides the title and the
+     close X (the Chrome matrix). The verdict is a pure function of strip
+     width × tab count, never of the X's mode or the title's length, so it
+     cannot oscillate and needs no hysteresis. Re-resolved on strip resize,
+     tab add/remove, drags between strips (observers re-attach), and active
+     flips. */
   const rootRef = useRef<HTMLDivElement>(null);
-  const probeRef = useRef<HTMLSpanElement>(null);
-  const [cramped, setCramped] = useState(false);
-  const [ultra, setUltra] = useState(false);
+  const [view, setView] = useState<ChromeTabView>({ showTitle: true, showClose: "always", closeOverIcon: false });
   useEffect(() => {
     const tab = rootRef.current?.closest(".dv-tab") as HTMLElement | null;
-    const probe = probeRef.current;
-    if (!tab || !probe) return;
-    /* Strip-level verdict, Chrome-style: overcrowded ⇔ every tab at its
-       natural width (probe, never compressed) PLUS an inline X each would
-       overflow the strip. Mode-independent (computed from probes, not live
-       tabs) so it can't oscillate; uniform across the strip like Chrome.
-       The strip is re-resolved on every measure and the observers re-attach
-       when the tab is dragged/transferred to another strip — otherwise the
-       verdict goes stale (the "works for some tabs" bug).
-       Ultra (<64px) ⇒ the hover X centers on the sliver (16px, the
-       "overlay-center" placement in tabClose.ts) — a right-edge X would
-       overhang into the left neighbor and eat its clicks. */
+    if (!tab) return;
     let ro: ResizeObserver | null = null;
     let mo: MutationObserver | null = null;
     let observed: Element | null = null;
     const measure = () => {
       const strip = tab.closest(".dv-tabs-container");
       if (!strip) return;
-      const probes = [...strip.querySelectorAll(".truss-tab-probe")].map((p) => (p as HTMLElement).offsetWidth);
-      const crowded = isOvercrowded(probes, strip.clientWidth);
-      setCramped(crowded);
-      setUltra(crowded && tab.getBoundingClientRect().width < 64);
+      const tabEls = [...strip.querySelectorAll(".dv-tab")] as HTMLElement[];
+      const self = tabEls.indexOf(tab);
+      if (self < 0) return;
+      const layout = chromeTabLayout({
+        stripWidth: strip.clientWidth,
+        tabs: tabEls.map((el, i) => ({
+          id: String(i),
+          active: i === self ? active : el.classList.contains("dv-active-tab"),
+        })),
+      });
+      /* uniform width straight onto the dockview tab element — every tab
+         computes the same value, so the strip agrees with itself */
+      tab.style.width = `${layout.width}px`;
+      tab.style.flex = "0 0 auto";
+      setView(layout.perTab[String(self)]);
     };
     const attach = () => {
       const strip = tab.closest(".dv-tabs-container");
@@ -124,7 +126,6 @@ function TrussTab({ api, params }: IDockviewPanelHeaderProps<{ sessionId?: strin
       if (strip) {
         ro = new ResizeObserver(measure);
         ro.observe(strip);
-        ro.observe(probe);
         mo = new MutationObserver(() => {
           if (tab.closest(".dv-tabs-container") !== observed) attach();
           measure();
@@ -137,51 +138,62 @@ function TrussTab({ api, params }: IDockviewPanelHeaderProps<{ sessionId?: strin
     return () => {
       ro?.disconnect();
       mo?.disconnect();
+      tab.style.width = "";
+      tab.style.flex = "";
     };
-  }, [title, pending, meta?.state]);
+  }, [active]);
   return (
     <div
       ref={rootRef}
-      className="truss-tab group/tab relative flex items-center gap-1.5 h-full pl-2 pr-1 text-[12px] select-none"
+      className={cn(
+        "truss-tab group/tab relative flex items-center gap-1.5 h-full w-full text-[12px] select-none",
+        /* icon-only slivers center their favicon, like Chrome */
+        view.showTitle ? "pl-2 pr-1" : "justify-center px-0",
+      )}
       onMouseDown={(e) => {
         if (e.button === 1) { e.preventDefault(); api.close(); }
       }}
       title={`${title}\nRight-click to copy or move to another workspace\n(middle-click closes)`}
     >
-      <span style={{ color: kind === "chat" ? color : undefined }} className={cn("shrink-0", kind === "chat" ? "" : "opacity-70")}>
+      <span
+        style={{ color: kind === "chat" ? color : undefined }}
+        className={cn(
+          "shrink-0",
+          kind === "chat" ? "" : "opacity-70",
+          /* the favicon swap: on a sliver the hover X takes the icon's place */
+          view.closeOverIcon && "group-hover/tab:opacity-0",
+        )}
+      >
         <Icon name={KIND_ICON[kind] ?? "layout"} size={12} />
       </span>
-      <span className="truncate min-w-0 max-w-[200px]">{title}</span>
-      {meta && kind === "chat" && <StateDot state={meta.state} size={6} />}
-      {pending > 0 && (
+      {view.showTitle && <span className="truncate min-w-0 max-w-[200px]">{title}</span>}
+      {view.showTitle && meta && kind === "chat" && <StateDot state={meta.state} size={6} />}
+      {view.showTitle && pending > 0 && (
         <span className="inline-flex items-center gap-0.5 min-w-4 h-4 px-1 rounded-full bg-[var(--t-amber)] text-[#1b1305] text-[9.5px] font-bold t-pulse-soft shrink-0" title={`${pending} permission request(s) waiting`}>
           <Icon name="lock" size={9} />
           {pending > 1 && <span>{pending}</span>}
         </span>
       )}
-      {/* one rule everywhere (lib/tabClose.ts): inline right after the title
-          and always visible when the tab has room; once the strip squeezes
-          the tab, the X sits on top of its content instead and is
-          hover-reveal on EVERY tab, active included — nothing stays pinned.
-          Inactive ultra slivers get no X at all, so a click can never close
-          one (matches the CSS note at index.css "chrome-style tab strip"). */}
+      {/* one rule everywhere (lib/chromeTabs.ts decides, lib/tabClose.ts
+          places): the roomy active tab pins an inline X; everything else
+          hover-reveals — at the right edge on titled tabs, over the icon on
+          slivers (the favicon swap). Inactive tight tabs and slivers get no
+          X at all, so a click can never close one. */}
       {(() => {
-        const { placement, visible } = tabCloseBehavior({ cramped, ultra, active });
-        if (visible === "never") return null;
+        const placement = tabClosePlacement(view);
+        if (!placement) return null;
         return (
           <button
             onClick={(e) => { e.stopPropagation(); api.close(); }}
             className={cn(
               "truss-tab-close grid place-items-center rounded hover:!opacity-100 hover:bg-white/10 focus:opacity-100 focus:pointer-events-auto",
-              placement === "overlay-right" && "absolute right-0.5 top-1/2 -translate-y-1/2 w-5 h-5 bg-[var(--t-bg1)] shadow-sm",
-              /* centered and 16px so it fits INSIDE a sliver tab instead of
-                 overhanging into the left neighbor (which ate its clicks) */
-              placement === "overlay-center" && "absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-4 h-4 bg-[var(--t-bg1)] shadow-sm",
               placement === "inline" && "shrink-0 w-5 h-5 opacity-60",
-              placement !== "inline" &&
-                (visible === "always"
-                  ? "opacity-60"
-                  : "opacity-0 pointer-events-none group-hover/tab:opacity-60 group-hover/tab:pointer-events-auto"),
+              placement === "overlay-right" &&
+                "absolute right-0.5 top-1/2 -translate-y-1/2 w-5 h-5 bg-[var(--t-bg1)] shadow-sm opacity-0 pointer-events-none group-hover/tab:opacity-60 group-hover/tab:pointer-events-auto",
+              /* centered on the sliver's (centered) icon: stays INSIDE the
+                 tab instead of overhanging into the left neighbor */
+              placement === "overlay-icon" &&
+                "absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-4 h-4 bg-[var(--t-bg1)] shadow-sm opacity-0 pointer-events-none group-hover/tab:opacity-100 group-hover/tab:pointer-events-auto",
             )}
             aria-label="Close tab"
           >
@@ -189,18 +201,6 @@ function TrussTab({ api, params }: IDockviewPanelHeaderProps<{ sessionId?: strin
           </button>
         );
       })()}
-      {/* measurement probe: same content, never compressed, invisible */}
-      <span ref={probeRef} aria-hidden className="truss-tab-probe absolute invisible pointer-events-none flex items-center gap-1.5 text-[12px] whitespace-nowrap">
-        <Icon name={KIND_ICON[kind] ?? "layout"} size={12} />
-        <span className="max-w-[200px] whitespace-nowrap">{title}</span>
-        {meta && kind === "chat" && <StateDot state={meta.state} size={6} />}
-        {pending > 0 && (
-          <span className="inline-flex items-center gap-0.5 min-w-4 h-4 px-1 rounded-full text-[9.5px] font-bold">
-            <Icon name="lock" size={9} />
-            {pending > 1 && <span>{pending}</span>}
-          </span>
-        )}
-      </span>
     </div>
   );
 }
