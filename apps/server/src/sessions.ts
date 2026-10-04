@@ -276,15 +276,25 @@ function goLive(id: string, adapter: HarnessAdapter, handle: AdapterHandle) {
          closed/error gate resumes instead of refusing. */
       if (live.get(id)?.handle === handle) {
         live.delete(id);
+        /* release the dead handle (unsubscribes its client hooks, ends its
+           pipes) — without this each death/resume cycle leaks the handle's
+           registrations; and cancel unanswered permission cards exactly as
+           closeSession does, because a dead harness can't be answered */
+        try {
+          adapter.dispose(handle);
+        } catch {
+          /* already gone */
+        }
         const row = store.getSession(id);
         if (row && row.state !== "closed" && row.state !== "error") {
           sink({
             type: "session.state",
             sessionId: id,
             state: "error",
-            detail: "harness event stream ended — the next prompt resumes the session",
+            detail: "harness event stream ended; the next prompt resumes the session",
           });
         }
+        if (row && row.state !== "closed") settleOrphanedPerms(id);
       }
     }
   })();

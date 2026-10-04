@@ -212,15 +212,22 @@ export class AcpClient {
     this.sessionClaims.clear();
     this.proc = null;
     this.ready = null;
-    /* tell the sessions AFTER the maps are cleared: their teardown closes
-       queues and ends pumps, and must not interact with the registry */
-    for (const fn of [...this.processExitListeners]) {
-      try {
-        fn(err);
-      } catch {
-        /* a dying session's teardown must not take the flush down */
+    /* tell the sessions AFTER the maps are cleared, and DEFERRED past the
+       microtask drain: a rejected session/prompt settles through a
+       .then().catch() chain (two microtask hops) that pushes the turn's
+       msg.done / llm.call.done, and the listeners close the session queues —
+       notifying synchronously would drop a mid-turn death's settle events
+       into an already-closed queue (open bubble forever) */
+    const listeners = [...this.processExitListeners];
+    setImmediate(() => {
+      for (const fn of listeners) {
+        try {
+          fn(err);
+        } catch {
+          /* a dying session's teardown must not take the flush down */
+        }
       }
-    }
+    });
   }
 
   /** adapters register one listener per live session handle; the return
@@ -661,9 +668,12 @@ export function classifyAcpSettle(
 ): { ok: boolean; detail?: string } {
   const stopReason = (result as { stopReason?: string } | null)?.stopReason;
   if (stopReason === "refusal") {
+    /* a refusal on a HEALTHY session is the model declining; on a dead one
+       it is the ghost ACK. The wording covers both; the failure is loud
+       either way and the session stays usable */
     return {
       ok: false,
-      detail: "refused: the harness never engaged — its session is gone (resend to resume)",
+      detail: "refused: the harness refused the turn or never engaged (its session may be gone; resend to resume)",
     };
   }
   if (h.turnTextChars === 0 && Date.now() - h.turnStartedAt < GHOST_SETTLE_MS) {

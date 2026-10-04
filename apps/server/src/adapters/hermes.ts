@@ -110,7 +110,7 @@ export const hermesAdapter: HarnessAdapter = {
          prompts settle instantly-empty forever (issue #97) */
       if (!r?.sessionId) {
         throw new Error(
-          `session/resume answered without a sessionId — refusing to adopt the dead ref ${opts.resumeRef}`,
+          `session/resume answered without a sessionId; refusing to adopt the dead ref ${opts.resumeRef}`,
         );
       }
       res = { sessionId: r.sessionId, models: r.models };

@@ -208,9 +208,105 @@ test("pi + claude attach an error listener to the child's stdin (EPIPE can't dow
   }
 });
 
+/* ── 5. shared-process death unwinds every live session (audit round 1: B1/B2/B3) ── */
+
+/* fake hermes-acp: normal handshake/new/resume; on session/prompt it opens a
+   permission card and then NEVER settles the turn — the shape of a harness
+   dying mid-turn with a question on screen */
+const DEATH_DIR = mkdtempSync(join(tmpdir(), "truss-death-"));
+const DEATH_FAKE = `
+let b = "";
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (c) => {
+  b += c; let i;
+  while ((i = b.indexOf("\\n")) >= 0) {
+    const l = b.slice(0, i).trim(); b = b.slice(i + 1);
+    if (!l) continue;
+    let r; try { r = JSON.parse(l); } catch { continue; }
+    if (r.id == null || !r.method) continue;
+    const reply = (result) => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: r.id, result }) + "\\n");
+    if (r.method === "initialize") reply({ protocolVersion: 1 });
+    else if (r.method === "session/new") reply({ sessionId: "hs-death", models: { availableModels: [{ modelId: "custom:x" }], currentModelId: "custom:x" } });
+    else if (r.method === "session/resume") reply({ sessionId: "hs-death-r" });
+    else if (r.method === "session/prompt") {
+      process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: "perm-1", method: "session/request_permission",
+        params: { sessionId: r.params?.sessionId, toolCall: { title: "rm -rf /" }, options: [{ optionId: "allow", name: "allow" }] } }) + "\\n");
+      /* and then silence forever — the process will be killed mid-turn */
+    }
+    else reply({});
+  }
+});
+`;
+writeFileSync(join(DEATH_DIR, "death.cjs"), DEATH_FAKE);
+const DEATH_BIN = join(DEATH_DIR, "death-bin.sh");
+writeFileSync(DEATH_BIN, `#!/bin/sh\nexec ${process.execPath} ${join(DEATH_DIR, "death.cjs")}\n`, { mode: 0o755 });
+
+test("a dead ACP process unwinds its live sessions: the mid-turn settle lands, pending perms cancel, the next prompt resumes", async () => {
+  const { db, cleanup } = await freshServer("proc-death");
+  const sessions = await import("../src/sessions.js");
+  const hermes: any = await import("../src/adapters/hermes.js");
+  /* retarget the module-singleton client at this test's fake (the
+     acp-late-dispose pattern) and boot it fresh */
+  hermes.client.launch.command = DEATH_BIN;
+  hermes.client.proc?.kill("SIGKILL");
+  await tick(100);
+  let s: { id: string } | undefined;
+  try {
+    s = await sessions.createSession({ harness: "hermes" as never, cwd: "/tmp" });
+    assert.ok(sessions.isLive(s.id), "session live after spawn");
+
+    await sessions.sendPrompt(s.id, "hold this turn open");
+    let evs: any[] = [];
+    for (let w = 0; w < 3000; w += 50) {
+      await tick(50);
+      evs = db.store.listEvents(s.id).map((f: any) => f.ev);
+      if (evs.some((e) => e.type === "perm.request")) break;
+    }
+    assert.ok(
+      evs.some((e) => e.type === "perm.request"),
+      "precondition: the permission card is on screen when the harness dies",
+    );
+
+    /* the harness process dies mid-turn, the permission unanswered */
+    hermes.client.proc.kill("SIGKILL");
+    for (let w = 0; w < 3000; w += 50) {
+      await tick(50);
+      evs = db.store.listEvents(s.id).map((f: any) => f.ev);
+      if (evs.some((e) => e.type === "session.state" && e.state === "error")) break;
+    }
+
+    assert.ok(
+      evs.some((e) => e.type === "msg.done" && /error/i.test(String(e.stopReason ?? ""))),
+      "B1: the mid-turn bubble closes with an error — if the queue closes before the rejected prompt settles, the bubble stays open forever",
+    );
+    const callDone = evs.find((e) => e.type === "llm.call.done");
+    assert.ok(callDone && callDone.status >= 400, "B1: the trajectory row settles as a failure");
+    assert.ok(
+      evs.some((e) => e.type === "perm.resolve" && e.choice === "cancelled"),
+      "B3: a permission card pending at death is cancelled — a dead harness can't be answered",
+    );
+    assert.ok(
+      evs.some((e) => e.type === "session.state" && e.state === "error"),
+      "B2: the session row flips to error",
+    );
+    assert.ok(!sessions.isLive(s.id), "B2: the session leaves live");
+
+    /* the next prompt resumes on the stored ref instead of writing into the void */
+    await sessions.sendPrompt(s.id, "come back");
+    assert.ok(sessions.isLive(s.id), "B2: the prompt after the death resumed the harness");
+  } finally {
+    if (s)
+      try {
+        sessions.closeSession(s.id);
+      } catch {}
+    hermes.client.proc?.kill("SIGKILL");
+    cleanup();
+  }
+});
+
 import { after } from "node:test";
 after(() => {
-  for (const d of [DIR, PISH_DIR])
+  for (const d of [DIR, PISH_DIR, DEATH_DIR])
     try {
       rmSync(d, { recursive: true, force: true });
     } catch {}

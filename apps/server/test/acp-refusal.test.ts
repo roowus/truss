@@ -58,7 +58,7 @@ process.stdin.on("data", (c) => {
         note({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "a real answer" } });
         setTimeout(() => reply({ stopReason: "end_turn" }), 60);
       } else if (MODE === "empty") {
-        setTimeout(() => reply({ stopReason: "end_turn" }), 30); /* instant, nothing streamed */
+        reply({ stopReason: "end_turn" }); /* instant, nothing streamed; no artificial delay — the ghost classification is wall-clock, so any fake delay is flake surface */
       } else {
         setTimeout(() => reply({ stopReason: "refusal" }), 30); /* the ghost black hole */
       }
@@ -110,7 +110,6 @@ function assess(events: any[]) {
 test("guard: a real turn (content + end_turn) settles as success exactly as today", async () => {
   const { events, cleanup } = await run("real");
   try {
-    console.error("GUARD EVENTS:", JSON.stringify(events.map(e => e.type + ":" + String((e.text ?? (e).stopReason ?? (e).state ?? "")).slice(0, 60))));
     const { done, text, idle } = assess(events);
     assert.ok(text.includes("a real answer"), "content streamed");
     assert.equal(done?.status, 200, "real turns stay 200");
