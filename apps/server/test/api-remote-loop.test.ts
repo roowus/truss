@@ -255,6 +255,15 @@ test("a tunnel blip wipes NOTHING: sessions survive offline, sends fail loudly, 
   });
   assert.equal(ghost.status, 409, "offline send refuses loudly");
   assert.match(String(ghost.body?.error ?? ""), /offline|not delivered/i);
+  /* …and the transcript tells the truth too (audit round 5): the persisted
+     user bubble gets an explicit failure marker, so a reload never shows an
+     unanswered bubble */
+  const ghostEvs = await api(`/api/sessions/${sidA}/events`);
+  const ghostList = (ghostEvs.body?.events ?? []).map((f: { ev: Record<string, unknown> }) => f.ev);
+  assert.ok(
+    ghostList.some((e: Record<string, unknown>) => e.type === "msg.chunk" && /not delivered/i.test(String(e.text))),
+    "the transcript carries the not-delivered marker next to the bubble",
+  );
 
   /* B is untouched and still works */
   await api(`/api/sessions/${sidB}/prompt`, {

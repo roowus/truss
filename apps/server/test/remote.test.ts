@@ -226,3 +226,34 @@ test("protocol-1 agents reap their sessions at disconnect; protocol-2 sessions w
     cleanup();
   }
 });
+
+test("spawn through a half-open socket fails fast, not after a 30s ack-timeout lie (audit round 5)", async () => {
+  const { cleanup } = await freshServer("rem-halfopen-spawn");
+  try {
+    const remote = await import("../src/remote.js");
+    let adapter: any = null;
+    remote.wireRemoteRegistry({
+      register: (id, a) => {
+        adapter = a;
+      },
+      unregister: () => {},
+      sessionGone: () => {},
+    });
+    /* registered agent whose socket is already CLOSED (readyState 3) — the
+       heartbeat hasn't reaped it yet; the spawn frame would vanish and the
+       caller would wait out the full ack timeout */
+    remote.agentHello("h-half", "half-host", [{ id: "pi", capabilities: CAPS }], { send: () => {}, close: () => {}, readyState: 3 });
+    await assert.rejects(() => adapter.spawn({ sessionId: "s-half", cwd: "/tmp" }), /offline|not delivered/i);
+
+    /* the guard's positive branch: an OPEN socket spawns fine */
+    const openSent: string[] = [];
+    remote.agentHello("h-half", "half-host", [{ id: "pi", capabilities: CAPS }], { send: (s: string) => void openSent.push(s), close: () => {}, readyState: 1 });
+    const p = adapter.spawn({ sessionId: "s-half2", cwd: "/tmp" });
+    const frame = JSON.parse(openSent[openSent.length - 1]) as { reqId: string };
+    remote.agentFrame("h-half", { type: "spawned", reqId: frame.reqId, ok: true });
+    await p;
+    remote.agentBye("h-half");
+  } finally {
+    cleanup();
+  }
+});

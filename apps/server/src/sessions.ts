@@ -353,14 +353,29 @@ export async function sendPrompt(
        (pi) can still open them with their read tool */
     outbound += "\n\n[attached files]\n" + atts.map((a) => `- ${a.path} (${a.name}, ${a.size} B)`).join("\n");
   }
-  if (row && !MCP_ATTACHED.has(baseOf(row.harness)) && !firstPromptDone.has(sessionId)) {
-    const { composed } = composePractices(row.cwd, row.project);
+  const firstPrompt = row && !MCP_ATTACHED.has(baseOf(row.harness)) && !firstPromptDone.has(sessionId);
+  if (firstPrompt) {
+    const { composed } = composePractices(row!.cwd, row!.project);
     if (composed.trim()) {
       outbound = `[truss practices — follow these; they're the user's house rules]\n${composed}\n\n${POSTING_GUIDE_PI}\n[/truss practices]\n\n${outbound}`;
     }
-    firstPromptDone.add(sessionId);
   }
-  s!.adapter.send(s!.handle, outbound);
+  try {
+    s!.adapter.send(s!.handle, outbound);
+  } catch (err) {
+    /* the user bubble above is already persisted — leave the transcript
+       honest (audit round 5): an explicit marker, so a reload never shows an
+       unanswered bubble and a retry reads as a retry, not a duplicate */
+    const detail = err instanceof Error ? err.message : String(err);
+    const noteId = `m-sys-${Date.now()}`;
+    sink({ type: "msg.start", sessionId, messageId: noteId, role: "system", at: Date.now() });
+    sink({ type: "msg.chunk", sessionId, messageId: noteId, text: `prompt not delivered: ${detail}` });
+    sink({ type: "msg.done", sessionId, messageId: noteId });
+    throw err;
+  }
+  /* the marker moves only on a DELIVERED first prompt — a refused send must
+     not burn the practices preamble (the retry still carries it) */
+  if (firstPrompt) firstPromptDone.add(sessionId);
 }
 
 /* harnesses whose adapters attach the per-session truss MCP server (they get

@@ -101,8 +101,10 @@ class RemoteAdapter implements HarnessAdapter {
   }
 
   async spawn(opts: SessionOpts): Promise<RemoteHandle> {
-    const agent = agents.get(this.hostId);
-    if (!agent) throw new Error(`node-agent ${this.hostId} not connected`);
+    /* the guard covers spawn too (audit round 5): a half-open socket here
+       would eat the spawn frame and leave the caller waiting out the full
+       30s "ack timeout" lie — the exact wait item 10 targeted */
+    const socket = this.socketOrThrow();
 
     const reqId = `spawn-${++reqCounter}`;
     const queue = new AsyncQueue<ProtoEvent>();
@@ -124,7 +126,7 @@ class RemoteAdapter implements HarnessAdapter {
       });
     });
 
-    agent.socket.send(
+    socket.send(
       JSON.stringify({
         type: "spawn",
         reqId,
@@ -148,7 +150,7 @@ class RemoteAdapter implements HarnessAdapter {
        silently — ws only reports failure via callback. readyState is
        optional in the type for the test stub; a real ws always has it. */
     if (!agent || (agent.socket.readyState !== undefined && agent.socket.readyState !== 1)) {
-      throw new Error(`node-agent ${this.hostId} is offline — the prompt was NOT delivered; it will reconnect on its own, retry in a moment`);
+      throw new Error(`node-agent ${this.hostId} is offline — the frame was NOT delivered; it reconnects on its own, retry in a moment`);
     }
     return agent.socket;
   }
@@ -200,7 +202,7 @@ export function agentHello(
   hostId: string,
   hostname: string,
   adapterList: { id: string; capabilities: HarnessAdapter["capabilities"] }[],
-  socket: { send: (s: string) => void; close: () => void },
+  socket: AgentInfo["socket"],
   meta: { sessions?: string[]; protocol?: number; bundleHash?: string } = {},
 ) {
   const existing = agents.get(hostId);
