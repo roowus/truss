@@ -99,8 +99,7 @@ export interface FeedItem {
 }
 
 /* broadcast-only (feed/todos persist in their own tables; replay = REST) */
-export interface TodoUpsert {
-  type: "todo.upsert";
+export interface TodoUpsert {  type: "todo.upsert";
   sessionId: string; // owner session or "" — carried for the frame shape only
   todo: TodoItem;
 }
@@ -108,6 +107,16 @@ export interface FeedUpsert {
   type: "feed.upsert";
   sessionId: string; // source session or ""
   item: FeedItem;
+}
+
+/** a harness's model catalog just filled in (lazy adapters discover it from
+    the first session boot, or from the first-boot probe — issue #101).
+    Broadcast-only; clients refetch /api/harnesses. sessionId is "" — carried
+    for the frame shape only, like todo.upsert. */
+export interface ModelsUpdated {
+  type: "models.updated";
+  sessionId: string;
+  harness: HarnessId;
 }
 
 /* ── message stream ── */
@@ -246,6 +255,7 @@ export type ProtoEvent =
   | SessionDeleted
   | TodoUpsert
   | FeedUpsert
+  | ModelsUpdated
   | MsgStart
   | MsgChunk
   | MsgDone

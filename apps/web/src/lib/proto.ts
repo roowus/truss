@@ -250,6 +250,7 @@ export type ProtoEvent =
   | (Base & { type: "session.deleted" })
   | (Base & { type: "todo.upsert"; todo: TodoItem })
   | (Base & { type: "feed.upsert"; item: FeedItem })
+  | (Base & { type: "models.updated"; harness: HarnessId })
   | (Base & { type: "msg.start"; messageId: string; role: "user" | "assistant" | "system"; at: At; attachments?: PromptAttachment[] })
   | (Base & { type: "msg.chunk"; messageId: string; text: string; channel?: string })
   | (Base & { type: "msg.done"; messageId: string; stopReason?: string })

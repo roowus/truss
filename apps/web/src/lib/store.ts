@@ -320,9 +320,9 @@ class Store {
     }
   }
 
-  async refreshHarnesses() {
+  async refreshHarnesses(probe = false) {
     try {
-      const { harnesses, models } = await this.be.harnesses();
+      const { harnesses, models } = await this.be.harnesses({ probe });
       this.set({ harnesses, models });
     } catch (e: any) {
       this.toast("error", "Could not load harnesses", e?.message ?? String(e));
@@ -446,6 +446,13 @@ class Store {
       if (isNew && ev.item.state === "unread" && ev.item.importance !== "low") {
         this.toast("info", ev.item.type === "permission" ? "Decision needed" : "Feed", ev.item.title);
       }
+      return;
+    }
+    if (ev.type === "models.updated") {
+      /* a lazy harness catalog (hermes/dsh) just filled in on the server
+         (first-boot probe, issue #101) — refetch so an open New Session
+         dialog sees the models appear instead of a stuck "harness default" */
+      void this.refreshHarnesses();
       return;
     }
     const id = ev.sessionId;

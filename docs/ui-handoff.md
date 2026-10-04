@@ -30,7 +30,7 @@ Same-origin REST. In dev these proxy through Vite.
 | Route | Shape | Notes |
 |---|---|---|
 | `GET /health` | `{ok, service, time}` | |
-| `GET /api/harnesses` | `{harnesses: [{id, capabilities}], models: [{harness, provider, model, label}]}` | `capabilities = {permissions, subagents, streaming, queueWhileRunning}`. Harness ids: `pi`, `dsh`, `claude-code`, `hermes`, and remote `<adapter>@<host>` ids when node agents are connected (`GET /api/agents` → `{agents:[{hostId, hostname, adapters}]}`). |
+| `GET /api/harnesses` | `{harnesses: [{id, capabilities}], models: [{harness, provider, model, label}]}` | `capabilities = {permissions, subagents, streaming, queueWhileRunning}`. Harness ids: `pi`, `dsh`, `claude-code`, `hermes`, and remote `<adapter>@<host>` ids when node agents are connected (`GET /api/agents` → `{agents:[{hostId, hostname, adapters}]}`). `?probe=1` one-shot-probes lazy adapters (hermes/dsh) whose catalog is empty — the New Session dialog passes it on open; a filled catalog arrives as a `models.updated` broadcast, so refetch on that event. Plain fetches never spawn harness processes. |
 | `GET /api/sessions` | `{sessions: [SessionMeta]}` | `SessionMeta = {id, harness, title, cwd, model?, project?, state, created_at, updated_at, live}`; `state ∈ spawning \| idle \| running \| error \| closed`; newest activity first. |
 | `POST /api/sessions` | `{harness, cwd, model?, provider?, title?, project?}` → `{session}` | Spawns the harness process. |
 | `GET /api/sessions/:id` | `{session}` | |
@@ -75,6 +75,7 @@ All events carry `sessionId`. Everything the UI renders derives from these:
 | `ctx.usage` | `used, total, by?` | Context-window occupancy. `by` (per-category) is reserved for harnesses that report it; none do yet, so don't invent it. |
 | `todo.upsert` | `todo` | Todo store patch. Broadcast only; hydrate with `GET /api/todos`. |
 | `feed.upsert` | `item` | Feed store patch. Broadcast only; hydrate with `GET /api/feed`. |
+| `models.updated` | `harness` | A lazy adapter's model catalog filled in (first-boot probe). Broadcast only (`sessionId` is ""); refetch `GET /api/harnesses`. |
 
 ## 5. THE CONTRACT: state model (non-negotiable mechanics)
 

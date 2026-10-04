@@ -34,6 +34,17 @@ export function NewSessionDialog({ onClose, preset }: { onClose: () => void; pre
   useEffect(() => {
     if (!harness && harnesses[0]) setHarness(harnesses[0].id);
   }, [harnesses]);
+
+  /* first boot on a fresh server: lazy adapters (hermes/dsh) have no catalog
+     yet and the picker would show only "harness default" (issue #101). Ask
+     the server for a one-shot probe when any harness's picker is empty; the
+     filled catalog lands via the models.updated broadcast and a refetch.
+     Runs once per dialog open — the server guards repeat probes. */
+  useEffect(() => {
+    if (harnesses.some((h) => !models.some((m) => m.harness === h.id))) void store.refreshHarnesses(true);
+    // run-once on mount; latest harnesses/models are not the trigger
+  }, []);
+
   const hModels = models.filter((m) => m.harness === harness);
   useEffect(() => setModel(hModels[0] ? `${hModels[0].provider}/${hModels[0].model}` : ""), [harness, models.length]);
 

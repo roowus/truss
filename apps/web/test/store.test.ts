@@ -335,3 +335,25 @@ test("msg.start attachments ride onto the message (transcript chips survive relo
   v2 = reduce(v2, { type: "msg.start", sessionId: "s", messageId: "m2", role: "user", at: 1000 } as never, T0);
   assert.ok(!("attachments" in v2.msgs["m2"]), "no phantom field on plain messages");
 });
+
+test("models.updated refetches harnesses (a probe-filled catalog reaches open pickers live)", async () => {
+  /* issue #101: a lazy adapter (hermes/dsh) probes on a fresh server and
+     announces the filled catalog with models.updated — the store must refetch
+     /api/harnesses so an open New Session dialog sees the models appear */
+  const s = store as unknown as {
+    onFrame: (f: { seq: number; ev: unknown }) => void;
+    refreshHarnesses: () => Promise<void>;
+  };
+  let refetches = 0;
+  s.refreshHarnesses = async () => {
+    refetches++;
+  };
+  try {
+    s.onFrame({ seq: 30, ev: { type: "models.updated", sessionId: "", harness: "hermes" } as never });
+    assert.equal(refetches, 1);
+    s.onFrame({ seq: 31, ev: { type: "models.updated", sessionId: "", harness: "dsh" } as never });
+    assert.equal(refetches, 2);
+  } finally {
+    delete (s as Record<string, unknown>).refreshHarnesses;
+  }
+});
