@@ -74,6 +74,15 @@ export function fmtSize(n: number): string {
 }
 export const shortPath = (p: string) => p.replace(/^\/home\/[^/]+/, "~").replace(/^\/Users\/[^/]+/, "~");
 
+/** the dead-session composer hint. Suppressed while the composer's error
+    banner carries the actual failure (e.g. "can't be resumed") — showing
+    both told the user "sending resumes it" directly under a banner saying
+    the opposite (developer report on PR #98's preview) */
+export function deadSessionHint(dead: boolean, hasError: boolean, harness: string): string | null {
+  if (!dead || hasError) return null;
+  return `Not running — sending resumes ${harness} with its history.`;
+}
+
 /** proc-table cell: user/memPct/threads/ageSec arrived with issue #10, so a
    pre-upgrade node-agent (or the demo fixture) omits them — dash, not a
    blank or NaN */

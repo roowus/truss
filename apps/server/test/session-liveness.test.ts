@@ -120,6 +120,9 @@ writeFileSync(PISH_BIN, `#!/bin/sh\nexec ${process.execPath} ${join(PISH_DIR, "i
 process.env.TRUSS_PI_BIN = PISH_BIN;
 process.env.TRUSS_HERMES_BIN = NOID_BIN;
 process.env.TRUSS_CLAUDE_BIN = PISH_BIN;
+/* the idless-resume rejection waits one watch window for a session/update;
+   shrink it so test 2 doesn't pay the production default */
+process.env.TRUSS_ACP_RESUME_WATCH_MS = "1500";
 
 test("a resume response without a sessionId rejects the spawn (never adopt the dead ref)", async () => {
   const { cleanup } = await freshServer("noid");
@@ -304,9 +307,69 @@ test("a dead ACP process unwinds its live sessions: the mid-turn settle lands, p
   }
 });
 
+/* ── 6. idless resume ACK healed by the session/update that follows ── */
+
+/* the REAL hermes-acp shape (probed live after the developer's PR #98
+   report): session/resume answers {models, modes} with NO sessionId — for a
+   live session AND for a dead ref it silently recreates — and the real
+   session id arrives as params.sessionId of the session/update frames right
+   after. Rejecting the idless ACK outright made every closed hermes session
+   unresumable; adopting the requested ref is the ghost. The fix reads the id
+   from the first session/update, and only a response with neither id nor
+   following update is the ghost that must fail (test 2 above). */
+const LAZY_DIR = mkdtempSync(join(tmpdir(), "truss-lazyid-"));
+const LAZY_FAKE = `
+let b = "";
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (c) => {
+  b += c; let i;
+  while ((i = b.indexOf("\\n")) >= 0) {
+    const l = b.slice(0, i).trim(); b = b.slice(i + 1);
+    if (!l) continue;
+    let r; try { r = JSON.parse(l); } catch { continue; }
+    if (r.id == null || !r.method) continue;
+    const reply = (result) => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: r.id, result }) + "\\n");
+    if (r.method === "initialize") reply({ protocolVersion: 1 });
+    else if (r.method === "session/resume") {
+      reply({ models: { availableModels: [], currentModelId: "custom:x" } }); /* idless ACK — the real hermes shape */
+      setTimeout(() => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", method: "session/update",
+        params: { sessionId: "hs-fresh-1", update: { sessionUpdate: "usage_update", used: 1, size: 100 } } }) + "\\n"), 30);
+    }
+    else reply({});
+  }
+});
+`;
+writeFileSync(join(LAZY_DIR, "lazy.cjs"), LAZY_FAKE);
+const LAZY_BIN = join(LAZY_DIR, "lazy-bin.sh");
+writeFileSync(LAZY_BIN, `#!/bin/sh\nexec ${process.execPath} ${join(LAZY_DIR, "lazy.cjs")}\n`, { mode: 0o755 });
+
+test("an idless resume ACK adopts the sessionId from the session/update that follows (real hermes shape)", async () => {
+  const { cleanup } = await freshServer("lazyid");
+  const hermes: any = await import("../src/adapters/hermes.js");
+  hermes.client.launch.command = LAZY_BIN;
+  hermes.client.proc?.kill("SIGKILL");
+  await tick(100);
+  try {
+    const h = await hermes.hermesAdapter.spawn({ sessionId: "t-lazyid", cwd: "/tmp", resumeRef: "dead-ref" });
+    try {
+      assert.equal(
+        h.harnessRef,
+        "hs-fresh-1",
+        "the resumed session must run on the id hermes actually reports — never the requested dead ref, never a rejection when the id follows in a session/update",
+      );
+      assert.equal(h.acpSessionId, "hs-fresh-1");
+    } finally {
+      hermes.hermesAdapter.dispose(h);
+    }
+  } finally {
+    hermes.client.proc?.kill("SIGKILL");
+    cleanup();
+  }
+});
+
 import { after } from "node:test";
 after(() => {
-  for (const d of [DIR, PISH_DIR, DEATH_DIR])
+  for (const d of [DIR, PISH_DIR, DEATH_DIR, LAZY_DIR])
     try {
       rmSync(d, { recursive: true, force: true });
     } catch {}

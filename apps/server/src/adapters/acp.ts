@@ -206,6 +206,9 @@ export class AcpClient {
     /* every rejected entry clears its own timer in the wrapper below */
     for (const p of this.pending.values()) p.rej(err);
     this.pending.clear();
+    /* a resume waiting on a session/update from this process must not wait
+       out its watch window — the process is dead, the id never comes */
+    for (const w of [...this.sessionWatchers]) w(null);
     /* the server took its sessions with it — these handlers are stale, and
        leaving them would refuse the re-registration a resume needs */
     this.sessionHandlers.clear();
@@ -240,6 +243,47 @@ export class AcpClient {
     };
   }
 
+  /* pending resume watchers — see watchForSessionUpdate. null settles them
+     (process death: the id will never come). */
+  private sessionWatchers = new Set<(sid: string | null) => void>();
+  /* ids a watcher has adopted but not yet registered: two cold resumes in
+     flight together must not both adopt the first id the harness reports.
+     The claim hands off to onSession's registration and releases there. */
+  private watchClaims = new Set<string>();
+
+  /**
+   * Resolve with the sessionId addressed by the first session/update whose
+   * id no live session owns, or null at the timeout / on process death.
+   * Exists for session/resume ACKs that omit the sessionId: hermes-acp's
+   * resume answers `{models, modes}` only (probed live, both for a live
+   * session and for a dead ref it silently recreates) and the real session
+   * id arrives as params.sessionId of the session/update frames right after.
+   * Frames for OWNED or already-claimed ids are other sessions' traffic —
+   * adopting one of those would register this spawn on another session's key.
+   */
+  watchForSessionUpdate(timeoutMs: number): { promise: Promise<string | null>; cancel: () => void } {
+    let resolve!: (v: string | null) => void;
+    const promise = new Promise<string | null>((res) => (resolve = res));
+    const watcher = (sid: string | null) => {
+      if (sid && (this.sessionHandlers.has(sid) || this.watchClaims.has(sid))) return;
+      cleanup();
+      if (sid) this.watchClaims.add(sid); /* held until onSession takes over */
+      resolve(sid);
+    };
+    const timer = setTimeout(() => {
+      this.sessionWatchers.delete(watcher);
+      resolve(null);
+    }, timeoutMs);
+    /* the watch is failure signaling, not a reason to hold the loop open */
+    timer.unref?.();
+    const cleanup = () => {
+      clearTimeout(timer);
+      this.sessionWatchers.delete(watcher);
+    };
+    this.sessionWatchers.add(watcher);
+    return { promise, cancel: cleanup };
+  }
+
   private dispatch(rec: Frame) {
     /* server→client requests (permission prompts) carry both id and method */
     if (rec.id != null && rec.method) {
@@ -268,7 +312,13 @@ export class AcpClient {
     }
     if (rec.method) {
       const sid = (rec.params as { sessionId?: string } | undefined)?.sessionId;
-      if (sid) this.sessionHandlers.get(sid)?.(rec);
+      if (sid) {
+        /* resume watchers first: an idless session/resume ACK is healed by
+           the first session/update that follows it (see
+           watchForSessionUpdate) */
+        for (const w of [...this.sessionWatchers]) w(sid);
+        this.sessionHandlers.get(sid)?.(rec);
+      }
     }
   }
 
@@ -348,6 +398,9 @@ export class AcpClient {
   }
 
   onSession(dshSessionId: string, fn: SessionHandler) {
+    /* a resume watcher's claim on this id hands off to the registration —
+       released either way, owned key or refused claimant */
+    this.watchClaims.delete(dshSessionId);
     /* first live registration wins: sessions multiplex on this one client
        keyed by the harness session id, and resume/respawn reuse the stored
        ref — so a spawn that outlived the spawn budget lands after a retry

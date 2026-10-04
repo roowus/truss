@@ -96,24 +96,31 @@ export const hermesAdapter: HarnessAdapter = {
     let res: { sessionId: string; models?: HermesModelState };
     if (opts.resumeRef) {
       /* hermes-acp advertises sessionCapabilities.resume; cwd is required.
-         READ the response (issue #14): it carries the model catalog AND the
-         real session id — hermes mints a fresh one when the persisted session
-         is gone, and addressing the dead id makes every later call a whisper
-         into the void */
+         READ the response (issue #14): it carries the model catalog and may
+         carry the real session id — hermes mints a fresh one when the
+         persisted session is gone, and addressing the dead id makes every
+         later call a whisper into the void.
+         Current hermes-acp omits the id entirely (probed live: the ACK is
+         {models, modes} for a live session AND for a dead ref it silently
+         recreates) — the real id arrives as params.sessionId of the
+         session/update frames right after. Adopt THAT id; an ACK with
+         neither id nor following update is the ghost and must fail (issue
+         #97). The watcher claims its id so two cold resumes can't both
+         adopt the first one reported. */
+      const watching = client.watchForSessionUpdate(Number(process.env.TRUSS_ACP_RESUME_WATCH_MS) || 5000);
       const r = (await client.call("session/resume", {
         sessionId: opts.resumeRef,
         cwd: opts.cwd,
         mcpServers: [],
       })) as { sessionId?: string; models?: HermesModelState } | null;
-      /* an ACK without a sessionId is not a resume — adopting the requested
-         (dead) ref re-arms the ghost: every later frame is unroutable and
-         prompts settle instantly-empty forever (issue #97) */
-      if (!r?.sessionId) {
+      const sessionId = r?.sessionId ?? (await watching.promise);
+      watching.cancel();
+      if (!sessionId) {
         throw new Error(
-          `session/resume answered without a sessionId; refusing to adopt the dead ref ${opts.resumeRef}`,
+          `session/resume answered without a sessionId and no session/update followed; refusing to adopt the dead ref ${opts.resumeRef}`,
         );
       }
-      res = { sessionId: r.sessionId, models: r.models };
+      res = { sessionId, models: r?.models };
     } else {
       res = (await client.call("session/new", { cwd: resolveCwd(opts.cwd).cwd, mcpServers: trussMcp(opts.sessionId) })) as {
         sessionId: string;

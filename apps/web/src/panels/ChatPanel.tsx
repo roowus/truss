@@ -1,7 +1,7 @@
 import { createContext, memo, useContext, useEffect, useLayoutEffect, useRef, useState, useMemo, type ReactNode } from "react";
 import type { IDockviewPanelProps } from "dockview-react";
 import { store, useApp, useNow, capsOf, type Msg, type ToolRun, type Perm, type SessionView } from "@/lib/store";
-import { argSummary, fmtMs, harnessStyle, shortPath, baseHarness } from "@/lib/format";
+import { argSummary, fmtMs, harnessStyle, shortPath, baseHarness, deadSessionHint } from "@/lib/format";
 import { deviceLabel } from "@/lib/device";
 import { buildModelOptions, modelValue, splitModelValue } from "@/lib/models";
 import { planHeaderFit, HEADER_CLUSTER, HEADER_GAP } from "@/lib/headerFit";
@@ -19,11 +19,19 @@ import { cn } from "@/utils/cn";
 type P = { sessionId: string };
 const drafts = new Map<string, string>();
 
-export function ChatPanel({ params }: IDockviewPanelProps<P>) {
+export function ChatPanel({ params, api }: IDockviewPanelProps<P>) {
   const id = params.sessionId;
   const meta = useApp((s) => s.sessions[id]);
   const view = useApp((s) => s.views[id]);
   const sessionsLoaded = useApp((s) => s.sessionsLoaded);
+
+  /* dockview keeps inactive panels' React state alive (portals), so a
+     composer error banner would otherwise survive tab switches forever */
+  const [active, setActive] = useState(api.isActive);
+  useEffect(() => {
+    const d = api.onDidActiveChange(() => setActive(api.isActive));
+    return () => d.dispose();
+  }, [api]);
 
   useEffect(() => {
     if (meta) void store.ensureHydrated(id);
@@ -54,7 +62,7 @@ export function ChatPanel({ params }: IDockviewPanelProps<P>) {
           </Empty>
         </div>
       ) : (
-        <ChatWidthProvider timeline={<Timeline id={id} view={view} />} composer={<Composer id={id} />} perms={view ? <PermDock id={id} view={view} /> : null} />
+        <ChatWidthProvider timeline={<Timeline id={id} view={view} />} composer={<Composer id={id} active={active} />} perms={view ? <PermDock id={id} view={view} /> : null} />
       )}
     </div>
   );
@@ -495,7 +503,7 @@ function PermDock({ id, view }: { id: string; view: SessionView }) {
 }
 
 /* ---------------- composer ---------------- */
-function Composer({ id }: { id: string }) {
+function Composer({ id, active }: { id: string; active: boolean }) {
   const meta = useApp((s) => s.sessions[id]);
   const caps = useApp((s) => capsOf(s, meta.harness));
   const pending = useApp((s) => s.views[id]?.pending);
@@ -503,6 +511,11 @@ function Composer({ id }: { id: string }) {
   const [text, setText] = useState(drafts.get(id) ?? "");
   const [sending, setSending] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  /* an error banner belongs to the attempt that failed: switching away from
+     this tab dismisses it (dockview keeps the component's state alive) */
+  useEffect(() => {
+    if (!active) setErr(null);
+  }, [active]);
   const [atts, setAtts] = useState<import("@/lib/proto").PromptAttachment[]>([]);
   const [uploading, setUploading] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -600,7 +613,11 @@ function Composer({ id }: { id: string }) {
   let tone: "amber" | "dim" | "red" = "dim";
   if (dead) {
     tone = meta.state === "error" ? "red" : "dim";
-    hint = <><Icon name="power" size={12} /> Not running — sending resumes {meta.harness} with its history.</>;
+    /* one message, not two: while the error banner carries the actual
+       failure, the generic "sending resumes it" hint must not sit under it
+       saying the opposite */
+    const deadHint = deadSessionHint(dead, !!err, meta.harness);
+    if (deadHint) hint = <><Icon name="power" size={12} /> {deadHint}</>;
   } else if (spawning) {
     tone = "amber";
     hint = <><Spinner size={11} /> Booting {meta.harness}… {since ? fmtMs(now - since) : ""}{baseHarness(meta.harness) === "dsh" && " (dsh takes 5–10s)"}</>;
