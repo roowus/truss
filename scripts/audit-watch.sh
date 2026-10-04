@@ -69,6 +69,14 @@ gh pr list -R "$REPO" --state open --label audit --json number,title,body \
 [ -s "$SPOOL/ORPHANS.txt" ] && \
   echo "$(date -Is) orphan audit-labeled PRs (no session): $(paste -sd'; ' "$SPOOL/ORPHANS.txt")"
 
+# contradiction sweep: audit + ready-for-review together means a worker handed
+# off mid-loop. The audit label is the truth — strip the premature marker.
+gh pr list -R "$REPO" --state open --label audit --label ready-for-review \
+  --json number --jq '.[].number' 2>/dev/null | while read -r n; do
+  gh pr edit "$n" -R "$REPO" --remove-label ready-for-review 2>/dev/null && \
+    echo "$(date -Is) PR #$n: stripped premature ready-for-review (audit label still on)"
+done
+
 # unpark CI: bot pushes park pull_request runs as action_required (GitHub's
 # bot approval gate). Approving as the local user clears them; without this
 # every automated fix push leaves the PR showing "workflow needs approval".

@@ -115,7 +115,10 @@ never asked for? When you judge it done:
 3. Confirm the preview is up and healthy at `https://pr-<N>.truss.rewis`
    (tilt is already running it; fix it if not — the developer tests there).
 4. **Hand it to the developer on the PR itself** — this is the queue they
-   watch:
+   watch. Preconditions, both checked, not assumed: the `audit` label is OFF
+   (`gh pr view --json labels`) and the latest audit's verdict on the FINAL
+   head is clean/approved. `ready-for-review` and `audit` must never coexist
+   — the label says "done", the loop says "not done".
    a. Apply the review label: `gh pr edit <pr> --add-label ready-for-review`.
    b. Post the handoff comment:
       `gh pr comment <pr> --body "..."` covering, in plain language:
@@ -133,6 +136,29 @@ never asked for? When you judge it done:
 6. Update your ledger entry (`~/.local/state/truss-sessions.json`) to
    `"state": "review"`.
 
+## Asking the developer a question (the question lane)
+
+When you hit a decision only the developer can make — a design or execution
+choice that changes the user-visible outcome and that neither the issue nor
+TRUSS.md settles — STOP and ask. Never guess on those; never ask about taste
+or anything the repo already answers. The bar is high: one good question is
+worth ten stalled guesses, and ten noise questions is worse than guessing.
+
+1. Post the question where the developer's queue lives — a comment on your
+   PR (or the issue, if no PR exists yet): the decision in one sentence, the
+   options you see with your recommendation, and why you can't call it.
+2. Mark it for them: `gh pr edit <pr> --add-label needs-answer` (or the issue).
+3. Badge your session so the GUI sidebar shows the dot:
+   `curl -sS -X POST http://127.0.0.1:3080/plugins/dsh-unread/mark -H 'content-type: application/json' -d "{\"sessionId\": \"$DSH_SESSION_ID\", \"unread\": true}"`
+4. Ledger: set your entry to `"state": "blocked"`.
+5. Self-wake every ~15 minutes: check for a reply (a comment newer than your
+   question is the answer; the developer may also message your session
+   directly — the deep link is in your PR body and your question comment).
+   On an answer: remove the `needs-answer` label, clear the unread mark (same
+   route with `"unread": false`), ledger back to `"working"`, and continue
+   with the answer. No answer after several wakes is fine — stay parked; do
+   NOT proceed on a guess.
+
 ## If the developer messages you after manual testing
 
 They test at the preview URL and message you what's wrong. Treat it like a
@@ -146,7 +172,9 @@ developer's click — never merge, never ask to.
   developer, the pipeline session, and other workers all touch it). Do your
   work in your `pr-preview/w/<n>` worktree or any branch — but whenever you
   go idle (waiting on audits or review), leave the main checkout ON `main`
-  with a clean tree: commit/stash your work first, then
+  with a clean tree: commit/stash your work first — INCLUDING untracked files (test
+  files you created must be committed to your branch or removed; an untracked
+  leftover blocks the mainline updater's merges) — then
   `git -C /home/ubuntu/projects/truss checkout main`. Never leave it parked
   on your branch.
 - Commit attribution follows TRUSS.md "Commits": author and committer are

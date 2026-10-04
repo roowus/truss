@@ -2,6 +2,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type { AdapterHandle, HarnessAdapter, SessionOpts } from "./types.js";
 import { resolveCwd } from "./types.js";
+import { lazyCatalog, type CatalogModel } from "./model-catalog-cache.js";
 import {
   AcpClient,
   beginAcpTurn,
@@ -57,7 +58,28 @@ interface HermesModelState {
   currentModelId?: string;
 }
 
-let discoveredModels: { provider: string; model: string; label: string }[] = [];
+/* the picker catalog is lazy: hermes reports it only in session/new and
+   session/resume responses, kept in module memory — a server restart emptied
+   the picker until the next session booted (issue #101). The shared
+   lazyCatalog persists every discovery, hydrates on load, and probes on
+   first boot (one throwaway session/new, no MCP servers, closed again). */
+const catalog = lazyCatalog("models:hermes", async () => {
+  await client.ensure();
+  const res = (await client.call("session/new", { cwd: homedir(), mcpServers: [] })) as {
+    sessionId: string;
+    models?: HermesModelState;
+  };
+  await client.call("session/close", { sessionId: res.sessionId }).catch(() => undefined);
+  return mapModels(res.models);
+});
+
+function mapModels(state: HermesModelState | undefined): CatalogModel[] {
+  return (state?.availableModels ?? []).map((m) => ({
+    provider: "hermes",
+    model: m.modelId,
+    label: m.name ?? m.modelId,
+  }));
+}
 
 function handleServerMessage(
   h: AcpSessionState,
@@ -87,8 +109,10 @@ export const hermesAdapter: HarnessAdapter = {
   capabilities: { permissions: true, subagents: false, streaming: true, queueWhileRunning: false },
 
   async listModels() {
-    return discoveredModels;
+    return catalog.list();
   },
+
+  probeModels: catalog.probe,
 
   async spawn(opts: SessionOpts): Promise<AcpSessionState> {
     await client.ensure();
@@ -134,13 +158,7 @@ export const hermesAdapter: HarnessAdapter = {
       };
     }
 
-    if (res.models?.availableModels?.length) {
-      discoveredModels = res.models.availableModels.map((m) => ({
-        provider: "hermes",
-        model: m.modelId,
-        label: m.name ?? m.modelId,
-      }));
-    }
+    if (res.models?.availableModels?.length) catalog.set(mapModels(res.models));
 
     const model = opts.model ?? res.models?.currentModelId ?? "default";
 

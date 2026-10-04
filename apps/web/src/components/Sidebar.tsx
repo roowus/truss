@@ -7,6 +7,7 @@ import { HarnessMark, Icon, IconBtn, StateDot, TrussLogo, Spinner, STATE_META } 
 import type { HostInfo, SessionMeta, TerminalInfo } from "@/lib/proto";
 import { hostRowActions, shellRowActions } from "@/lib/rowActions";
 import { sortWithPinned } from "@/lib/pinSort";
+import { pinAffordance, pinVisibilityCls } from "@/lib/pinAffordance";
 import { cn } from "@/utils/cn";
 
 export function Sidebar({ onNew }: { onNew: () => void }) {
@@ -213,6 +214,10 @@ function SessionRow({ s, now, archived, trashView }: { s: SessionMeta; now: numb
      so the panel would only claim it no longer exists. Restore is the way
      back in (issue #5). */
   const openable = !trashView;
+  /* the pin button IS the indicator (issue #99): solid + always visible when
+     pinned, hollow + hover-only when not — one element, no separate glyph
+     next to the title */
+  const pin = pinAffordance(!!s.pinned);
   return (
     <div
       onClick={openable ? () => openSession(s.id) : undefined}
@@ -223,7 +228,18 @@ function SessionRow({ s, now, archived, trashView }: { s: SessionMeta; now: numb
       {focused && <span className="absolute left-0 top-2 bottom-2 w-[2px] rounded-full bg-[var(--t-amber)]" />}
       <HarnessMark harness={s.harness} size={17} className={dead ? "opacity-45" : ""} />
       <span className={cn("flex-1 min-w-0 truncate text-[12.5px]", dead ? "text-[var(--t-mute)]" : "text-[var(--t-fg)]", archived && "opacity-60")}>{s.title}</span>
-      {!!s.pinned && !trashView && <Icon name="pin" size={10} className="shrink-0 text-[var(--t-amber)] opacity-80" />}
+      {!trashView && (
+        <IconBtn
+          icon={pin.icon}
+          label={pin.actionLabel}
+          active={!!s.pinned}
+          className={cn("w-6 h-6 shrink-0", pinVisibilityCls(pin.visible))}
+          onClick={(e) => {
+            e.stopPropagation();
+            void store.pinSession(s.id, !s.pinned);
+          }}
+        />
+      )}
       {pending > 0 && (
         <span className="shrink-0 inline-grid place-items-center w-4 h-4 rounded-full bg-[var(--t-amber)] text-[#1b1305] text-[9.5px] font-bold t-pulse-soft" title="Permission waiting">{pending}</span>
       )}
@@ -238,16 +254,6 @@ function SessionRow({ s, now, archived, trashView }: { s: SessionMeta; now: numb
         <StateDot state={s.state} size={6} />
       </span>
       <span className="hidden group-hover:flex items-center shrink-0" onClick={(e) => e.stopPropagation()}>
-        {/* pin is orthogonal to archive (issue #86): offered on both kinds of row */}
-        {!trashView && (
-          <IconBtn
-            icon="pin"
-            label={s.pinned ? "Unpin from the top of the section" : "Pin to the top of the section"}
-            className="w-6 h-6"
-            active={!!s.pinned}
-            onClick={() => void store.pinSession(s.id, !s.pinned)}
-          />
-        )}
         {archived ? (
           <IconBtn icon="archive" label="Restore to the sidebar" className="w-6 h-6" onClick={() => store.archiveSession(s.id, false)} />
         ) : (
@@ -316,6 +322,10 @@ function ShellRow({ t }: { t: TerminalInfo }) {
   const rename = actions.find((a) => a.id === "rename");
   const kill = actions.find((a) => a.dangerous);
   const dead = t.alive === false;
+  /* pin uses opacity, not display, so it stays in the tab order — focus
+     reveals it like hover does (issue #86); since issue #99 the button IS
+     the indicator: solid + always visible when pinned */
+  const pin = pinAffordance(!!t.pinned);
 
   const finishRename = () => {
     const next = name.trim();
@@ -346,14 +356,11 @@ function ShellRow({ t }: { t: TerminalInfo }) {
       ) : (
         <span className="text-[12px] text-[var(--t-fg2)] truncate">{t.title ?? t.id}</span>
       )}
-      {/* pin uses opacity, not display, so it stays in the tab order — focus
-          reveals it like hover does (issue #86); when pinned it doubles as
-          the always-on amber marker */}
       <IconBtn
-        icon="pin"
-        label={t.pinned ? "Unpin shell" : "Pin shell to the top of this section"}
+        icon={pin.icon}
+        label={pin.actionLabel}
         active={!!t.pinned}
-        className={cn("ml-auto w-6 h-6", !t.pinned && "opacity-0 group-hover:opacity-70 focus-visible:opacity-100")}
+        className={cn("ml-auto w-6 h-6", pinVisibilityCls(pin.visible))}
         onClick={(e) => {
           e.stopPropagation();
           void store.pinTerminal(t.id, !t.pinned);
@@ -390,6 +397,12 @@ function HostRow({ h, alias }: { h: HostInfo; alias?: string }) {
   const actions = hostRowActions(h);
   const del = actions.find((a) => a.dangerous);
   const open = () => openPanel("host", { hostId: h.id, title: alias || h.label });
+  /* a real button now that the row is a div (pre-#85 the row itself was
+     a <button>, so pin had to be a span); opacity, not display, keeps it
+     tabbable — focus reveals it like hover does (issue #86, audit B4).
+     Since issue #99 the button IS the indicator: solid + always visible
+     when pinned */
+  const pin = pinAffordance(!!h.pinned);
 
   return (
     <div
@@ -410,14 +423,11 @@ function HostRow({ h, alias }: { h: HostInfo; alias?: string }) {
       <Icon name="host" size={12} className={h.online ? "text-[var(--t-sky)]" : "text-[var(--t-dim)]"} />
       <span className={cn("flex-1 truncate", !h.online && "opacity-50")}>{alias || h.label}</span>
       {h.revoked && !confirm && <span className="text-[8.5px] font-mono uppercase text-[var(--t-red)] shrink-0 group-hover:hidden">revoked</span>}
-      {/* a real button now that the row is a div (pre-#85 the row itself was
-          a <button>, so pin had to be a span); opacity, not display, keeps it
-          tabbable — focus reveals it like hover does (issue #86, audit B4) */}
       <IconBtn
-        icon="pin"
-        label={h.pinned ? "Unpin host" : "Pin host to the top of this section"}
+        icon={pin.icon}
+        label={pin.actionLabel}
         active={!!h.pinned}
-        className={cn("w-6 h-6", !h.pinned && "opacity-0 group-hover:opacity-70 focus-visible:opacity-100")}
+        className={cn("w-6 h-6", pinVisibilityCls(pin.visible))}
         onClick={(e) => {
           e.stopPropagation();
           void store.pinHost(h.id, !h.pinned);
