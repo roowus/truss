@@ -285,16 +285,24 @@ function goLive(id: string, adapter: HarnessAdapter, handle: AdapterHandle) {
         } catch {
           /* already gone */
         }
-        const row = store.getSession(id);
-        if (row && row.state !== "closed" && row.state !== "error") {
-          sink({
-            type: "session.state",
-            sessionId: id,
-            state: "error",
-            detail: "harness event stream ended; the next prompt resumes the session",
-          });
+        /* the same hazard the loop guards applies here: a store throw after
+           live.delete would skip the error flip and leave the row stuck
+           "running" with no live entry — every later prompt refused until a
+           restart's reconcileOnBoot heals it */
+        try {
+          const row = store.getSession(id);
+          if (row && row.state !== "closed" && row.state !== "error") {
+            sink({
+              type: "session.state",
+              sessionId: id,
+              state: "error",
+              detail: "harness event stream ended; the next prompt resumes the session",
+            });
+          }
+          if (row && row.state !== "closed") settleOrphanedPerms(id);
+        } catch (err) {
+          console.error(`pump-end cleanup failed for ${id}:`, err);
         }
-        if (row && row.state !== "closed") settleOrphanedPerms(id);
       }
     }
   })();
