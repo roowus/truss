@@ -115,7 +115,10 @@ never asked for? When you judge it done:
 3. Confirm the preview is up and healthy at `https://pr-<N>.truss.rewis`
    (tilt is already running it; fix it if not — the developer tests there).
 4. **Hand it to the developer on the PR itself** — this is the queue they
-   watch:
+   watch. Preconditions, both checked, not assumed: the `audit` label is OFF
+   (`gh pr view --json labels`) and the latest audit's verdict on the FINAL
+   head is clean/approved. `ready-for-review` and `audit` must never coexist
+   — the label says "done", the loop says "not done".
    a. Apply the review label: `gh pr edit <pr> --add-label ready-for-review`.
    b. Post the handoff comment:
       `gh pr comment <pr> --body "..."` covering, in plain language:
