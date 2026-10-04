@@ -45,7 +45,10 @@ export function NewSessionDialog({ onClose, preset }: { onClose: () => void; pre
   const probedRef = useRef(false);
   useEffect(() => {
     if (probedRef.current || !harnesses.length) return;
-    if (!harnesses.some((h) => !models.some((m) => m.harness === h.id))) return;
+    /* only probeable harnesses can gain a catalog from the ask — pi without
+       models.json or a remote adapter is legitimately empty, and probing
+       those would be a wasted round trip per dialog open (audit round 2) */
+    if (!harnesses.some((h) => h.probeable && !models.some((m) => m.harness === h.id))) return;
     probedRef.current = true;
     void store.refreshHarnesses(true);
   }, [harnesses, models]);

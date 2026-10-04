@@ -579,6 +579,11 @@ export function listHarnesses() {
   return [...adapters.values()].map((a) => ({
     id: a.id,
     capabilities: a.capabilities,
+    /* lazy adapters can fill an empty catalog on request (POST
+       /api/harnesses/probe); the dialog asks only for these — a static or
+       config-less catalog (pi without models.json, remote adapters) can
+       never change from a probe, so asking would be a wasted round trip */
+    probeable: typeof a.probeModels === "function",
   }));
 }
 
@@ -590,7 +595,7 @@ export async function listModels(opts: { probe?: boolean } = {}) {
     /* lazy adapters (hermes, dsh) discover their catalog from the first
        session boot, which leaves the picker empty on a fresh server
        (issue #101). The probe is opt-in (the New Session dialog asks for it
-       via /api/harnesses?probe=1): an unconditional probe would boot real
+       via POST /api/harnesses/probe): an unconditional probe would boot real
        harness processes from any fetch, tests included. It runs in the
        background — never in this request's path — and a filled catalog is
        announced so open pickers refetch. */
