@@ -133,6 +133,29 @@ never asked for? When you judge it done:
 6. Update your ledger entry (`~/.local/state/truss-sessions.json`) to
    `"state": "review"`.
 
+## Asking the developer a question (the question lane)
+
+When you hit a decision only the developer can make — a design or execution
+choice that changes the user-visible outcome and that neither the issue nor
+TRUSS.md settles — STOP and ask. Never guess on those; never ask about taste
+or anything the repo already answers. The bar is high: one good question is
+worth ten stalled guesses, and ten noise questions is worse than guessing.
+
+1. Post the question where the developer's queue lives — a comment on your
+   PR (or the issue, if no PR exists yet): the decision in one sentence, the
+   options you see with your recommendation, and why you can't call it.
+2. Mark it for them: `gh pr edit <pr> --add-label needs-you` (or the issue).
+3. Badge your session so the GUI sidebar shows the dot:
+   `curl -sS -X POST http://127.0.0.1:3080/plugins/dsh-unread/mark -H 'content-type: application/json' -d "{\"sessionId\": \"$DSH_SESSION_ID\", \"unread\": true}"`
+4. Ledger: set your entry to `"state": "blocked"`.
+5. Self-wake every ~15 minutes: check for a reply (a comment newer than your
+   question is the answer; the developer may also message your session
+   directly — the deep link is in your PR body and your question comment).
+   On an answer: remove the `needs-you` label, clear the unread mark (same
+   route with `"unread": false`), ledger back to `"working"`, and continue
+   with the answer. No answer after several wakes is fine — stay parked; do
+   NOT proceed on a guess.
+
 ## If the developer messages you after manual testing
 
 They test at the preview URL and message you what's wrong. Treat it like a
