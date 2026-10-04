@@ -190,8 +190,11 @@ function TrussTab({ api, params }: IDockviewPanelHeaderProps<{ sessionId?: strin
       >
         <Icon name={KIND_ICON[kind] ?? "layout"} size={12} />
       </span>
-      {/* the tab's name, fading out at the cut when it overflows (Chrome-style, no ellipsis) */}
-      {view.showTitle && <span className="min-w-0 overflow-hidden whitespace-nowrap t-fade-r">{title}</span>}
+      {/* the tab's name, fading out at the cut — Chrome-style, no ellipsis.
+          The span grows to fill the tab's free space, so the fade zone sits
+          on empty space when the title fits and only touches text that
+          actually overflows */}
+      {view.showTitle && <span className="min-w-0 flex-1 overflow-hidden whitespace-nowrap t-fade-r">{title}</span>}
       {view.showTitle && meta && kind === "chat" && <StateDot state={meta.state} size={6} />}
       {view.showTitle && pending > 0 && (
         <span className="inline-flex items-center gap-0.5 min-w-4 h-4 px-1 rounded-full bg-[var(--t-amber)] text-[#1b1305] text-[9.5px] font-bold t-pulse-soft shrink-0" title={`${pending} permission request(s) waiting`}>
@@ -312,8 +315,9 @@ const DesktopCanvas = memo(function DesktopCanvas({ id, visible }: { id: string;
         getTabContextMenuItems={contextMenu}
         onReady={(e: DockviewReadyEvent) => { dispose.current = desktops.register(id, e.api); }}
         theme={theme}
-        /* no chevron-arrow overflow dropdown: tabs keep their natural width
-           and the strip scrolls horizontally instead of clipping tabs away */
+        /* no chevron-arrow overflow dropdown: tabs share one uniform clamped
+           width (lib/chromeTabs.ts), and past the icon floor the strip clips
+           by design — overflowed tabs stay reachable via the + picker */
         disableTabsOverflowList
       />
     </div>
