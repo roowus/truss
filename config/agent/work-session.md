@@ -169,7 +169,9 @@ developer's click — never merge, never ask to.
   developer, the pipeline session, and other workers all touch it). Do your
   work in your `pr-preview/w/<n>` worktree or any branch — but whenever you
   go idle (waiting on audits or review), leave the main checkout ON `main`
-  with a clean tree: commit/stash your work first, then
+  with a clean tree: commit/stash your work first — INCLUDING untracked files (test
+  files you created must be committed to your branch or removed; an untracked
+  leftover blocks the mainline updater's merges) — then
   `git -C /home/ubuntu/projects/truss checkout main`. Never leave it parked
   on your branch.
 - Commit attribution follows TRUSS.md "Commits": author and committer are
