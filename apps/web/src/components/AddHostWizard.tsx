@@ -3,6 +3,7 @@ import { store, useApp } from "@/lib/store";
 import { ago, until } from "@/lib/format";
 import { peerAlreadyAdded } from "@/lib/device";
 import { dropInstructionLabel } from "@/lib/installInstruction";
+import { buildInstallCommand } from "@/lib/installCommand";
 import { reachableAddresses, reachableTailscaleReturn } from "@/lib/reachability";
 import type { DeliveryOption, NetInfo, TailscalePeer } from "@/lib/proto";
 import { Btn, Icon, Select, Spinner } from "./ui";
@@ -121,9 +122,9 @@ export function AddHostWizard({ onClose }: { onClose: () => void }) {
 
   const pickedPeerLabel = pickedPeer ? peers?.peers.find((p) => p.dnsName === pickedPeer)?.hostName ?? null : null;
 
-  const command = created && serverAddr
-    ? `curl -fsSL ${serverAddr}/agent/install.sh?host=${created.id} | sh -s -- ${created.token}`
-    : "";
+  /* shell-quoted (issue #22): a bare ? in the URL trips zsh's glob
+     expansion ("no matches found") — the macOS default shell */
+  const command = created && serverAddr ? buildInstallCommand(serverAddr, created.id, created.token) : "";
 
   /* the file taildrop delivered — the authoritative name comes back in the
      taildropHost response (the demo backend names it differently) */
