@@ -122,9 +122,10 @@ test("fresh server: the picker fetch is empty but a background probe fills both 
   assert.deepEqual(await hermes.hermesAdapter.listModels(), [], "no hermes catalog before any session boot");
   assert.deepEqual(await dsh.dshAdapter.listModels(), [], "no dsh catalog before any session boot");
 
-  /* the probe is OPT-IN (the dialog's ?probe=1): a plain fetch must never
-     spawn harness processes — every api test boots a server with empty
-     catalogs, and an ungated probe wedged the suite on a real dsh boot */
+  /* the probe is OPT-IN (the dialog's POST /api/harnesses/probe): a plain
+     fetch must never spawn harness processes — every api test boots a server
+     with empty catalogs, and an ungated probe wedged the suite on a real dsh
+     boot */
   await sessions.listModels();
   await new Promise((r) => setTimeout(r, 300));
   assert.equal(probeNews(HERMES_LOG).length, 0, "no probe without probe: true");
