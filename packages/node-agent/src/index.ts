@@ -24,6 +24,7 @@ import { hostname as osHostname } from "node:os";
 import { createHash } from "node:crypto";
 import WebSocket from "ws";
 import { dialFailureHint } from "./dialHint.js";
+import { applyServerEnv } from "./serverEnv.js";
 import type { HarnessAdapter, AdapterHandle, SessionOpts } from "../../../apps/server/src/adapters/types.js";
 import { piAdapter } from "../../../apps/server/src/adapters/pi.js";
 import { claudeAdapter } from "../../../apps/server/src/adapters/claude.js";
@@ -49,11 +50,11 @@ const HOST_ID =
   createHash("sha1").update(osHostname()).digest("hex").slice(0, 8);
 
 /* the management MCP + permission hosts live on the Truss SERVER — from a
-   remote host, 127.0.0.1 would be the wrong machine. Derive the http(s) base
-   from the ws(s) server URL before any adapter spawn reads it. */
-if (!process.env.TRUSS_MCP_BASE) {
-  process.env.TRUSS_MCP_BASE = SERVER.replace(/^ws/, "http").replace(/\/$/, "");
-}
+   remote host, 127.0.0.1 would be the wrong machine. Derive the http(s)
+   bases from the ws(s) server URL before any adapter spawn reads it
+   (issue #100, item 16: the claude adapter used to freeze the loopback
+   defaults at module scope, before this code ever ran). */
+applyServerEnv(SERVER);
 
 interface LiveEntry {
   adapter: HarnessAdapter;
