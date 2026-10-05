@@ -5,7 +5,7 @@ import { ago, daysLeftInTrash, shortPath } from "@/lib/format";
 import { openAgentShell, openDailyDriver, openFreeShell, openPanel, openSession } from "@/lib/workspace";
 import { HarnessMark, Icon, IconBtn, StateDot, TrussLogo, Spinner, STATE_META } from "./ui";
 import type { HostInfo, SessionMeta, TerminalInfo } from "@/lib/proto";
-import { hostRowActions, shellRowActions } from "@/lib/rowActions";
+import { hostRowActions, sessionRowActions, shellRowActions, type SessionRowAction } from "@/lib/rowActions";
 import { sortWithPinned } from "@/lib/pinSort";
 import { pinAffordance, pinVisibilityCls } from "@/lib/pinAffordance";
 import { cn } from "@/utils/cn";
@@ -214,10 +214,30 @@ function SessionRow({ s, now, archived, trashView }: { s: SessionMeta; now: numb
      so the panel would only claim it no longer exists. Restore is the way
      back in (issue #5). */
   const openable = !trashView;
-  /* the pin button IS the indicator (issue #99): solid + always visible when
-     pinned, hollow + hover-only when not — one element, no separate glyph
-     next to the title */
-  const pin = pinAffordance(!!s.pinned);
+  /* ONE action cluster per row (issue #110): the pin leads the same array,
+     flex container, and gap as every other action — before this it was a
+     bespoke element mid-row, so its gap to the cluster could never match
+     the cluster's own spacing. The pin button IS the indicator (issue #99):
+     solid + always visible when pinned, hollow + hover-only when not.
+     Badge/timestamp/state stay indicators outside the cluster. */
+  const actions = sessionRowActions({ pinned: !!s.pinned, archived, dead, trashView });
+  const runAction = (a: SessionRowAction) => {
+    /* destructive entries keep the two-click confirm (the #85 rule) */
+    if (a.confirm) {
+      if (!confirm) return setConfirm(true);
+      setConfirm(false);
+    }
+    switch (a.id) {
+      case "pin": return void store.pinSession(s.id, !s.pinned);
+      case "shell": return openAgentShell(s.id);
+      case "archive": return void store.archiveSession(s.id, true);
+      case "unarchive": return void store.archiveSession(s.id, false);
+      case "close": return void store.closeSession(s.id);
+      case "restore": return void store.restoreSession(s.id);
+      case "trash": return void store.deleteSession(s.id);
+      case "purge": return void store.purgeSession(s.id);
+    }
+  };
   return (
     <div
       onClick={openable ? () => openSession(s.id) : undefined}
@@ -228,18 +248,6 @@ function SessionRow({ s, now, archived, trashView }: { s: SessionMeta; now: numb
       {focused && <span className="absolute left-0 top-2 bottom-2 w-[2px] rounded-full bg-[var(--t-amber)]" />}
       <HarnessMark harness={s.harness} size={17} className={dead ? "opacity-45" : ""} />
       <span className={cn("flex-1 min-w-0 truncate text-[12.5px]", dead ? "text-[var(--t-mute)]" : "text-[var(--t-fg)]", archived && "opacity-60")}>{s.title}</span>
-      {!trashView && (
-        <IconBtn
-          icon={pin.icon}
-          label={pin.actionLabel}
-          active={!!s.pinned}
-          className={cn("w-6 h-6 shrink-0", pinVisibilityCls(pin.visible))}
-          onClick={(e) => {
-            e.stopPropagation();
-            void store.pinSession(s.id, !s.pinned);
-          }}
-        />
-      )}
       {pending > 0 && (
         <span className="shrink-0 inline-grid place-items-center w-4 h-4 rounded-full bg-[var(--t-amber)] text-[#1b1305] text-[9.5px] font-bold t-pulse-soft" title="Permission waiting">{pending}</span>
       )}
@@ -253,38 +261,38 @@ function SessionRow({ s, now, archived, trashView }: { s: SessionMeta; now: numb
         )}
         <StateDot state={s.state} size={6} />
       </span>
-      <span className="hidden group-hover:flex items-center shrink-0" onClick={(e) => e.stopPropagation()}>
-        {archived ? (
-          <IconBtn icon="archive" label="Restore to the sidebar" className="w-6 h-6" onClick={() => store.archiveSession(s.id, false)} />
-        ) : (
-          <>
-            <IconBtn icon="term" label="Shell in cwd" className="w-6 h-6" onClick={() => openAgentShell(s.id)} />
-            <IconBtn icon="archive" label="Archive (hide from sidebar; keeps history)" className="w-6 h-6" onClick={() => store.archiveSession(s.id, true)} />
-          </>
-        )}
-        {!dead && !archived && !trashView && <IconBtn icon="power" label="Close (stop process, keep history)" className="w-6 h-6" onClick={() => store.closeSession(s.id)} />}
-        {trashView ? (
-          <>
-            <IconBtn icon="retry" label="Restore (back to the sidebar, history intact)" className="w-6 h-6" onClick={() => void store.restoreSession(s.id)} />
-            <IconBtn
-              icon="trash"
-              label={confirm ? "Click again: gone forever, no undo" : "Delete forever (no undo)"}
-              className={cn("w-6 h-6", confirm && "!text-[var(--t-red)] bg-[color-mix(in_oklab,var(--t-red)_15%,transparent)]")}
-              onClick={() => (confirm ? store.purgeSession(s.id) : setConfirm(true))}
-            />
-          </>
-        ) : (
+      {/* one container, one gap: the pin's visibility is its per-member rule
+          (opacity, so it keeps its slot and stays tabbable), the rest reveal
+          on hover as before. In trash view there is no always-slotted member,
+          so the container itself hides until hover (as the pre-#110 wrapper
+          did) — otherwise its empty box would eat a row gap (audit B2). */}
+      <span className={cn("items-center shrink-0", trashView ? "hidden group-hover:flex" : "flex")} onClick={(e) => e.stopPropagation()}>
+        {actions.map((a) => (
           <IconBtn
-            icon="trash"
-            label={confirm ? "Click again to move to trash" : "Move to trash (recoverable for 30 days)"}
-            className={cn("w-6 h-6", confirm && "!text-[var(--t-red)] bg-[color-mix(in_oklab,var(--t-red)_15%,transparent)]")}
-            onClick={() => (confirm ? store.deleteSession(s.id) : setConfirm(true))}
+            key={a.id}
+            icon={a.icon}
+            label={confirm && a.confirm ? (CONFIRM_LABEL[a.id] ?? a.label) : a.label}
+            active={a.id === "pin" ? !!s.pinned : undefined}
+            className={cn(
+              "w-6 h-6 shrink-0",
+              a.id === "pin" ? pinVisibilityCls(a.visible) : "hidden group-hover:inline-grid",
+              confirm && a.confirm && "!text-[var(--t-red)] bg-[color-mix(in_oklab,var(--t-red)_15%,transparent)]",
+            )}
+            onClick={() => runAction(a)}
           />
-        )}
+        ))}
       </span>
     </div>
   );
 }
+
+/* second-click labels for the session row's destructive actions; a future
+   confirm action without an entry falls back to its first-click label at
+   the call site, so a missing key can never blank the tooltip */
+const CONFIRM_LABEL: Record<string, string> = {
+  trash: "Click again to move to trash",
+  purge: "Click again: gone forever, no undo",
+};
 
 
 /* ---------------- shells + remote hosts rows (issue #85) ----------------
@@ -356,22 +364,24 @@ function ShellRow({ t }: { t: TerminalInfo }) {
       ) : (
         <span className="text-[12px] text-[var(--t-fg2)] truncate">{t.title ?? t.id}</span>
       )}
-      <IconBtn
-        icon={pin.icon}
-        label={pin.actionLabel}
-        active={!!t.pinned}
-        className={cn("ml-auto w-6 h-6", pinVisibilityCls(pin.visible))}
-        onClick={(e) => {
-          e.stopPropagation();
-          void store.pinTerminal(t.id, !t.pinned);
-        }}
-      />
-      <span className="hidden group-hover:flex items-center shrink-0" onClick={(e) => e.stopPropagation()}>
+      {/* one cluster, one gap (issue #110): the pin leads the same container
+          as the other actions — its opacity rule keeps the slot and the tab
+          order (#86), rename/kill reveal on hover inside the same box.
+          rowActions' shell array itself keeps its #85 shape (open/rename/kill
+          is a pinned contract), so the pin joins at render time. */}
+      <span className="ml-auto flex items-center shrink-0" onClick={(e) => e.stopPropagation()}>
+        <IconBtn
+          icon={pin.icon}
+          label={pin.actionLabel}
+          active={!!t.pinned}
+          className={cn("w-6 h-6", pinVisibilityCls(pin.visible))}
+          onClick={() => void store.pinTerminal(t.id, !t.pinned)}
+        />
         {rename && (
           <IconBtn
             icon={rename.icon ?? "edit"}
             label={rename.label}
-            className="w-6 h-6"
+            className="hidden group-hover:inline-grid w-6 h-6"
             onClick={() => {
               setName(t.title ?? "");
               setEditing(true);
@@ -382,7 +392,7 @@ function ShellRow({ t }: { t: TerminalInfo }) {
           <IconBtn
             icon={kill.icon ?? "x"}
             label={confirm ? (dead ? "Click again: remove this exited shell" : "Click again: kill this shell") : kill.label}
-            className={confirmCls(confirm)}
+            className={cn(confirmCls(confirm), "hidden group-hover:inline-grid")}
             onClick={() => confirmClick(() => void desktops.killTerminal(t.id))}
           />
         )}
@@ -423,26 +433,28 @@ function HostRow({ h, alias }: { h: HostInfo; alias?: string }) {
       <Icon name="host" size={12} className={h.online ? "text-[var(--t-sky)]" : "text-[var(--t-dim)]"} />
       <span className={cn("flex-1 truncate", !h.online && "opacity-50")}>{alias || h.label}</span>
       {h.revoked && !confirm && <span className="text-[8.5px] font-mono uppercase text-[var(--t-red)] shrink-0 group-hover:hidden">revoked</span>}
-      <IconBtn
-        icon={pin.icon}
-        label={pin.actionLabel}
-        active={!!h.pinned}
-        className={cn("w-6 h-6", pinVisibilityCls(pin.visible))}
-        onClick={(e) => {
-          e.stopPropagation();
-          void store.pinHost(h.id, !h.pinned);
-        }}
-      />
-      {del && (
-        <span className="hidden group-hover:flex items-center shrink-0" onClick={(e) => e.stopPropagation()}>
+      {/* one cluster, one gap (issue #110): the pin leads the same container
+          as delete — its opacity rule keeps the slot and the tab order (#86),
+          delete reveals on hover inside the same box. rowActions' host array
+          keeps its #85 shape (open/delete is a pinned contract), so the pin
+          joins at render time. */}
+      <span className="flex items-center shrink-0" onClick={(e) => e.stopPropagation()}>
+        <IconBtn
+          icon={pin.icon}
+          label={pin.actionLabel}
+          active={!!h.pinned}
+          className={cn("w-6 h-6", pinVisibilityCls(pin.visible))}
+          onClick={() => void store.pinHost(h.id, !h.pinned)}
+        />
+        {del && (
           <IconBtn
             icon={del.icon ?? "trash"}
             label={confirm ? `Click again: delete ${alias || h.label} (drops its agent if connected)` : del.label}
-            className={confirmCls(confirm)}
+            className={cn(confirmCls(confirm), "hidden group-hover:inline-grid")}
             onClick={() => confirmClick(() => void store.deleteHost(h.id))}
           />
-        </span>
-      )}
+        )}
+      </span>
     </div>
   );
 }
