@@ -21,7 +21,8 @@ When you are handed a PR you did not make (the developer commented
 1. Read the PR and its issue/history fully, including every audit report
    and any fix wrap-ups — they are your prior rounds.
 2. Check out its branch in your worktree
-   (`cd pr-preview && PR_NUMBER=<n> tilt up` handles the checkout; the
+   (`sudo -n systemctl start truss-pr@<n>` handles the checkout and the
+   stack; the
    branch is the PR's head branch, not one you create).
 3. Add your marker to the PR body (`gh pr edit <pr> --body` — keep the
    existing body, append the `agent-session:` line) and make sure the
@@ -52,10 +53,13 @@ When you are handed a PR you did not make (the developer commented
    feat/) from `origin/main` — NEVER from another PR's branch. Cumulative
    branches are banned (TRUSS.md "Branches"): the PR's diff vs main must be
    exactly this issue's work so PRs merge in any order.
-3. Boot your preview early: `cd pr-preview && PR_NUMBER=<n> tilt up` (the
-   worktree at `pr-preview/w/<n>` is yours; keep it in sync with your branch
-   via `git -C pr-preview/w/<n> pull` after commits, or work directly in the
-   worktree — your choice, but commit from the branch either way).
+3. Boot your preview early: `sudo -n systemctl start truss-pr@<n>` — NEVER
+   a bare `tilt up`. The systemd unit owns the stack so it survives dsh
+   restarts (a session-spawned tilt dies with the host and the preview goes
+   dark mid-review — learned the hard way). The worktree at
+   `pr-preview/w/<n>` is yours; keep it in sync with your branch via
+   `git -C pr-preview/w/<n> pull` after commits, or work directly in the
+   worktree — your choice, but commit from the branch either way.
 4. Implement per TRUSS.md: pnpm never npm; `pnpm -r run lint`,
    `pnpm -r run build`, and `pnpm test` green before you claim done; every
    behavior change ships with its test in the same commit; a regression gets
