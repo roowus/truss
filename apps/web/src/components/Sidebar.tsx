@@ -485,7 +485,7 @@ function PairRequestRow({ r }: { r: import("@/lib/proto").PairRequestInfo }) {
         <span className="flex-1 truncate">{r.hostname} wants to pair</span>
       </div>
       <div className="mt-0.5 pl-3.5 text-[10px] text-[var(--t-dim)] truncate">
-        {r.os}{r.tailscaleIp ? ` · ${r.tailscaleIp}` : ""} · the ask expires in {until(r.expiresAt)}
+        {r.os} · from {r.sourceIp}{r.tailscaleIp && r.tailscaleIp !== r.sourceIp ? ` (tailnet ${r.tailscaleIp})` : ""} · expires in {until(r.expiresAt)}
       </div>
       <div className="mt-1.5 flex gap-1.5 pl-3.5">
         <button

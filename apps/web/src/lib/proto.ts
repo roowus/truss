@@ -214,6 +214,8 @@ export interface PairRequestInfo {
   hostname: string;
   os: string;
   tailscaleIp?: string;
+  /** the requester's real source address — the only non-self-reported field */
+  sourceIp: string;
   expiresAt: number;
 }
 export interface TailscalePeer {

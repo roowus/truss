@@ -126,7 +126,7 @@ export interface PairChanged {
   type: "pair.changed";
   sessionId: string;
   event: "requested" | "resolved";
-  request: { id: string; hostname: string; os: string; tailscaleIp?: string; expiresAt: number };
+  request: { id: string; hostname: string; os: string; tailscaleIp?: string; sourceIp: string; expiresAt: number };
 }
 
 /** a harness's model catalog just filled in (lazy adapters discover it from

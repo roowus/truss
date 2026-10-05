@@ -50,3 +50,17 @@ test("demo metrics: procs rows carry every field the Monitor panel renders", asy
     checkRows(id, entry.metrics.procs);
   }
 });
+
+test("demo backend mirrors the auto-pair contract: pendingPair on hosts(), approve/deny stubs", async () => {
+  /* issue #111 review, audit B1: the compiler cannot catch a demo drift
+     behind the casts — pin the shape the pairing UI reads */
+  const be = createDemoBackend();
+  const { pendingPair } = await be.hosts();
+  assert.ok(Array.isArray(pendingPair), "hosts() carries the pendingPair list (empty in demo)");
+  assert.equal(typeof be.approvePairRequest, "function");
+  assert.equal(typeof be.denyPairRequest, "function");
+  const opts = await be.deliveryOptions("h1", null, "t", "http://demo:4040");
+  const interactive = opts.options.find((o) => o.kind === "interactive");
+  assert.ok(interactive, "the demo mirrors the interactive tier");
+  assert.equal(interactive.typedChars, interactive.command.length, "auto-pair needs no code — the demo must not invent the +4");
+});

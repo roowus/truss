@@ -35,6 +35,10 @@ export interface PairRequestView {
   hostname: string;
   os: string;
   tailscaleIp?: string;
+  /* the requester's ACTUAL source address (audit round 8, B3): everything
+     else on the row is self-reported by the announcing device — this is the
+     one piece of evidence the operator can trust before clicking Allow */
+  sourceIp: string;
   expiresAt: number;
 }
 
@@ -57,8 +61,15 @@ let broadcast: ((event: "requested" | "resolved", view: PairRequestView) => void
 export function setPairBroadcaster(fn: typeof broadcast) {
   broadcast = fn;
 }
-const announce = (event: "requested" | "resolved", r: PairRequest) =>
-  broadcast?.(event, { id: r.id, hostname: r.hostname, os: r.os, tailscaleIp: r.tailscaleIp, expiresAt: r.expiresAt });
+const view = (r: PairRequest): PairRequestView => ({
+  id: r.id,
+  hostname: r.hostname,
+  os: r.os,
+  tailscaleIp: r.tailscaleIp,
+  sourceIp: r.sourceIp,
+  expiresAt: r.expiresAt,
+});
+const announce = (event: "requested" | "resolved", r: PairRequest) => broadcast?.(event, view(r));
 
 /* ── creation rate limiting (same shape as the redeem guard): a request is
    cheap and secret-free, but an unauthenticated endpoint still gets a
@@ -83,7 +94,7 @@ export function pairRequestRateOk(client: string, now = Date.now()): boolean {
 /** display metadata is self-reported: trim to plain printable characters */
 const clean = (s: unknown): string => (typeof s === "string" ? s.replace(/[\x00-\x1f\x7f]/g, " ").trim().slice(0, 80) : "");
 
-export function createPairRequest(meta: PairRequestMeta, serverUrl: string): PairRequestView {
+export function createPairRequest(meta: PairRequestMeta, serverUrl: string, sourceIp: string): PairRequestView {
   const now = Date.now();
   sweep(now);
   const r: PairRequest = {
@@ -91,13 +102,14 @@ export function createPairRequest(meta: PairRequestMeta, serverUrl: string): Pai
     hostname: clean(meta.hostname) || "unknown device",
     os: clean(meta.os) || "unknown",
     tailscaleIp: clean(meta.tailscaleIp) || undefined,
+    sourceIp,
     serverUrl,
     expiresAt: now + PAIR_REQUEST_TTL_MS,
     status: "pending",
   };
   requests.set(r.id, r);
   announce("requested", r);
-  return r;
+  return view(r);
 }
 
 /** the UI's pending list, oldest first */
@@ -105,7 +117,7 @@ export function listPairRequests(): PairRequestView[] {
   sweep(Date.now());
   return [...requests.values()]
     .filter((r) => r.status === "pending")
-    .map((r) => ({ id: r.id, hostname: r.hostname, os: r.os, tailscaleIp: r.tailscaleIp, expiresAt: r.expiresAt }));
+    .map(view);
 }
 
 /**

@@ -87,16 +87,19 @@ export function AddHostWizard({ onClose }: { onClose: () => void }) {
   const serverAddr = addrOverride || !impliedReturn ? (addr === "custom" ? customAddr.trim() : addr) : impliedReturn;
 
   /* the QR encodes the auto-pair page for this exact return address; it is
-     rendered once step 2 shows the pairing panel */
+     rendered once step 2 shows the pairing panel. The custom-address field
+     is free text that lands in an href below (audit round 8, B4), so the
+     link and the QR only exist for a plain http(s) URL */
+  const pairPageUrl = /^https?:\/\//.test(serverAddr) ? `${serverAddr}/p` : null;
   useEffect(() => {
-    if (step !== 2 || !serverAddr) return;
+    if (step !== 2 || !pairPageUrl) { setPairQr(null); return; }
     let dead = false;
-    QRCode.toDataURL(`${serverAddr}/p`, { width: 144, margin: 1 }).then(
+    QRCode.toDataURL(pairPageUrl, { width: 144, margin: 1 }).then(
       (u) => { if (!dead) setPairQr(u); },
       () => { if (!dead) setPairQr(null); },
     );
     return () => { dead = true; };
-  }, [step, serverAddr]);
+  }, [step, pairPageUrl]);
 
   const create = async () => {
     if (!label.trim() || !be) return;
@@ -313,7 +316,11 @@ export function AddHostWizard({ onClose }: { onClose: () => void }) {
             <div className="rounded-lg border border-[var(--t-line)] bg-[var(--t-bg0)] px-3 py-2 space-y-2">
               <div className="flex items-start gap-3">
                 <div className="min-w-0 flex-1">
-                  <a href={`${serverAddr}/p`} target="_blank" rel="noreferrer" className="font-mono text-[12px] text-[var(--t-sky)] underline decoration-dotted underline-offset-2 break-all hover:brightness-125">{serverAddr}/p</a>
+                  {pairPageUrl ? (
+                    <a href={pairPageUrl} target="_blank" rel="noreferrer" className="font-mono text-[12px] text-[var(--t-sky)] underline decoration-dotted underline-offset-2 break-all hover:brightness-125">{pairPageUrl}</a>
+                  ) : (
+                    <span className="font-mono text-[12px] text-[var(--t-fg)] break-all select-all">{serverAddr}/p</span>
+                  )}
                   <div className="mt-0.5 text-[10px] text-[var(--t-dim)]">open on the remote (or scan), Download, run the saved file, then click Allow here when it asks. Nothing to type, no code.</div>
                 </div>
                 {pairQr && <img src={pairQr} width={72} height={72} className="shrink-0 rounded border border-[var(--t-line2)]" alt={`QR code for ${serverAddr}/p`} title={`${serverAddr}/p`} />}

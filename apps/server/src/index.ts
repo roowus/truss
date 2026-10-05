@@ -559,7 +559,10 @@ app.post("/api/pair/request", async (req, reply) => {
   } catch (e: any) {
     return reply.code(400).send({ error: e.message });
   }
-  const r = createPairRequest({ hostname, os: os ?? "", tailscaleIp }, serverUrl);
+  /* req.ip is the one piece of evidence on the request the device did NOT
+     make up (audit round 8, B3) — the sidebar shows it beside the
+     self-reported hostname so an impersonator is visible before Allow */
+  const r = createPairRequest({ hostname, os: os ?? "", tailscaleIp }, serverUrl, req.ip);
   return reply.code(202).send({ id: r.id, expiresAt: r.expiresAt });
 });
 
