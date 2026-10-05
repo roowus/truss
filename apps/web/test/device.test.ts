@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { defaultTailscaleReturn, deviceLabel, peerAlreadyAdded } from "../src/lib/device";
+import { defaultTailscaleReturn, deviceLabel, hostAliases, hostDisplay, peerAlreadyAdded } from "../src/lib/device";
 import { buildModelOptions, modelValue, splitModelValue } from "../src/lib/models";
 
 /* the chat header's device chip + model picker logic (pure halves) */
@@ -22,6 +22,34 @@ test("deviceLabel: harness@host resolves through the registry label", () => {
 test("deviceLabel: unknown host falls back to the raw id (never blank)", () => {
   assert.equal(deviceLabel("pi@deadbeef", []), "deadbeef");
   assert.equal(deviceLabel("pi@deadbeef", [{ id: "other", label: "x" }]), "deadbeef");
+});
+
+test("hostAliases: flattens desktop prefs, trims values, skips blanks", () => {
+  assert.deepEqual(
+    hostAliases({
+      a: { alias: "  the macbook " },
+      b: { alias: "" },
+      c: { alias: "   " },
+      d: {},
+    }),
+    { a: "the macbook" },
+    "only non-blank aliases survive, trimmed",
+  );
+  assert.deepEqual(hostAliases({}), {});
+});
+
+test("hostDisplay: alias wins over the registry label, blank alias falls through", () => {
+  const hosts = [{ id: "525b9cd4", label: "Rewiss-MacBook-Pro" }];
+  assert.equal(hostDisplay("525b9cd4", hosts, { "525b9cd4": "the macbook" }), "the macbook");
+  assert.equal(hostDisplay("525b9cd4", hosts, { "525b9cd4": "   " }), "Rewiss-MacBook-Pro", "a whitespace alias is no alias");
+  assert.equal(hostDisplay("525b9cd4", hosts), "Rewiss-MacBook-Pro");
+  assert.equal(hostDisplay("deadbeef", hosts), "deadbeef", "unknown host keeps the raw id");
+});
+
+test("deviceLabel: a set alias wins on the chip too (alias-or-label, one rule)", () => {
+  const hosts = [{ id: "d95b425f", label: "fedora box" }];
+  assert.equal(deviceLabel("pi@d95b425f", hosts, { d95b425f: "the fedora" }), "the fedora");
+  assert.equal(deviceLabel("pi@d95b425f", hosts), "fedora box", "no alias → registry label, as before");
 });
 
 test("peerAlreadyAdded: case/whitespace-insensitive label match", () => {
