@@ -40,6 +40,7 @@ import { fileURLToPath } from "node:url";
 import WebSocket from "ws";
 import { dialFailureHint } from "./dialHint.js";
 import { applyServerEnv } from "./serverEnv.js";
+import { applyDataDir } from "./dataDir.js";
 import { discoverCwds } from "./discovery.js";
 import type { HarnessAdapter, AdapterHandle, SessionOpts } from "../../../apps/server/src/adapters/types.js";
 import { piAdapter } from "../../../apps/server/src/adapters/pi.js";
@@ -71,6 +72,11 @@ const HOST_ID =
    (issue #100, item 16: the claude adapter used to freeze the loopback
    defaults at module scope, before this code ever ran). */
 applyServerEnv(SERVER);
+/* adapters persist per-session state under TRUSS_DATA_DIR; its
+   adapter-side fallback is repo-relative and escapes the bundle
+   (~/.truss/../../data → EACCES on the first remote pi spawn — PR #126
+   preview testing). Default it to the install dir before any spawn. */
+applyDataDir();
 
 interface LiveEntry {
   adapter: HarnessAdapter;
