@@ -74,6 +74,32 @@ export function commitChatWidth(
   return dragDisplayWidth(base, columnWidth, originX, currentX, side) === null ? null : w;
 }
 
+/* the resize handle's placement (issue #116), DSH's model
+   (ConversationRoot.module.css): the handle rides the CONTENT column's edge
+   and moves with it — pinned to the panel edge it floats ever further from
+   the column as the panel widens */
+const HANDLE_INSET = 24; // gap from the content edge to the handle's inner edge
+const HANDLE_STRIP = 8; // the hit strip's width
+const HANDLE_SAFE = 24; // breathing room the strip keeps from the panel edge
+
+/**
+ * Where an edge handle sits, from the panel's center: `offset` is the
+ * distance to the handle's INNER edge (contentWidth/2 + inset — it moves
+ * with the column, never with the panel), `width` the hit strip extending
+ * outward from there. DSH's graceful rule: when the margin can't fit
+ * inset + strip + safe zone, the strip resolves to zero and `visible` is
+ * false — no mispositioned hit area floating over a narrow column.
+ * Degenerate inputs (0/negative/NaN) never throw and never NaN out.
+ */
+export function chatHandleGeometry(panelWidth: number, contentWidth: number): { offset: number; width: number; visible: boolean } {
+  const panel = Number.isFinite(panelWidth) && panelWidth > 0 ? panelWidth : 0;
+  const content = Number.isFinite(contentWidth) && contentWidth > 0 ? contentWidth : 0;
+  const offset = content / 2 + HANDLE_INSET;
+  const room = (panel - content) / 2 - HANDLE_INSET - HANDLE_SAFE;
+  if (room < HANDLE_STRIP) return { offset, width: 0, visible: false };
+  return { offset, width: HANDLE_STRIP, visible: true };
+}
+
 /** storage boundary: missing/corrupt → "no preference", never crash, never NaN */
 export function readChatWidthPref(storage: { getItem(k: string): string | null }): number | null {
   try {
