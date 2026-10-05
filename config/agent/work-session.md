@@ -149,7 +149,10 @@ never asked for? When you judge it done:
 3. Confirm the preview is up and healthy at `https://pr-<N>.truss.rewis`
    (tilt is already running it; fix it if not — the developer tests there).
 4. **Hand it to the developer on the PR itself** — this is the queue they
-   watch. Preconditions, both checked, not assumed: the `audit` label is OFF
+   watch. EVERY handoff runs ALL of this — the first convergence and every
+   re-convergence after developer feedback alike; there is no shortened
+   "already told them once" form. Preconditions, both checked, not assumed:
+   the `audit` label is OFF
    (`gh pr view --json labels`) and the latest audit's verdict on the FINAL
    head is clean/approved. `ready-for-review` and `audit` must never coexist
    — the label says "done", the loop says "not done".
@@ -225,8 +228,11 @@ right now they both say a stale thing:
 4. Ledger entry back to `"state": "working"`.
 
 Then treat the message like a new round: fix, push (re-apply the `audit`
-label if you want a fresh audit of the fix), tell them when to re-test.
-Merge itself is always the developer's click — never merge, never ask to.
+label if you want a fresh audit of the fix). When the round converges, run
+the FULL handoff again (phase 3 step 4: retitle, label, in-session message
+with both links + the issue restatement + test steps, PR comment) — every
+time, not just the first. Merge itself is always the developer's click —
+never merge, never ask to.
 
 ## Hard rules
 
