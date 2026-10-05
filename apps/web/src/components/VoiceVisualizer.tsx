@@ -134,15 +134,18 @@ export function VoiceVisualizer(props: {
   const bar: CSSProperties = { transform: `scaleY(${FLOOR})` };
   return (
     /* always mounted (the rAF loop needs the node) but hidden until a real
-       stream attaches — no false silence signal on streamless paths */
+       stream attaches — no false silence signal on streamless paths.
+       Bars are flex-1: the strip fills whatever width the parent gives it
+       (the composer row overlays it across the whole input while a take
+       runs — issue #112 review feedback). */
     <span
       ref={host}
       aria-hidden="true"
       style={live ? undefined : { display: "none" }}
-      className={props.className ?? "inline-flex items-center gap-[1px] h-3 shrink-0"}
+      className={props.className ?? "flex items-center gap-[2px] h-3 min-w-0"}
     >
       {Array.from({ length: bars }, (_, i) => (
-        <span key={i} style={bar} className="block w-[2px] h-full rounded-full bg-current origin-center" />
+        <span key={i} style={bar} className="block flex-1 min-w-[2px] h-full rounded-full bg-current origin-center" />
       ))}
     </span>
   );

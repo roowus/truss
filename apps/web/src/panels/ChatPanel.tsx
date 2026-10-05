@@ -640,11 +640,11 @@ function Composer({ id, active }: { id: string; active: boolean }) {
     tone = "amber";
     hint = <><Icon name="lock" size={12} /> {meta.harness} can't take input mid-run — draft is held, or <button className="underline" onClick={() => store.interrupt(id)}>interrupt</button>.</>;
   }
-  /* an active voice take owns the hint line while it lives — with live mic
-     bars (issue #112) so the user can see the mic hears them */
+  /* an active voice take owns the hint line while it lives; the waveform
+     itself plays inside the composer bar (issue #112, review feedback) */
   if (voiceState === "recording") {
     tone = "amber";
-    hint = <><Icon name="mic" size={12} /> <VoiceVisualizer levelStream={voiceLevelStream} /> Dictating {fmtTakeTime(voiceNow - (voiceStart ?? voiceNow))} · click the mic to finish, Esc to cancel.</>;
+    hint = <><Icon name="mic" size={12} /> Dictating… click the mic to finish, Esc to cancel.</>;
   } else if (voiceState === "error") {
     tone = "red";
     hint = <><Icon name="alert" size={12} /> Dictation failed: {voiceRef.current?.error() ?? "unknown error"}</>;
@@ -711,6 +711,7 @@ function Composer({ id, active }: { id: string; active: boolean }) {
         >
           {voiceState === "transcribing" ? <Spinner size={13} /> : <Icon name="mic" />}
         </button>
+        <div className="relative flex-1 min-w-0 flex items-end">
         <textarea
           ref={ta}
           value={text}
@@ -746,6 +747,19 @@ function Composer({ id, active }: { id: string; active: boolean }) {
           placeholder={dead ? `Message to resume ${meta.harness}…` : "Message…"}
           className="flex-1 min-w-0 resize-none bg-transparent px-1.5 py-1 text-[13.5px] text-[var(--t-fg)] placeholder:text-[var(--t-dim)] outline-none"
         />
+        {/* while a take runs, the chat bar IS the recorder (iMessage /
+            Voice Memos style): the waveform fills the input's width over
+            the draft, with the take clock at its left. The textarea stays
+            mounted underneath — the draft is preserved and Esc/Enter keep
+            working. The bars appear once the mic grant lands; if no stream
+            can be had, the clock alone shows the take is alive. */}
+        {voiceState === "recording" && (
+          <div className="absolute inset-0 flex items-center gap-2 px-1.5 rounded-sm bg-[var(--t-bg0)] text-[var(--t-amber)]">
+            <span className="shrink-0 text-[11.5px] tabular-nums">{fmtTakeTime(voiceNow - (voiceStart ?? voiceNow))}</span>
+            <VoiceVisualizer levelStream={voiceLevelStream} className="flex min-w-0 flex-1 items-center gap-[2px] h-5" />
+          </div>
+        )}
+        </div>
         {running && !queues ? (
           <Btn size="sm" variant="danger" icon="stop" onClick={() => store.interrupt(id)} title="Interrupt (Esc)" className="mb-0.5">Stop</Btn>
         ) : (
