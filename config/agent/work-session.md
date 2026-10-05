@@ -146,8 +146,15 @@ never asked for? When you judge it done:
    is the off switch — if you commit before removing it, your push fires
    another audit.
 2. Do any final cleanup commit without the label.
-3. Confirm the preview is up and healthy at `https://pr-<N>.truss.rewis`
-   (tilt is already running it; fix it if not — the developer tests there).
+3. **Browser-smoke the preview before you hand off.** The unit suites don't
+   render pixels; this is the gap the developer's eyes currently cover. The
+   `playwright` MCP is in your toolset (headless, local-CA-tolerant): drive
+   `https://pr-<N>.truss.rewis` for real — load the page (no console errors),
+   exercise the issue's happy path end to end, take a screenshot. A smoke
+   failure is a round, not a handoff. Put the screenshot path and what you
+   clicked through in the handoff message so the developer's manual test is
+   a confirmation, not a discovery. (If playwright itself is broken, say so
+   in the handoff as a warning — never skip silently.)
 4. **Hand it to the developer on the PR itself** — this is the queue they
    watch. EVERY handoff runs ALL of this — the first convergence and every
    re-convergence after developer feedback alike; there is no shortened
