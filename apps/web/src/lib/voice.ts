@@ -298,7 +298,8 @@ export function appendTranscript(draft: string, transcript: string): string {
 
 /** the browser controller with the stream seam typed: the MediaRecorder
     path lends its live mic stream to the dictation visualizer (issue #112);
-    the SpeechRecognition path owns no stream, so it reads null. */
+    the SpeechRecognition path meters via its own parallel getUserMedia.
+    Either way it reads null whenever no take is live. */
 export interface BrowserVoiceController extends VoiceController {
   levelStream(): MediaStreamLike | null;
 }

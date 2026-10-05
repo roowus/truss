@@ -196,9 +196,9 @@ test("levelStream(): the controller surfaces the recorder's live stream; a recor
   });
   assert.equal(withHook.levelStream(), stream, "the recorder's stream passes through the controller");
 
-  /* the SpeechRecognition path (voice.ts recognitionRecorder) owns no
-     stream: the controller must read null, not undefined — the
-     visualizer's null branch depends on it */
+  /* any recorder may lack the levelStream hook (the seam is optional):
+     the controller must then read null, not undefined — the visualizer's
+     null branch depends on it */
   const noHook = mod.createVoiceInput({
     transcribe: async () => "",
     onText: () => {},
