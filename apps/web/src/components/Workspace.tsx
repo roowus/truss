@@ -27,7 +27,7 @@ import { MonitorPanel } from "@/panels/MonitorPanel";
 import { HostPanel } from "@/panels/HostPanel";
 import { SettingsPanel } from "@/panels/SettingsPanel";
 import { DesktopStrip } from "./DesktopStrip";
-import { chromeTabLayout, chromeTabsAvailableWidth, type ChromeTabView } from "@/lib/chromeTabs";
+import { chromeTabLayout, chromeTabsAvailableWidth, tabTrailingReserve, type ChromeTabView } from "@/lib/chromeTabs";
 import { tabClosePlacement } from "@/lib/tabClose";
 import { TabPicker } from "./TabPicker";
 import { Btn, Icon, StateDot, TrussLogo } from "./ui";
@@ -185,14 +185,23 @@ function TrussTab({ api, params }: IDockviewPanelHeaderProps<{ sessionId?: strin
   useEffect(() => {
     measureRef.current();
   }, [active]);
+  /* the trailing reserve (issue #125): when the X is hover-hidden or absent
+     and an indicator (dot/badge) is showing, the X's slot stays reserved as
+     right padding — the indicator never kisses the edge, and hover-revealing
+     the X can't shift the row (reserve, not reflow). 0 when the X is inline
+     (it is the trailing element), on slivers, or with no indicator (the
+     title fades to the edge, like Chrome) */
+  const hasIndicator = Boolean((kind === "chat" && meta) || pending > 0);
+  const trailingReserve = tabTrailingReserve(view, hasIndicator);
   return (
     <div
       ref={rootRef}
       className={cn(
         "truss-tab group/tab relative flex items-center gap-1.5 h-full w-full text-[12px] select-none",
         /* icon-only slivers center their favicon, like Chrome */
-        view.showTitle ? "pl-2 pr-1" : "justify-center px-0",
+        view.showTitle ? "pl-2" : "justify-center px-0",
       )}
+      style={view.showTitle ? { paddingRight: 4 + trailingReserve } : undefined}
       onMouseDown={(e) => {
         if (e.button === 1) { e.preventDefault(); api.close(); }
       }}
