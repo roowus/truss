@@ -384,7 +384,10 @@ jobs:
             - "version": the number 1
             - "head": "${{ needs.gate.outputs.head_sha }}", copied literally
             - "verdict": "request changes" if any finding has severity critical;
-              else "approve with fixes" if there is any finding; else "approve"
+              else "approve with fixes" if any finding has severity important;
+              else "approve" (a minors-only tail is approved, with the minors
+              listed as advisory — the worker fixes or dispositions them in its
+              final commit and converges without another audit round)
             - "findings": array, in the order findings appear above
             - "warnings": array of strings naming what this audit could not cover
               ([] when nothing)

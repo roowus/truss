@@ -121,6 +121,12 @@ you are done — delete your pending self-wake reminders, remove a leftover
 `audit` label, do NOT retitle yourself (the reaper owns your title now), and
 stop. Never keep looping on a merged PR.
 
+**The minors tail converges without another audit round.** When the latest
+report has zero Critical and zero Important findings: fix or disposition the
+Minors in one final commit, note the dispositions in your handoff comment,
+and converge — do NOT push and wait for another audit just for minors. The
+audit tail is the expensive part of the loop; minors don't justify it.
+
 **Convergence is your judgment call** — the diamond in the flowchart is you.
 Ask after each report: are the remaining findings real and worth another
 round, or is the audit nitpicking / circling / demanding additions the issue
