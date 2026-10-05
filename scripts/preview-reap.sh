@@ -27,12 +27,8 @@ try:
 except Exception: pass
 " 2>/dev/null)
       if [ -n "$SID" ]; then
-        TITLE=$(python3 -c "
-import json
-for e in json.load(open('$HOME/.local/state/truss-sessions.json')):
-    if str(e.get('pr')) == '$n':
-        print('#%s [merged]' % e.get('pr', e.get('issue'))); break
-")
+        PRTITLE=$(gh pr view "$n" -R roowus/truss --json title --jq .title 2>/dev/null | cut -c1-50)
+        TITLE="#$n [merged]${PRTITLE:+ — $PRTITLE}"
         curl -sS -m 5 -X POST http://127.0.0.1:3080/plugins/dsh-spawn/title           -H 'content-type: application/json'           -d "{"sessionId": "$SID", "title": "$TITLE"}" >/dev/null 2>&1 &&           echo "$(date -Is) retitled $SID -> $TITLE"
       fi
       ;;

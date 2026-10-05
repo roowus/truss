@@ -35,7 +35,7 @@ issue right now, and if so, which one. Cheap and deterministic: no wandering.
    curl -sS -X POST http://127.0.0.1:3080/plugins/dsh-spawn/session \
      -H 'content-type: application/json' -d @- <<'JSON'
    {"cwd": "/home/ubuntu/projects/truss-automation",
-    "title": "#<n> — <slug> [working]",
+    "title": "#<n> [working] — <slug>",
     "group": "truss automation",
     "prompt": "You are a work session for the truss repo. The repo is at /home/ubuntu/projects/truss — work there (cd first; your cwd is the automation home, which only anchors your sidebar group). Read /home/ubuntu/projects/truss/config/agent/work-session.md and follow it fully. Your issue is #<n> — start at phase 1."}
    JSON
