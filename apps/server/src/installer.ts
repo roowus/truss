@@ -50,12 +50,11 @@ export function installerDropName(hostId: string): string {
  * options are always present: they need no tailscale on either end, so they
  * are the floor every other option merely beats.
  *
- * The pairing commands carry a placeholder code (the real code's exact
+ * The pairing command carries a placeholder code (the real code's exact
  * length, so typedChars stays honest) — the wizard mints a fresh single-use
- * code the moment the user picks one of these options and swaps it in. The
- * interactive variant (issue #111) types the code at a prompt instead of
- * inline, so its command is shorter and carries nothing secret; its honest
- * count includes the code the user types when asked.
+ * code the moment the user picks it and swaps it in. The interactive variant
+ * (issue #111) auto-pairs: the served script asks to join and the user
+ * approves in the UI, so its command is shorter and nothing is typed at all.
  */
 export function deliveryOptions(caps: DeliveryCaps): DeliveryOption[] {
   const opts: DeliveryOption[] = [];
@@ -77,9 +76,9 @@ export function deliveryOptions(caps: DeliveryCaps): DeliveryOption[] {
   const interactive = `curl -fsSL ${caps.serverUrl}/i | sh`;
   opts.push({
     kind: "interactive",
-    label: "Type a short command, then the one-time code it asks for",
+    label: "Type one short command; it asks to pair and you approve here",
     command: interactive,
-    typedChars: interactive.length + PAIRING_CODE_LEN, // the code is typed at the prompt
+    typedChars: interactive.length, // auto-pair: no code to type at all
   });
 
   const pair = `curl -fsSL ${caps.serverUrl}/i/${placeholder} | sh`;
@@ -89,56 +88,79 @@ export function deliveryOptions(caps: DeliveryCaps): DeliveryOption[] {
 }
 
 /**
- * The interactive installer (issue #111), served at GET /i and safe to
- * taildrop as-is: it carries NO token and no code, so the file is generic
- * and can sit in a Downloads folder without holding a credential. It prompts
- * for the short pairing code, redeems it once at POST /i/redeem for the real
- * credentials, then runs the regular installer with them. The only embedded
- * value is the URL the client just used to reach this server (validated
- * against the same shell-safe rule as every other script embed point).
+ * The auto-pairing installer (issue #111, review rounds), served at GET /i
+ * and safe to taildrop as-is: it carries NO token and no code, so the file
+ * is generic and can sit in a Downloads folder without holding a credential.
+ * The flow is the WhatsApp shape: the script announces this device at
+ * POST /api/pair/request and polls until the user clicks Allow in the Truss
+ * UI (or Deny, or the 10-minute request dies). The only embedded value is
+ * the URL the client just used to reach this server (validated against the
+ * same shell-safe rule as every other script embed point); the approval
+ * payload's serverUrl comes from the server, so a moved address self-heals.
  */
 export function interactiveInstallScript(serverUrl: string): string {
   assertSafeServerUrl(serverUrl);
   return `#!/bin/sh
-# Truss interactive installer — pairs this machine with ${serverUrl}
-# The add-host wizard shows a short one-time code; this script asks for it,
-# trades it once for the real credentials, and installs the agent.
+# Truss auto-pairing installer — pairs this machine with ${serverUrl}
+# Nothing to type: it asks the server to pair, you click Allow in the Truss
+# UI, and the install finishes itself.
 set -eu
 
 SERVER='${serverUrl}'
 
-printf 'pairing code? ' >&2
-# when this script arrives via a curl pipe, stdin IS the script (already
-# consumed) — the answer must come from the terminal itself
-read -r CODE < /dev/tty || read -r CODE || {
-  echo "could not read the code: no terminal attached" >&2
-  exit 1
-}
-# typed by hand: forgive case and stray whitespace, keep only code alphabet
-CODE=$(printf '%s' "$CODE" | tr 'A-Z' 'a-z' | tr -cd 'abcdefghjkmnpqrstuvwxyz23456789')
-if [ -z "$CODE" ]; then
-  echo "no code given. Mint one in the Truss add-host wizard (Short command)" >&2
-  exit 1
-fi
+HOSTNAME=$(hostname 2>/dev/null | tr -cd 'A-Za-z0-9._ -' || true)
+[ -n "$HOSTNAME" ] || HOSTNAME="unknown device"
+OS=$(uname -s 2>/dev/null || echo unknown)
+TSIP=$(command -v tailscale >/dev/null 2>&1 && tailscale ip -4 2>/dev/null | head -1 | tr -cd '0-9.' || true)
 
+echo "asking $SERVER to pair this machine ($HOSTNAME)"
 RESP=$(curl -fsSL -X POST -H 'content-type: application/json' \\
-  -d "{\\"code\\":\\"$CODE\\"}" \\
-  "$SERVER/i/redeem") && rc=0 || rc=$?
-# split the failure honestly (audit B3): curl 6/7/28 mean the SERVER is
-# unreachable — re-minting a code never fixes that; 22 is the HTTP answer
+  -d "{\\"hostname\\":\\"$HOSTNAME\\",\\"os\\":\\"$OS\\",\\"tailscaleIp\\":\\"$TSIP\\"}" \\
+  "$SERVER/api/pair/request") && rc=0 || rc=$?
+# split the failure honestly: curl 6/7/28 mean the SERVER is unreachable
 if [ "$rc" -eq 6 ] || [ "$rc" -eq 7 ] || [ "$rc" -eq 28 ]; then
   echo "cannot reach $SERVER. Check the address (is tailscale up on both ends?), then retry" >&2
   exit 1
 fi
 if [ "$rc" -ne 0 ]; then
-  echo "that code did not work: used up, expired, or mis-typed. Mint a fresh one in the wizard." >&2
+  echo "the server refused the pairing request. Is $SERVER a current Truss server?" >&2
+  exit 1
+fi
+ID=$(printf '%s' "$RESP" | sed -n 's/.*"id":"\\([^"]*\\)".*/\\1/p')
+if [ -z "$ID" ]; then
+  echo "unexpected answer from $SERVER. Is this a Truss server?" >&2
   exit 1
 fi
 
-TOKEN=$(printf '%s' "$RESP" | sed -n 's/.*"token":"\\([^"]*\\)".*/\\1/p')
-HOST_ID=$(printf '%s' "$RESP" | sed -n 's/.*"hostId":"\\([^"]*\\)".*/\\1/p')
-SURL=$(printf '%s' "$RESP" | sed -n 's/.*"serverUrl":"\\([^"]*\\)".*/\\1/p')
-if [ -z "$TOKEN" ] || [ -z "$HOST_ID" ] || [ -z "$SURL" ]; then
+echo "waiting for approval: click Allow in the Truss UI (the request lives 10 minutes)"
+TOKEN=""
+i=0
+while [ "$i" -lt 300 ]; do
+  BODY=$(curl -sS "$SERVER/api/pair/request/$ID" 2>/dev/null || true)
+  case "$BODY" in
+    *'"status":"approved"'*)
+      TOKEN=$(printf '%s' "$BODY" | sed -n 's/.*"token":"\\([^"]*\\)".*/\\1/p')
+      HOST_ID=$(printf '%s' "$BODY" | sed -n 's/.*"hostId":"\\([^"]*\\)".*/\\1/p')
+      SURL=$(printf '%s' "$BODY" | sed -n 's/.*"serverUrl":"\\([^"]*\\)".*/\\1/p')
+      break
+      ;;
+    *'"status":"denied"'*)
+      echo "pairing was declined in the Truss UI" >&2
+      exit 1
+      ;;
+    *'"error"'*)
+      echo "the pairing request expired. Run this installer again." >&2
+      exit 1
+      ;;
+  esac
+  i=$((i + 1))
+  sleep 2
+done
+if [ -z "$TOKEN" ]; then
+  echo "no approval within 10 minutes. Run this installer again when someone is at the Truss UI." >&2
+  exit 1
+fi
+if [ -z "$HOST_ID" ] || [ -z "$SURL" ]; then
   echo "unexpected answer from $SERVER. Is this a Truss server?" >&2
   exit 1
 fi
@@ -154,21 +176,17 @@ sh "$SCRIPT" "$TOKEN"
 
 /**
  * The browser pairing page (issue #111 review rounds), served at GET /p.
- * Minimum-work flow: the wizard's link carries the code in the URL fragment
- * (`/p#hbyn` — fragments never leave the browser, so the code never touches
- * access logs), the page pre-fills its box from it, and ONE click on
- * Download turns the code into a same-origin GET /i/<code> — the EXISTING
- * burn-once route — so the saved file is the token-embedded installer and
- * the terminal runs it with nothing else to type:
+ * Minimum work, and no code anywhere: Download is a plain anchor to the
+ * generic auto-pairing installer (GET /i with an attachment header), which
+ * asks to join when it runs; the user approves in the Truss UI:
  *
- *   open link / scan QR → Download → `sh ~/Downloads/t.sh` → done.
+ *   open link / scan QR → Download → `sh ~/Downloads/t.sh` → click Allow.
  *
- * Error answers stay on the page (410/429 get their own lines; a wrong code
- * burns nothing, since redeemPairing only burns codes that exist). The page
- * embeds nothing itself (a fully static string: no interpolation, no
- * injection surface). Styled to the app's "graphite & signal" tokens with
- * system font stacks, self-contained so a tailnet-only remote needs no
- * internet to render it.
+ * The page embeds nothing at all (a fully static string: no interpolation,
+ * no injection surface) and no state changes hands here: the download never
+ * burns anything and can be repeated freely. Styled to the app's "graphite
+ * & signal" tokens with system font stacks, self-contained so a
+ * tailnet-only remote needs no internet to render it.
  */
 export function pairingPage(): string {
   return `<!doctype html>
@@ -192,12 +210,6 @@ export function pairingPage(): string {
        display: grid; place-items: center; font-size: 11px; font-weight: 600; margin-top: 1px; }
   .step p { margin: 0 0 10px; color: #d0cabe; }
   .hint { color: #66635d; font-size: 11.5px; margin: 8px 0 0; }
-  form { display: flex; gap: 8px; }
-  input { flex: 1; min-width: 0; font: 500 16px/1 "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
-          letter-spacing: 0.25em; padding: 9px 12px; border-radius: 9px; border: 1px solid #353941;
-          background: #0b0c0e; color: #f0b35a; }
-  input:focus { outline: none; border-color: #f0b35a; }
-  #err { color: #ef6b5b; font-size: 11.5px; margin: 8px 0 0; }
   .dl { display: inline-flex; align-items: center; gap: 8px; background: #f0b35a; color: #1a1a1a; font: 600 13px/1 inherit;
         padding: 10px 18px; border-radius: 9px; border: 0; cursor: pointer; text-decoration: none; }
   .dl:hover { filter: brightness(1.08); }
@@ -218,21 +230,17 @@ export function pairingPage(): string {
     </svg>
     <h1>Pair this device with Truss</h1>
   </div>
-  <p class="sub">Download, run, done. The installer never asks you anything.</p>
+  <p class="sub">Download, run, approve. That is the whole pairing.</p>
 
   <section class="step">
     <span class="n">1</span>
-    <div style="flex:1">
+    <div>
       <p>Download the installer.</p>
-      <form id="f">
-        <input id="code" autocomplete="off" autocapitalize="none" spellcheck="false" maxlength="8" placeholder="code" aria-label="pairing code">
-        <button class="dl" type="submit" id="dl">
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3 v12"/><path d="M6 11 l6 6 6-6"/><path d="M4 21 h16"/></svg>
-          Download
-        </button>
-      </form>
-      <p class="hint" id="codehint">The 4-character code from the add-host wizard. It bakes into the downloaded file, so the install runs with zero questions.</p>
-      <p id="err" role="alert" hidden></p>
+      <a class="dl" href="/i" download="t.sh">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3 v12"/><path d="M6 11 l6 6 6-6"/><path d="M4 21 h16"/></svg>
+        Download installer
+      </a>
+      <p class="hint">A couple of KB, and it carries no credentials: download it as many times as you like.</p>
     </div>
   </section>
 
@@ -244,60 +252,19 @@ export function pairingPage(): string {
         <code>sh ~/Downloads/t.sh</code>
         <button class="copy" id="copy" type="button">Copy</button>
       </div>
-      <p class="hint">That is the whole install. The agent dials out over your tailnet; no inbound ports, nothing listens.</p>
-      <p class="hint">The saved file holds a copy of this host's token. Delete it once the agent shows up in Truss.</p>
+    </div>
+  </section>
+
+  <section class="step">
+    <span class="n">3</span>
+    <div>
+      <p>Click <b>Allow</b> in Truss when it asks.</p>
+      <p class="hint">The installer announces this device and waits. Approving in the Truss UI is the whole handshake: no code, nothing else to type. The agent then dials out over your tailnet; no inbound ports, nothing listens.</p>
     </div>
   </section>
 </main>
 <script>
-var f = document.getElementById("f"), c = document.getElementById("code"),
-    dl = document.getElementById("dl"), err = document.getElementById("err"),
-    hint = document.getElementById("codehint"),
-    copyBtn = document.getElementById("copy");
-
-/* the wizard's link carries the code in the fragment (/p#hbyn): fragments
-   never leave the browser, so the code skips logs and pre-fills the box */
-var fromLink = location.hash.replace(/^#/, "").toLowerCase().replace(/[^a-z0-9]/g, "");
-if (fromLink) {
-  c.value = fromLink;
-  hint.textContent = "Pre-filled from your link. Just hit Download.";
-}
-
-f.addEventListener("submit", function (e) {
-  e.preventDefault();
-  var code = c.value.trim().toLowerCase();
-  if (!code) { c.focus(); return; }
-  err.hidden = true;
-  dl.disabled = true;
-  fetch("/i/" + encodeURIComponent(code)).then(function (r) {
-    if (!r.ok) {
-      err.textContent = r.status === 429
-        ? "Too many tries. Wait a minute, then retry."
-        : "That code is used up, expired, or mis-typed. Mint a fresh one in the wizard.";
-      err.hidden = false;
-      dl.disabled = false;
-      return null;
-    }
-    return r.blob();
-  }).then(function (blob) {
-    if (!blob) return;
-    var a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = "t.sh";
-    a.click();
-    /* Safari can abort the download when the blob URL dies in the same tick
-       (audit B1) — revoke lazily; one retained blob on a transient page is
-       harmless, a missing file is not */
-    setTimeout(function () { URL.revokeObjectURL(a.href); }, 10000);
-    dl.disabled = false;
-    hint.textContent = "Saved to Downloads. One step left.";
-  }).catch(function () {
-    err.textContent = "Could not reach the server. Check the address, then retry.";
-    err.hidden = false;
-    dl.disabled = false;
-  });
-});
-
+var copyBtn = document.getElementById("copy");
 copyBtn.addEventListener("click", function () {
   var done = function () { copyBtn.textContent = "Copied"; setTimeout(function () { copyBtn.textContent = "Copy"; }, 1500); };
   if (navigator.clipboard && navigator.clipboard.writeText) {

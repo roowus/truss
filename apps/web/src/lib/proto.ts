@@ -207,6 +207,15 @@ export interface HostInfo {
   online: boolean;
   agent?: AgentInfo;
 }
+/** auto-pairing (issue #111 review): a device that ran the installer and is
+   waiting for the UI's Allow click. Self-reported metadata only. */
+export interface PairRequestInfo {
+  id: string;
+  hostname: string;
+  os: string;
+  tailscaleIp?: string;
+  expiresAt: number;
+}
 export interface TailscalePeer {
   hostName: string;
   dnsName: string;
@@ -289,6 +298,9 @@ export type ProtoEvent =
   /* the remote-host registry flipped (agent hello/bye) — refetch hosts +
      harnesses (issue #100 manual test) */
   | (Base & { type: "agents.changed" })
+  /* a device asked to auto-pair, or its request was decided (issue #111
+     review) — refetch hosts (the pendingPair list) and toast the ask */
+  | (Base & { type: "pair.changed"; event: "requested" | "resolved"; request?: PairRequestInfo })
   | (Base & { type: "models.updated"; harness: HarnessId })
   | (Base & { type: "msg.start"; messageId: string; role: "user" | "assistant" | "system"; at: At; attachments?: PromptAttachment[] })
   | (Base & { type: "msg.chunk"; messageId: string; text: string; channel?: string })

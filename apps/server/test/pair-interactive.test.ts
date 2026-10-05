@@ -8,18 +8,23 @@ import { bootServer, type TestServer } from "./server-harness.js";
    installing claude is just `install claude` then `claude`. Make it as
    simple as possible, use the existing tailscale connection.").
 
-   The claude-parity shape: `curl -fsSL <host>/i | sh` — the script itself
-   PROMPTS for the 4-char code (nothing inline). On a taildrop, the dropped
-   file can be exactly this script (type ~20 chars + a 4-char code — the
-   floor without a daemon).
+   The contract evolved with the owner's review rounds. The issue's pinned
+   v1 shape (script prompts for a 4-char code, POST /i/redeem redeems it)
+   shipped, then review drove it to the WhatsApp/Discord shape: the
+   installer announces the device and the trust decision is the Allow click
+   on the surface the user is already at — no code, no typing, no prompt.
+   The /i/redeem endpoint died with the prompt (nothing consumed it).
 
-   The contract:
-   1. GET /i (no code) → a shell script that (a) prompts for the code
-      (read), (b) POSTs it to the redeem endpoint, (c) contains NO token
-      (nothing sensitive until a valid code), (d) passes sh -n.
-   2. POST /i/redeem { code } → one-shot JSON { hostId, token, serverUrl } —
-      200 once, then 410; unknown codes 410; hammering 429 (the existing
-      redeem rate limit). */
+   The contract now:
+   1. GET /i (no code) → a shell script that (a) announces the device at
+      POST /api/pair/request, (b) polls the request until the UI decides,
+      (c) contains NO token and no code, (d) passes sh -n.
+   2. The pairing handshake: POST /api/pair/request → 202 { id } (rate
+      limited); GET /api/pair/request/<id> → pending until the UI's
+      approve/deny; the approved read hands { hostId, token, serverUrl }
+      exactly once, then 410; unknown/consumed ids 410 (no oracle);
+      denied stays answerable until expiry; /api/hosts carries the
+      pendingPair list the UI renders. */
 
 let srv: TestServer;
 before(async () => {
@@ -29,71 +34,85 @@ after(async () => {
   await srv.close();
 });
 
-test("GET /i (no code) serves the interactive installer: prompts, redeems, carries no token", async () => {
+const postJson = (path: string, body: unknown) =>
+  fetch(`${srv.base}${path}`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+
+test("GET /i (no code) serves the auto-pairing installer: announces, polls for approval, carries no token", async () => {
   const res = await fetch(`${srv.base}/i`);
-  assert.equal(res.status, 200, "the bare /i route exists (today it falls through to the SPA)");
+  assert.equal(res.status, 200, "the bare /i route exists (once upon a time it fell through to the SPA)");
   const body = await res.text();
   assert.match(res.headers.get("content-type") ?? "", /shellscript|x-sh|plain/i, "it's a script, not the app html");
   assert.ok(!body.includes("<!doctype html") && !body.includes("<html"), "NOT the SPA fallback");
-  assert.match(body, /read .*code|code\?/i, "the script prompts for the code");
-  assert.match(body, /\/i\/redeem/, "and posts it to the redeem endpoint");
+  assert.match(body, /\/api\/pair\/request/, "the script announces itself for pairing");
+  assert.match(body, /pair\/request\/\$ID/, "and polls the request until the UI decides");
+  assert.match(body, /Allow/, "it tells the user where the approval happens");
+  assert.ok(!/read .*code|code\?/i.test(body), "no code prompt survives — the Allow click replaced it");
   assert.ok(!/truss_agent_[0-9a-f]{10,}/.test(body), "no token is ever baked into the generic script");
   const syntax = spawnSync("sh", ["-n"], { input: body, encoding: "utf8" });
   assert.equal(syntax.status, 0, `sh -n parses it clean: ${syntax.stderr.slice(0, 120)}`);
 });
 
-test("POST /i/redeem: one-shot JSON credentials — 200 once, 410 after; unknown 410; hammering 429", async () => {
-  const created = await fetch(`${srv.base}/api/hosts`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ label: "interactive-pair box" }),
-  }).then((r) => r.json());
-  const hostId = created.host.id as string;
-  const token = created.token as string;
+test("the auto-pair handshake: request → pending in /api/hosts → approve → credentials exactly once", async () => {
+  const ping = await fetch(`${srv.base}/api/pair/ping`).then((r) => r.json());
+  assert.equal(ping.name, "truss", "the discovery probe identifies a Truss server");
 
-  const minted = await fetch(`${srv.base}/api/hosts/${hostId}/pair`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ token, serverUrl: srv.base }),
-  }).then((r) => r.json());
-  assert.ok(minted.code, "the existing mint route stands");
+  const created = await postJson("/api/pair/request", { hostname: "testbox", os: "linux", tailscaleIp: "100.64.0.9" });
+  assert.equal(created.status, 202, "the request is accepted, not granted — approval is pending");
+  const { id } = await created.json();
+  assert.match(id, /^[0-9a-f]{32}$/, "unguessable request id");
 
-  const once = await fetch(`${srv.base}/i/redeem`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ code: minted.code }),
-  });
-  assert.equal(once.status, 200, "first redeem hands over the credentials");
+  const pending = await fetch(`${srv.base}/api/pair/request/${id}`).then((r) => r.json());
+  assert.equal(pending.status, "pending", "waiting for the Allow click");
+
+  const roster = await fetch(`${srv.base}/api/hosts`).then((r) => r.json());
+  const listed = roster.pendingPair.find((p: { id: string }) => p.id === id);
+  assert.ok(listed, "the pending request rides the hosts roster the UI already polls");
+  assert.equal(listed.hostname, "testbox");
+  assert.ok(!("token" in listed), "the pending view never carries credentials");
+
+  const approved = await postJson(`/api/pair/request/${id}/approve`, {});
+  assert.equal(approved.status, 200, JSON.stringify(await approved.clone().text()));
+  const { hostId } = await approved.json();
+  assert.ok(hostId, "approving creates the host");
+
+  const once = await fetch(`${srv.base}/api/pair/request/${id}`);
+  assert.equal(once.status, 200);
   const payload = await once.json();
+  assert.equal(payload.status, "approved");
   assert.equal(payload.hostId, hostId);
-  assert.equal(payload.token, token, "the agent token for the env file");
-  assert.equal(payload.serverUrl, srv.base, "the dial-home URL the wizard chose");
+  assert.match(payload.token, /^truss_agent_[0-9a-f]+$/, "the agent token for the env file");
+  assert.equal(payload.serverUrl, srv.base, "the dial-home address is the one the agent reached us at");
 
-  const twice = await fetch(`${srv.base}/i/redeem`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ code: minted.code }),
-  });
-  assert.equal(twice.status, 410, "one-shot: a used code is dead");
+  const twice = await fetch(`${srv.base}/api/pair/request/${id}`);
+  assert.equal(twice.status, 410, "the credentials are delivered exactly once");
 
-  const ghost = await fetch(`${srv.base}/i/redeem`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ code: "zzzz" }),
-  });
-  assert.equal(ghost.status, 410, "unknown codes die the same way (no oracle)");
+  const hosts = await fetch(`${srv.base}/api/hosts`).then((r) => r.json());
+  assert.ok(hosts.hosts.some((h: { id: string; label: string }) => h.id === hostId && h.label === "testbox"), "the approved device is a host now");
+  assert.ok(!hosts.pendingPair.some((p: { id: string }) => p.id === id), "and no longer pending");
+
+  const ghost = await fetch(`${srv.base}/api/pair/request/${"0".repeat(32)}`);
+  assert.equal(ghost.status, 410, "unknown ids die the same way (no oracle)");
+});
+
+test("deny answers the poll honestly; creation is rate-limited per client", async () => {
+  const r2 = await postJson("/api/pair/request", { hostname: "denybox", os: "linux" }).then((r) => r.json());
+  const denied = await postJson(`/api/pair/request/${r2.id}/deny`, {});
+  assert.equal(denied.status, 200);
+  const poll = await fetch(`${srv.base}/api/pair/request/${r2.id}`).then((r) => r.json());
+  assert.equal(poll.status, "denied", "the installer hears the no");
+
+  const gone = await postJson(`/api/pair/request/${r2.id}/approve`, {});
+  assert.equal(gone.status, 410, "a decided request cannot be re-approved");
 
   let last = 0;
-  for (let i = 0; i < 9; i++) {
-    last = (
-      await fetch(`${srv.base}/i/redeem`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ code: `probe${i}` }),
-      })
-    ).status;
+  for (let i = 0; i < 4; i++) {
+    last = (await postJson("/api/pair/request", { hostname: `flood${i}`, os: "linux" })).status;
   }
-  assert.equal(last, 429, "the redeem rate limit guards the endpoint (redeemRateOk)");
+  assert.equal(last, 429, "the per-client budget guards the unauthenticated endpoint (5/min)");
 });
 
 /* audit round 1 (B1): /i embeds the client-controlled Host header in the
@@ -116,24 +135,22 @@ test("GET /i with a metacharacter Host header refuses to embed it (400)", async 
   assert.ok(!body.includes("curl evil"), "nothing of the injection survives");
 });
 
-/* review rounds (issue #111): the browser half of the floor, condensed to
-   the minimum — the wizard's link carries the code in its URL fragment
-   (/p#hbyn; fragments never leave the browser), the page pre-fills from it,
-   and one Download click turns the code into a same-origin GET /i/<code>
-   (the EXISTING burn-once route), so the saved file is the token-embedded
-   installer and the terminal only runs `sh ~/Downloads/t.sh`. */
-test("GET /p serves the browser pairing page: code box pre-filled from the fragment, burn-once download, token-free", async () => {
+/* review rounds (issue #111): the browser half of the floor — /p is a static
+   page whose Download button is a plain anchor to the generic /i script
+   (nothing burns, download it freely), and the handshake is the Allow click
+   in the Truss UI. */
+test("GET /p serves the browser pairing page: download, run, approve — no code anywhere", async () => {
   const res = await fetch(`${srv.base}/p`);
   assert.equal(res.status, 200, "the page exists");
   assert.match(res.headers.get("content-type") ?? "", /text\/html/, "a page, not a script");
   const body = await res.text();
   assert.ok(body.includes("<!doctype html"), "actually html");
-  assert.match(body, /aria-label="pairing code"/, "the code box is there");
-  assert.match(body, /location\.hash/, "the box pre-fills from the link's fragment");
-  assert.match(body, /fetch\("\/i\/"/, "the download goes through the burn-once route");
-  assert.match(body, /a\.download = "t\.sh"/, "the file lands under the name the page says to run");
+  assert.match(body, /href="\/i"[^>]*download="t\.sh"/, "the Download button is the generic auto-pair script, saved as t.sh");
+  assert.ok(!body.includes('"/i/"'), "no per-code redeem path survives in the page");
+  assert.ok(!/aria-label="pairing code"/.test(body), "no code box — the Allow click replaced it");
+  assert.match(body, /Allow/, "the page names the approval step");
   assert.match(body, /sh ~\/Downloads\/t\.sh/, "the terminal step is the short local path");
-  assert.ok(!/truss_agent_[0-9a-f]{10,}/.test(body), "the page itself is token-free");
+  assert.ok(!/truss_agent_[0-9a-f]{10,}/.test(body), "the page is token-free like the /i script");
 
   const script = await fetch(`${srv.base}/i`);
   assert.match(script.headers.get("content-disposition") ?? "", /attachment; filename="t\.sh"/, "browsers download /i as t.sh (curl ignores it)");

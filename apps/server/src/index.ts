@@ -52,6 +52,7 @@ import { createHost, deleteHost, getHost, isHostTombstoned, listHosts, renameHos
 import { assertDialableServerUrl, netInfo, taildropToPeer, tailscalePeers, tailscaleServe, tailscaleSshOk, tailscaleSshRun } from "./net.js";
 import { deliveryOptions, installerDropName, interactiveInstallScript, pairingPage } from "./installer.js";
 import { mintPairing, redeemPairing, redeemRateOk } from "./pairing.js";
+import { approvePairRequest, createPairRequest, denyPairRequest, listPairRequests, pairRequestRateOk, readPairRequest, setPairBroadcaster } from "./pairrequests.js";
 import { agentBundleError, agentBundleHash, assertSafeServerUrl, ensureAgentBundle, standaloneInstallScript, installScript } from "./agentbundle.js";
 import { registerMcpPerms } from "./mcp-perms.js";
 import { importDshSessions } from "./import-dsh.js";
@@ -99,6 +100,8 @@ setBroadcaster((frame: EventFrame) => {
 /* feed/todo mutations ride the same bus as broadcast-only frames */
 setFeedBroadcaster((item) => broadcastRaw({ type: "feed.upsert", sessionId: item.sessionId ?? "", item }));
 setTodoBroadcaster((todo) => broadcastRaw({ type: "todo.upsert", sessionId: todo.sessionId ?? "", todo }));
+/* a device asking to pair must surface in the UI the moment it asks */
+setPairBroadcaster((event, request) => broadcastRaw({ type: "pair.changed", sessionId: "", event, request }));
 startFeedAutopost();
 /* doubletake research cards — a no-op until enabled in Settings */
 startDoubletakePoll();
@@ -352,15 +355,7 @@ app.post("/api/hosts/:id/pair", async (req, reply) => {
     return reply.code(400).send({ error: e.message });
   }
   const { code, expiresAt } = mintPairing({ hostId: id, token, serverUrl });
-  return {
-    code,
-    expiresAt,
-    url: `${serverUrl}/i/${code}`,
-    command: `curl -fsSL ${serverUrl}/i/${code} | sh`,
-    /* issue #111: the same code works at the interactive installer's prompt —
-       the command stays short and carries nothing secret */
-    interactiveCommand: `curl -fsSL ${serverUrl}/i | sh`,
-  };
+  return { code, expiresAt, url: `${serverUrl}/i/${code}`, command: `curl -fsSL ${serverUrl}/i/${code} | sh` };
 });
 
 app.post("/api/hosts/:id/taildrop", async (req, reply) => {
@@ -448,10 +443,10 @@ app.post("/api/hosts/:id/ssh-install", async (req, reply) => {
 });
 
 /* ── interactive pairing (issue #111): `curl -fsSL <host>/i | sh` is the
-   typing floor — the script prompts for the short code, so nothing secret
-   is ever baked into the command or the served file. The code is redeemed
-   at POST /i/redeem for the real credentials, one-shot, same rate limit and
-   oracle-free answers as the inline variant below. ── */
+   typing floor. The served script auto-pairs WhatsApp-style (review rounds):
+   it announces the device at POST /api/pair/request and polls until the user
+   clicks Allow in the UI, so nothing is typed and nothing secret is ever
+   baked into the command or the served file. ── */
 app.get("/i", async (req, reply) => {
   /* the only embedded value is the address the client just used to reach us
      (Host header + proxy proto) — client-controlled, so it goes through the
@@ -471,27 +466,11 @@ app.get("/i", async (req, reply) => {
   }
 });
 
-app.post("/i/redeem", async (req, reply) => {
-  /* rate-limited per client, same guard as GET /i/:code — the code keyspace
-     is small by design, so guessing it must cost real time */
-  if (!redeemRateOk(req.ip)) {
-    return reply.code(429).send({ error: "too many pairing-code tries. Wait a minute, then retry" });
-  }
-  const { code } = (req.body ?? {}) as { code?: string };
-  /* hand-typed at a prompt: forgive case and surrounding whitespace */
-  const entry = typeof code === "string" ? redeemPairing(code.trim().toLowerCase()) : undefined;
-  if (!entry) {
-    return reply.code(410).send({ error: "that pairing code is used up, expired, or unknown. Mint a fresh one from the Truss add-host wizard" });
-  }
-  return { hostId: entry.hostId, token: entry.token, serverUrl: entry.serverUrl };
-});
-
 /* the browser side of the same flow (issue #111 review rounds): open
-   <server>/p on the remote (the wizard's link carries the code in the URL
-   fragment), click Download, run the saved file. The page itself is static
-   and token-free; its Download click is a same-origin GET /i/<code> below,
-   the existing burn-once route, so the click is what redeems the code and
-   the saved t.sh is the token-embedded installer. */
+   <server>/p on the remote, click Download, run the saved file. The page
+   itself is static and token-free; the download is the generic auto-pair
+   installer from GET /i above, which asks to join and waits for the UI's
+   Allow click. */
 app.get("/p", async (_req, reply) => {
   return reply.header("Content-Type", "text/html; charset=utf-8").send(pairingPage());
 });
@@ -559,6 +538,51 @@ app.get("/api/metrics", async () => {
   return { local: { metrics: local, history: metricsHistory.get("local") ?? [] }, agents: agentsOut };
 });
 
+/* ── auto-pairing (issue #111, review rounds): the WhatsApp shape — the new
+   device announces itself, the user approves it in the UI, and the polling
+   installer receives the credentials exactly once. The Allow click is the
+   trust gate; the request itself carries only self-reported metadata. ── */
+app.get("/api/pair/ping", async () => ({ ok: true, name: "truss" })); // the installer's tailnet discovery probe
+
+app.post("/api/pair/request", async (req, reply) => {
+  if (!pairRequestRateOk(req.ip)) {
+    return reply.code(429).send({ error: "too many pairing requests. Wait a minute, then retry" });
+  }
+  const { hostname, os, tailscaleIp } = (req.body ?? {}) as { hostname?: string; os?: string; tailscaleIp?: string };
+  if (typeof hostname !== "string" || !hostname.trim()) return reply.code(400).send({ error: "hostname is required" });
+  /* the address the agent just used to reach us is the one it can dial home
+     to (same derivation as GET /i; client-controlled, so shell-check it) */
+  const proto = req.headers["x-forwarded-proto"] === "https" ? "https" : "http";
+  const serverUrl = `${proto}://${req.headers.host ?? `127.0.0.1:${PORT}`}`;
+  try {
+    assertSafeServerUrl(serverUrl);
+  } catch (e: any) {
+    return reply.code(400).send({ error: e.message });
+  }
+  const r = createPairRequest({ hostname, os: os ?? "", tailscaleIp }, serverUrl);
+  return reply.code(202).send({ id: r.id, expiresAt: r.expiresAt });
+});
+
+app.get("/api/pair/request/:id", async (req, reply) => {
+  const { id } = req.params as { id: string };
+  const r = readPairRequest(id);
+  if (!r) return reply.code(410).send({ error: "that pairing request is expired, answered, or unknown" });
+  return r;
+});
+
+app.post("/api/pair/request/:id/approve", async (req, reply) => {
+  const { id } = req.params as { id: string };
+  const r = approvePairRequest(id);
+  if (!r) return reply.code(410).send({ error: "that pairing request is expired or already decided" });
+  return { ok: true, hostId: r.hostId };
+});
+
+app.post("/api/pair/request/:id/deny", async (req, reply) => {
+  const { id } = req.params as { id: string };
+  if (!denyPairRequest(id)) return reply.code(410).send({ error: "that pairing request is expired or already decided" });
+  return { ok: true };
+});
+
 /* ── registered remote hosts (registry + per-host tokens) ── */
 app.get("/api/hosts", async () => {
   const agentsNow = decoratedAgents();
@@ -569,6 +593,7 @@ app.get("/api/hosts", async () => {
       online: live.has(h.id),
       agent: agentsNow.find((a) => a.hostId === h.id),
     })),
+    pendingPair: listPairRequests(),
   };
 });
 app.post("/api/hosts", async (req, reply) => {

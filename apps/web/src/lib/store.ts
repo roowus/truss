@@ -79,6 +79,8 @@ export interface AppState {
   todosLoaded: boolean;
   hosts: HostInfo[];
   hostsLoaded: boolean;
+  /** devices waiting for the Allow click (auto-pairing, issue #111 review) */
+  pairRequests: import("./proto").PairRequestInfo[];
   feed: Record<string, FeedItem>;
   feedLoaded: boolean;
   toasts: Toast[];
@@ -228,6 +230,7 @@ class Store {
     todosLoaded: false,
     hosts: [],
     hostsLoaded: false,
+    pairRequests: [],
     feed: {},
     feedLoaded: false,
     toasts: [],
@@ -477,6 +480,16 @@ class Store {
       void this.refreshHarnesses();
       return;
     }
+    /* a device asking to pair surfaces the moment it asks (issue #111
+       review): refresh the pending list and toast it — the Allow click is
+       the whole handshake, so the request must not sit unseen */
+    if (ev.type === "pair.changed") {
+      void this.refreshHosts();
+      if (ev.event === "requested" && ev.request?.hostname) {
+        this.toast("info", "Pairing request", `${ev.request.hostname} wants to pair: allow it under Remote hosts`);
+      }
+      return;
+    }
     if (ev.type === "models.updated") {
       /* a lazy harness catalog (hermes/dsh) just filled in on the server
          (first-boot probe, issue #101) — refetch so an open New Session
@@ -714,10 +727,32 @@ class Store {
   async refreshHosts() {
     if (!this.be) return;
     try {
-      const { hosts } = await this.be.hosts();
-      this.set({ hosts, hostsLoaded: true });
+      const { hosts, pendingPair } = await this.be.hosts();
+      this.set({ hosts, hostsLoaded: true, pairRequests: pendingPair ?? [] });
     } catch (e: any) {
       this.toast("error", "Couldn't load hosts", e?.message ?? String(e));
+    }
+  }
+
+  /* auto-pairing (issue #111 review): the Allow/Deny click on a device that
+     announced itself; either way the roster and the pending list refresh */
+  async approvePairRequest(id: string) {
+    if (!this.be) return;
+    try {
+      await this.be.approvePairRequest(id);
+      this.toast("ok", "Pairing approved", "the device is installing itself now");
+      await this.refreshHosts();
+    } catch (e: any) {
+      this.toast("error", "Couldn't approve the pairing", e?.message ?? String(e));
+    }
+  }
+  async denyPairRequest(id: string) {
+    if (!this.be) return;
+    try {
+      await this.be.denyPairRequest(id);
+      await this.refreshHosts();
+    } catch (e: any) {
+      this.toast("error", "Couldn't deny the pairing", e?.message ?? String(e));
     }
   }
 

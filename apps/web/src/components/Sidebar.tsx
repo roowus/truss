@@ -1,7 +1,7 @@
 import { useMemo, useState, useEffect, type ReactNode } from "react";
 import { store, useApp, useNow } from "@/lib/store";
 import { desktops, useDesktops } from "@/lib/desktops";
-import { ago, daysLeftInTrash, shortPath } from "@/lib/format";
+import { ago, daysLeftInTrash, shortPath, until } from "@/lib/format";
 import { harnessDisplay, hostAliases } from "@/lib/device";
 import { openAgentShell, openDailyDriver, openFreeShell, openPanel, openSession } from "@/lib/workspace";
 import { HarnessMark, Icon, IconBtn, StateDot, TrussLogo, Spinner, STATE_META } from "./ui";
@@ -19,6 +19,7 @@ export function Sidebar({ onNew }: { onNew: () => void }) {
   const err = useApp((s) => s.sessionsError);
   const terminals = useApp((s) => s.terminals);
   const hosts = useApp((s) => s.hosts);
+  const pairRequests = useApp((s) => s.pairRequests);
   const agentsError = useApp((s) => s.agentsError);
   const hostPrefs = useDesktops((s) => s.hosts);
   const groupMode = useDesktops((s) => s.settings.groupMode);
@@ -170,6 +171,9 @@ export function Sidebar({ onNew }: { onNew: () => void }) {
         </Section>
 
         <Section title="remote hosts" action={<IconBtn icon="plus" label="Add host" className="w-5 h-5" onClick={() => window.dispatchEvent(new Event("truss:add-host"))} />}>
+          {/* auto-pairing (issue #111 review): a device that downloaded and
+              ran the installer asks here; Allow is the whole handshake */}
+          {pairRequests.map((r) => <PairRequestRow key={r.id} r={r} />)}
           {sortWithPinned(hosts, (h) => !!h.pinned).map((h) => <HostRow key={h.id} h={h} alias={hostPrefs[h.id]?.alias} />)}
           {hosts.length === 0 && !agentsError && (
             <button onClick={() => window.dispatchEvent(new Event("truss:add-host"))} className="w-full mx-0.5 px-2 py-2 rounded-md border border-dashed border-[var(--t-line2)] text-[11px] text-[var(--t-dim)] hover:text-[var(--t-mute)] hover:border-[var(--t-mute)] text-left">
@@ -459,6 +463,46 @@ function ShellRow({ t }: { t: TerminalInfo }) {
           />
         )}
       </span>
+    </div>
+  );
+}
+
+/* auto-pairing (issue #111 review): a device that ran the installer is
+   asking to join. The Allow/Deny click is the entire trust decision, so the
+   row stays loud until it is answered; the request dies on its own after
+   10 minutes even if ignored. */
+function PairRequestRow({ r }: { r: import("@/lib/proto").PairRequestInfo }) {
+  const [busy, setBusy] = useState(false);
+  const decide = (fn: (id: string) => Promise<void>) => {
+    setBusy(true);
+    void fn(r.id).finally(() => setBusy(false));
+  };
+  return (
+    <div className="mx-0.5 mb-1 rounded-md border border-[var(--t-amber)]/40 bg-[var(--t-amber)]/5 px-2 py-1.5">
+      <div className="flex items-center gap-2 text-[12px] text-[var(--t-fg)]">
+        <span className="w-1.5 h-1.5 rounded-full bg-[var(--t-amber)] shrink-0 animate-pulse" />
+        <Icon name="host" size={12} className="text-[var(--t-amber)] shrink-0" />
+        <span className="flex-1 truncate">{r.hostname} wants to pair</span>
+      </div>
+      <div className="mt-0.5 pl-3.5 text-[10px] text-[var(--t-dim)] truncate">
+        {r.os}{r.tailscaleIp ? ` · ${r.tailscaleIp}` : ""} · the ask expires in {until(r.expiresAt)}
+      </div>
+      <div className="mt-1.5 flex gap-1.5 pl-3.5">
+        <button
+          disabled={busy}
+          onClick={() => decide((id) => store.approvePairRequest(id))}
+          className="px-2 py-0.5 rounded text-[10.5px] font-medium bg-[var(--t-amber)] text-black hover:brightness-110 disabled:opacity-50"
+        >
+          Allow
+        </button>
+        <button
+          disabled={busy}
+          onClick={() => decide((id) => store.denyPairRequest(id))}
+          className="px-2 py-0.5 rounded text-[10.5px] border border-[var(--t-line2)] text-[var(--t-mute)] hover:text-[var(--t-fg)] disabled:opacity-50"
+        >
+          Deny
+        </button>
+      </div>
     </div>
   );
 }

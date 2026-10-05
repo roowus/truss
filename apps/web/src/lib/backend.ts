@@ -11,6 +11,7 @@ import type {
   GitStatus,
   HarnessesResp,
   HostInfo,
+  PairRequestInfo,
   MonitorData,
   NetInfo,
   PromptAttachment,
@@ -106,7 +107,7 @@ export interface Backend {
   gitDiff(cwd: string, path: string, staged: boolean): Promise<{ diff: string }>;
   gitSwitch(cwd: string, branch: string, create: boolean): Promise<{ branch: string }>;
   /** Remote hosts registry */
-  hosts(): Promise<{ hosts: HostInfo[] }>;
+  hosts(): Promise<{ hosts: HostInfo[]; pendingPair: PairRequestInfo[] }>;
   createHost(label: string, note?: string): Promise<{ host: HostInfo; token: string }>;
   rotateHostToken(id: string): Promise<{ token: string }>;
   revokeHost(id: string, revoked: boolean): Promise<unknown>;
@@ -114,12 +115,16 @@ export interface Backend {
   /** relabel a remote host (issue #147): display-only — the id is the identity and never changes */
   renameHost(id: string, label: string): Promise<unknown>;
   deleteHost(id: string): Promise<unknown>;
+  /** auto-pairing (issue #111 review): the Allow/Deny click on a device that
+     ran the installer and announced itself */
+  approvePairRequest(id: string): Promise<{ ok: boolean; hostId: string }>;
+  denyPairRequest(id: string): Promise<{ ok: boolean }>;
   /** installer delivery (issue #1): short single-use pairing command, or
      taildrop the standalone script to the picked tailnet device.
      Last mile (issue #91): deliveryOptions orders the ways by what the user
      must type (tailscale-ssh = 0 leads when the peer allows); sshInstall is
      the zero-typing path — the server runs the installer on the peer. */
-  pairHost(id: string, token: string, serverUrl: string): Promise<{ code: string; expiresAt: number; url: string; command: string; interactiveCommand: string }>;
+  pairHost(id: string, token: string, serverUrl: string): Promise<{ code: string; expiresAt: number; url: string; command: string }>;
   taildropHost(id: string, peer: string, token: string, serverUrl: string): Promise<{ ok: boolean; file: string; command: string; typedChars: number }>;
   deliveryOptions(id: string, peer: string | null, token: string, serverUrl: string): Promise<{ options: DeliveryOption[] }>;
   sshInstall(id: string, peer: string, token: string, serverUrl: string): Promise<{ ok: boolean }>;
@@ -263,6 +268,8 @@ export function createLiveBackend(): Backend {
     pinHost: (id, pinned) => req("POST", `/api/hosts/${encodeURIComponent(id)}/pin`, { pinned }),
     renameHost: (id, label) => req("POST", `/api/hosts/${encodeURIComponent(id)}/rename`, { label }),
     deleteHost: (id) => req("DELETE", `/api/hosts/${encodeURIComponent(id)}`),
+    approvePairRequest: (id) => req("POST", `/api/pair/request/${encodeURIComponent(id)}/approve`, {}),
+    denyPairRequest: (id) => req("POST", `/api/pair/request/${encodeURIComponent(id)}/deny`, {}),
     pairHost: (id, token, serverUrl) => req("POST", `/api/hosts/${encodeURIComponent(id)}/pair`, { token, serverUrl }),
     taildropHost: (id, peer, token, serverUrl) => req("POST", `/api/hosts/${encodeURIComponent(id)}/taildrop`, { peer, token, serverUrl }),
     deliveryOptions: (id, peer, token, serverUrl) => req("POST", `/api/hosts/${encodeURIComponent(id)}/delivery`, { peer: peer ?? undefined, token, serverUrl }),

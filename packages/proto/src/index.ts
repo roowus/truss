@@ -118,6 +118,17 @@ export interface AgentsChanged {
   sessionId: string; // always "" — carried for the frame shape only
 }
 
+/* a device asked to auto-pair (or its request was decided) — clients refetch
+   /api/hosts (the pendingPair list) and toast the ask, because the Allow
+   click IS the handshake and must not sit unseen (issue #111 review).
+   sessionId is "" — carried for the frame shape only, like agents.changed. */
+export interface PairChanged {
+  type: "pair.changed";
+  sessionId: string;
+  event: "requested" | "resolved";
+  request: { id: string; hostname: string; os: string; tailscaleIp?: string; expiresAt: number };
+}
+
 /** a harness's model catalog just filled in (lazy adapters discover it from
     the first session boot, or from the first-boot probe — issue #101).
     Broadcast-only; clients refetch /api/harnesses. sessionId is "" — carried
@@ -265,6 +276,7 @@ export type ProtoEvent =
   | TodoUpsert
   | FeedUpsert
   | AgentsChanged
+  | PairChanged
   | ModelsUpdated
   | MsgStart
   | MsgChunk

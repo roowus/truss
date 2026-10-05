@@ -86,13 +86,13 @@ test("deliveryOptions: the least-typing option leads; the taildrop command is th
     assert.match(drop.command, /^sh ~\/Downloads\/[a-z0-9.-]+\.sh$/, "the remote side types one short path");
     assert.ok(drop.typedChars <= 24, "short enough to actually type");
 
-    /* interactive pairing (issue #111): the script prompts for the code, so
-       the command is shorter than the inline variant and its honest count
-       includes the code typed at the prompt */
+    /* interactive pairing (issue #111): the script auto-pairs (announce +
+       Allow click), so the command is shorter than the inline variant and
+       nothing beyond it is typed */
     const interactive = opts.find((o) => o.kind === "interactive")!;
     assert.ok(interactive, "the interactive /i command is always there");
     assert.match(interactive.command, /curl .*\/i \| sh$/, "the bare /i url form — no code inline");
-    assert.ok(interactive.typedChars > interactive.command.length, "honest: the prompt-typed code counts");
+    assert.equal(interactive.typedChars, interactive.command.length, "honest: auto-pair needs no code at all");
     assert.ok(interactive.typedChars < (opts.find((o) => o.kind === "pairing")?.typedChars ?? 0), "beats typing the code inline");
 
     const pair = opts.find((o) => o.kind === "pairing")!;
