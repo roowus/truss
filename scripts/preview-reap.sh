@@ -85,6 +85,8 @@ while read -r n; do
     CLOSED) retitle "$n" closed ;;
     *) continue ;;
   esac
+  # labels are pre-merge signals — they must not outlive the merge
+  gh pr edit "$n" -R roowus/truss --remove-label ready-for-review --remove-label needs-answer 2>/dev/null || true
   # mark the ledger entry so this fires once
   python3 - "$LEDGER" "$n" <<'EOF'
 import json, sys
