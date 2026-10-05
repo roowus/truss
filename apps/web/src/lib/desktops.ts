@@ -1,7 +1,7 @@
 import { useCallback, useRef, useSyncExternalStore } from "react";
 import type { DockviewApi, IDockviewPanel, SerializedDockview } from "dockview-react";
 import { normalizeLayoutSizes } from "./layoutSanitize";
-import { canClose, nextActiveAfterClose, popClosed, pushClosed, type ClosedSnapshot } from "./workspaceClose";
+import { canClose, nextActiveAfterClose, popClosed, pushClosed, terminalIdsInLayout, type ClosedSnapshot } from "./workspaceClose";
 import type { Backend } from "./backend";
 import { store } from "./store";
 
@@ -346,14 +346,20 @@ class DesktopManager {
     this.closedStack = pushClosed(this.closedStack, { name: space.name, layout, at: Date.now() });
     const terminals = api
       ? api.panels.filter((p) => p.id.startsWith("terminal:")).map((p) => p.id.slice(9))
-      : Object.keys(space.layout?.panels ?? {}).filter((p) => p.startsWith("terminal:")).map((p) => p.slice(9));
+      : terminalIdsInLayout(space.layout);
     const spaces = this.state.spaces.filter((s) => s.id !== id);
     const activeId = nextActiveAfterClose(live, id, this.state.activeId);
     this.set({ spaces, activeId });
     store.focus(this.apis.get(activeId)?.activePanel?.params?.sessionId as string | undefined);
     for (const tid of terminals) this.cleanupTerminalLater(tid);
     this.queueSave();
-    store.toast("info", `Closed workspace "${space.name}"`, "Ctrl+Shift+T (Cmd+Shift+T on Mac) brings it back.");
+    /* The chord is browser-reserved in some tabs, so name the sure path too. */
+    store.toast("info", `Closed workspace "${space.name}"`, "Reopen it from the command palette (Ctrl/⌘ K) or with Ctrl/⌘ Shift+T.");
+  }
+
+  /** The workspace reopenClosed() would restore, or null when the undo stack is empty. */
+  peekClosed() {
+    return this.closedStack[this.closedStack.length - 1] ?? null;
   }
 
   /** Chrome's Cmd+Shift+T: the last closed workspace returns with its name and layout. */

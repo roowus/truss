@@ -68,3 +68,14 @@ export function popClosed<T>(stack: T[]): { snapshot: T; rest: T[] } | null {
   if (!stack.length) return null;
   return { snapshot: stack[stack.length - 1], rest: stack.slice(0, -1) };
 }
+
+/**
+ * The shell ids a serialized layout still shows ("terminal:<id>" panels).
+ * remove() sweeps these on close so orphaned shells stop; pure so the sweep
+ * can be pinned without a dockview instance.
+ */
+export function terminalIdsInLayout(layout: { panels?: Record<string, unknown> } | null | undefined): string[] {
+  return Object.keys(layout?.panels ?? {})
+    .filter((p) => p.startsWith("terminal:"))
+    .map((p) => p.slice("terminal:".length));
+}

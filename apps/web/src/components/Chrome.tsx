@@ -134,12 +134,17 @@ export function CommandPalette({ onClose, onNew }: { onClose: () => void; onNew:
   useEffect(() => input.current?.focus(), []);
 
   const cmds: Cmd[] = useMemo(() => {
+    /* Read at open time: the palette mounts fresh, so a non-reactive peek is
+       always current. This is the guaranteed reopen path — browsers reserve
+       Ctrl/⌘ Shift+T in normal tabs, so the chord may never reach the page. */
+    const closedTop = desktops.peekClosed();
     const base: Cmd[] = [
       { id: "new", label: "New session…", icon: "plus", hint: "N", run: onNew },
       { id: "add-tab", label: "Add tab…", icon: "plus", hint: "Alt+Shift+T", run: () => window.dispatchEvent(new Event("truss:add-tab")) },
       { id: "shell", label: "New free shell", icon: "term", run: () => openFreeShell() },
       { id: "settings", label: "Settings", icon: "settings", hint: "Ctrl/⌘ ,", run: () => openPanel("settings") },
       { id: "new-workspace", label: "New workspace", icon: "desktop", run: () => desktops.create() },
+      ...(closedTop ? [{ id: "reopen-workspace", label: `Reopen closed workspace: ${closedTop.name}`, icon: "desktop", hint: "Ctrl/⌘ Shift+T", run: () => desktops.reopenClosed() }] : []),
       { id: "welcome", label: "Open welcome", icon: "layout", run: () => openPanel("welcome") },
     ];
     const ws: Cmd[] = spaces.map((space, index) => ({ id: `ws-${space.id}`, label: `Switch to ${space.name}`, icon: "desktop", hint: `Alt+${index + 1}`, run: () => desktops.switchTo(space.id) }));
