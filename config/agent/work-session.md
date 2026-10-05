@@ -158,11 +158,15 @@ never asked for? When you judge it done:
 4. **Hand it to the developer on the PR itself** — this is the queue they
    watch. EVERY handoff runs ALL of this — the first convergence and every
    re-convergence after developer feedback alike; there is no shortened
-   "already told them once" form. Preconditions, both checked, not assumed:
-   the `audit` label is OFF
-   (`gh pr view --json labels`) and the latest audit's verdict on the FINAL
-   head is clean/approved. `ready-for-review` and `audit` must never coexist
-   — the label says "done", the loop says "not done".
+   "already told them once" form. Preconditions, all three CHECKED, not
+   assumed:
+   1. the `audit` label is OFF (`gh pr view --json labels`)
+      (`ready-for-review` and `audit` never coexist — the label says "done",
+      the loop says "not done")
+   2. the latest audit's verdict on the FINAL head is clean/approved
+   3. the presubmit is GREEN on the final head: `gh pr checks <pr>` shows
+      `verify` pass. Pending → self-wake and wait (the label must never beat
+      CI); failing → that is a round, not a handoff — fix it first.
    a. Retitle: `#<pr> [ready] — <slug>` via the title route.
    b. Apply the review label: `gh pr edit <pr> --add-label ready-for-review`.
    c. Say it in this session too — the developer may be watching the chat,
