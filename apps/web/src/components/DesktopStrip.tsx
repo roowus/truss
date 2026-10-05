@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { desktops, useDesktops } from "@/lib/desktops";
-import { canClose } from "@/lib/workspaceClose";
+import { workspaceTabCloseMode } from "@/lib/workspaceClose";
 import { openPanel } from "@/lib/workspace";
 import { Icon, IconBtn } from "./ui";
 import { TabPicker } from "./TabPicker";
@@ -76,16 +76,26 @@ export function DesktopStrip() {
                 <span className="truncate">{space.name}</span>
               </button>
             )}
-            {canClose(live, space.id) && (
-              <button
-                aria-label={`Close workspace ${space.name}`}
-                title={`Close workspace ${space.name} and its tabs (Ctrl+Shift+W closes the active one; Ctrl+Shift+T reopens)`}
-                className="w-[21px] h-6 grid place-items-center rounded hover:bg-white/[0.07] text-[var(--t-dim)] hover:text-[var(--t-red)] opacity-0 group-hover:opacity-100 focus:opacity-100"
-                onClick={(e) => { e.stopPropagation(); desktops.remove(space.id); }}
-              >
-                <Icon name="x" size={11} />
-              </button>
-            )}
+            {/* Chrome's rule: the ACTIVE workspace pins its X, the rest reveal
+                on hover; the last workspace standing gets none (pinned in
+                lib/workspaceClose.ts: workspaceTabCloseMode). */}
+            {(() => {
+              const closeMode = workspaceTabCloseMode(live, space.id, activeId);
+              if (!closeMode) return null;
+              return (
+                <button
+                  aria-label={`Close workspace ${space.name}`}
+                  title={`Close workspace ${space.name} and its tabs (Ctrl+Shift+W closes the active one; Ctrl+Shift+T reopens)`}
+                  className={cn(
+                    "w-[21px] h-6 grid place-items-center rounded hover:bg-white/[0.07] text-[var(--t-dim)] hover:text-[var(--t-red)]",
+                    closeMode === "always" ? "opacity-70 hover:opacity-100" : "opacity-0 group-hover:opacity-100 focus:opacity-100",
+                  )}
+                  onClick={(e) => { e.stopPropagation(); desktops.remove(space.id); }}
+                >
+                  <Icon name="x" size={11} />
+                </button>
+              );
+            })()}
             <button
               aria-label={`Options for ${space.name}`}
               title={`Options for ${space.name}`}

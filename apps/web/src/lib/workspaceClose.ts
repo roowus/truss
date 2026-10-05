@@ -70,6 +70,17 @@ export function popClosed<T>(stack: T[]): { snapshot: T; rest: T[] } | null {
 }
 
 /**
+ * Chrome's tab-X visibility, mapped onto workspace tabs: the ACTIVE workspace
+ * pins its X (always visible, like Chrome's active tab), the rest reveal on
+ * hover, and an unclosable one (last standing, ghost) gets no X at all so a
+ * click there can never close anything.
+ */
+export function workspaceTabCloseMode(spaces: CloseableSpace[], id: string, activeId: string): "always" | "hover" | null {
+  if (!canClose(spaces, id)) return null;
+  return id === activeId ? "always" : "hover";
+}
+
+/**
  * The shell ids a serialized layout still shows ("terminal:<id>" panels).
  * remove() sweeps these on close so orphaned shells stop; pure so the sweep
  * can be pinned without a dockview instance.
