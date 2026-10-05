@@ -80,8 +80,11 @@ done
 #    survived; the ledger is the source of truth for worker sessions
 while read -r n; do
   [ -n "$n" ] || continue
-  [ "${STATE[$n]:-}" = "MERGED" ] || continue
-  retitle "$n" merged
+  case "${STATE[$n]:-}" in
+    MERGED) retitle "$n" merged ;;
+    CLOSED) retitle "$n" closed ;;
+    *) continue ;;
+  esac
   # mark the ledger entry so this fires once
   python3 - "$LEDGER" "$n" <<'EOF'
 import json, sys
