@@ -4,6 +4,7 @@ import { useDesktops } from "@/lib/desktops";
 import { harnessStyle, hostOf, shortPath } from "@/lib/format";
 import { hostAliases, hostDisplay } from "@/lib/device";
 import { resolveDefaultCwd, hostDefaultFor, hostSuggestedFor } from "@/lib/cwdDefault";
+import { createBrowseNav, type BrowseNav } from "@/lib/browseNav";
 import type { BrowseDir } from "@/lib/proto";
 import { openPanel, openSession } from "@/lib/workspace";
 import { Btn, HarnessMark, Icon, Kbd, Select, Spinner } from "./ui";
@@ -321,6 +322,30 @@ function DirPicker({ onPick, onClose }: { onPick: (path: string) => void; onClos
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
+  /* Scroll memory (issue #136): before this, every navigation re-rendered a
+     fresh listing and the scroll container reset — climbing back out of a
+     subfolder landed at the TOP of the parent. The nav machine remembers
+     each visited directory's scrollTop; `go` records the outgoing
+     directory's position before switching, and the effect below restores
+     the incoming one's once its rows have rendered. One instance per picker
+     mount: reopening the picker may start fresh (the issue allows it). */
+  const navRef = useRef<BrowseNav | null>(null);
+  if (!navRef.current) navRef.current = createBrowseNav();
+  const nav = navRef.current;
+  const listRef = useRef<HTMLDivElement>(null);
+  /* the directory whose remembered scroll is waiting to be applied —
+     undefined means "nothing to restore" (a hidden-toggle refetch must not
+     yank the list back to a stale position) */
+  const pendingRestore = useRef<string | null | undefined>(undefined);
+  const go = (next: string | null, via: "enter" | "climb") => {
+    if (next === path) return; // re-clicking the current crumb stays put
+    nav.rememberScroll(path, listRef.current?.scrollTop ?? 0);
+    pendingRestore.current = next;
+    if (via === "enter" && next !== null) nav.enter(next);
+    else nav.climbTo(next);
+    setPath(next);
+  };
+
   useEffect(() => {
     let alive = true;
     setBusy(true);
@@ -347,6 +372,17 @@ function DirPicker({ onPick, onClose }: { onPick: (path: string) => void; onClos
   /* the listing is either the root list or the current path's subdirs */
   const rows: BrowseDir[] = path === null ? roots.map((r) => ({ name: r, path: r })) : dirs;
 
+  /* Apply the pending scroll restore once the destination's rows are on
+     screen (the fetch is async, so this can't happen inside `go`). Runs
+     after every render; the guard makes it a no-op unless a navigation is
+     waiting AND its listing has finished loading. */
+  useEffect(() => {
+    if (pendingRestore.current === undefined || busy || err) return;
+    const target = pendingRestore.current;
+    pendingRestore.current = undefined;
+    if (listRef.current) listRef.current.scrollTop = nav.scrollMemory(target);
+  });
+
   const crumbs = useMemo(() => {
     if (path === null) return [];
     const root = [...roots].filter((r) => path === r || path.startsWith(r + "/")).sort((a, b) => b.length - a.length)[0];
@@ -366,7 +402,7 @@ function DirPicker({ onPick, onClose }: { onPick: (path: string) => void; onClos
       <div className="flex items-center gap-1 px-2 h-9 border-b border-[var(--t-line)]">
         <button
           type="button"
-          onClick={() => setPath(parent)}
+          onClick={() => go(parent, "climb")}
           disabled={parent === null}
           title="Up"
           aria-label="Up one directory"
@@ -375,13 +411,13 @@ function DirPicker({ onPick, onClose }: { onPick: (path: string) => void; onClos
           <Icon name="chev" size={12} className="-rotate-90" />
         </button>
         <div className="flex-1 flex items-center gap-0.5 overflow-x-auto t-scroll whitespace-nowrap font-mono text-[11px] text-[var(--t-dim)]">
-          <button type="button" onClick={() => setPath(null)} className={cn("hover:text-[var(--t-fg)]", path === null && "text-[var(--t-fg)]")}>
+          <button type="button" onClick={() => go(null, "climb")} className={cn("hover:text-[var(--t-fg)]", path === null && "text-[var(--t-fg)]")}>
             roots
           </button>
           {crumbs.map((c, i) => (
             <span key={c.path} className="flex items-center gap-0.5">
               <Icon name="chev" size={9} className="opacity-50" />
-              <button type="button" onClick={() => setPath(c.path)} className={cn("hover:text-[var(--t-fg)]", i === crumbs.length - 1 && "text-[var(--t-fg)]")}>
+              <button type="button" onClick={() => go(c.path, "climb")} className={cn("hover:text-[var(--t-fg)]", i === crumbs.length - 1 && "text-[var(--t-fg)]")}>
                 {c.label}
               </button>
             </span>
@@ -400,7 +436,7 @@ function DirPicker({ onPick, onClose }: { onPick: (path: string) => void; onClos
         </button>
       </div>
 
-      <div className="max-h-56 overflow-auto t-scroll py-1">
+      <div ref={listRef} className="max-h-56 overflow-auto t-scroll py-1">
         {busy ? (
           <div className="flex items-center gap-2 px-3 py-2 text-[11.5px] text-[var(--t-dim)]">
             <Spinner size={11} /> Listing…
@@ -416,7 +452,7 @@ function DirPicker({ onPick, onClose }: { onPick: (path: string) => void; onClos
             <button
               key={d.path}
               type="button"
-              onClick={() => setPath(d.path)}
+              onClick={() => go(d.path, "enter")}
               className="w-full flex items-center gap-2 px-3 h-7 text-left font-mono text-[11.5px] text-[var(--t-fg)] hover:bg-[var(--t-bg2)]"
             >
               <Icon name="folder" size={12} className="text-[var(--t-dim)]" />
