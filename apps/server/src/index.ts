@@ -487,10 +487,11 @@ app.post("/i/redeem", async (req, reply) => {
 });
 
 /* the browser side of the same flow (issue #111 review rounds): open
-   <server>/p on the remote, download the generic installer, run it, type
-   the code at its prompt. The page is static and token-free; the download
-   is just GET /i above with an attachment header, so nothing here burns a
-   code and nothing new holds a credential. */
+   <server>/p on the remote (the wizard's link carries the code in the URL
+   fragment), click Download, run the saved file. The page itself is static
+   and token-free; its Download click is a same-origin GET /i/<code> below,
+   the existing burn-once route, so the click is what redeems the code and
+   the saved t.sh is the token-embedded installer. */
 app.get("/p", async (_req, reply) => {
   return reply.header("Content-Type", "text/html; charset=utf-8").send(pairingPage());
 });

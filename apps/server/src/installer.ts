@@ -245,6 +245,7 @@ export function pairingPage(): string {
         <button class="copy" id="copy" type="button">Copy</button>
       </div>
       <p class="hint">That is the whole install. The agent dials out over your tailnet; no inbound ports, nothing listens.</p>
+      <p class="hint">The saved file holds a copy of this host's token. Delete it once the agent shows up in Truss.</p>
     </div>
   </section>
 </main>
