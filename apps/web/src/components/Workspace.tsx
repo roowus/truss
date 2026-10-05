@@ -99,7 +99,7 @@ function TrussTab({ api, params }: IDockviewPanelHeaderProps<{ sessionId?: strin
      observe the header for resizes (sash/window) and the strip's childList
      only for tab add/remove — never the strip's own width. */
   const rootRef = useRef<HTMLDivElement>(null);
-  const [view, setView] = useState<ChromeTabView>({ showTitle: true, showClose: "always", closeOverIcon: false });
+  const [view, setView] = useState<ChromeTabView>({ showTitle: true, showClose: "always", closeOverIcon: false, showIndicator: true });
   const measureRef = useRef<() => void>(() => {});
   useEffect(() => {
     /* The dockview tab element is resolved LAZILY, on every measure — never
@@ -190,8 +190,10 @@ function TrussTab({ api, params }: IDockviewPanelHeaderProps<{ sessionId?: strin
      right padding — the indicator never kisses the edge, and hover-revealing
      the X can't shift the row (reserve, not reflow). 0 when the X is inline
      (it is the trailing element), on slivers, or with no indicator (the
-     title fades to the edge, like Chrome) */
-  const hasIndicator = Boolean((kind === "chat" && meta) || pending > 0);
+     title fades to the edge, like Chrome). Below the indicator floor
+     (issue #129) the row renders no indicator, so nothing is reserved and
+     the title keeps the full width. */
+  const hasIndicator = view.showIndicator && Boolean((kind === "chat" && meta) || pending > 0);
   const trailingReserve = tabTrailingReserve(view, hasIndicator);
   return (
     <div
@@ -223,8 +225,11 @@ function TrussTab({ api, params }: IDockviewPanelHeaderProps<{ sessionId?: strin
           on empty space when the title fits and only touches text that
           actually overflows */}
       {view.showTitle && <span className="min-w-0 flex-1 overflow-hidden whitespace-nowrap t-fade-r">{title}</span>}
-      {view.showTitle && meta && kind === "chat" && <StateDot state={meta.state} size={6} />}
-      {view.showTitle && pending > 0 && (
+      {/* indicators drop below the indicator floor (issue #129): a narrow
+          titled tab shows its title instead of a dot it has no room for —
+          the same tradeoff slivers make one band lower */}
+      {view.showTitle && view.showIndicator && meta && kind === "chat" && <StateDot state={meta.state} size={6} />}
+      {view.showTitle && view.showIndicator && pending > 0 && (
         <span className="inline-flex items-center gap-0.5 min-w-4 h-4 px-1 rounded-full bg-[var(--t-amber)] text-[#1b1305] text-[9.5px] font-bold t-pulse-soft shrink-0" title={`${pending} permission request(s) waiting`}>
           <Icon name="lock" size={9} />
           {pending > 1 && <span>{pending}</span>}

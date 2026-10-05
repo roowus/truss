@@ -16,6 +16,10 @@
  *     sense) are icon-only and can never be closed by click.
  *   - the X never sits on title TEXT — the icon-overlay (favicon swap) only
  *     happens on icon-only slivers.
+ *   - indicators (the truss status dot / pending badge — extras Chrome
+ *     doesn't have) drop below their own floor, the way the title drops
+ *     below CHROME_TAB_TITLE_MIN: a narrow titled tab keeps a readable
+ *     title instead of a dot and nothing else (issue #129).
  */
 
 /** Chrome's standard tab width when the strip has room (~240px). */
@@ -46,6 +50,18 @@ export const CHROME_TAB_CLOSE_MIN = 120;
  */
 export const CHROME_TAB_CLOSE_SLOT = 22;
 
+/**
+ * Below this width a titled tab hides its indicators (the status dot and
+ * the pending badge) — the same tradeoff slivers make one band lower
+ * (issue #129). The #125 reserve pushed a dotted tab's fixed row content
+ * to 64px, so between CHROME_TAB_TITLE_MIN and ~92px the title span sat
+ * entirely inside the 14px fade mask: a dot and no readable title. The
+ * floor is the titled floor plus exactly the reserve a shown indicator
+ * forces — at this width a dotted tab's title span is 30px again, the
+ * room it had at CHROME_TAB_TITLE_MIN before the reserve existed.
+ */
+export const CHROME_TAB_INDICATOR_MIN = CHROME_TAB_TITLE_MIN + CHROME_TAB_CLOSE_SLOT;
+
 export interface ChromeTabInput {
   id: string;
   active?: boolean;
@@ -57,6 +73,13 @@ export interface ChromeTabView {
   showClose: "always" | "hover" | "never";
   /** true only on slivers: the hover X takes the favicon's place. */
   closeOverIcon: boolean;
+  /**
+   * true when the tab may render its indicators (status dot, pending
+   * badge). Below CHROME_TAB_INDICATOR_MIN a titled tab drops them so the
+   * title keeps readable room (issue #129) — and with no indicator
+   * showing, the #125 trailing reserve is 0 too.
+   */
+  showIndicator: boolean;
 }
 
 /**
@@ -108,7 +131,7 @@ export function chromeTabLayout(input: { stripWidth: number; tabs: ChromeTabInpu
   for (const tab of tabs) {
     if (tab.pinned) {
       /* Chrome-sense pinned: icon-only, no X, ever — no accidental closes. */
-      perTab[tab.id] = { showTitle: false, showClose: "never", closeOverIcon: false };
+      perTab[tab.id] = { showTitle: false, showClose: "never", closeOverIcon: false, showIndicator: false };
       continue;
     }
     const showClose: ChromeTabView["showClose"] = roomy
@@ -124,6 +147,10 @@ export function chromeTabLayout(input: { stripWidth: number; tabs: ChromeTabInpu
       /* the favicon swap exists only on icon-only slivers — the X never
          overlays title text */
       closeOverIcon: showClose !== "never" && !titled,
+      /* indicators (dot/badge) are truss extras Chrome doesn't have: below
+         the indicator floor a titled tab drops them for title room, the
+         way a sliver drops the title itself */
+      showIndicator: titled && width >= CHROME_TAB_INDICATOR_MIN,
     };
   }
   return { width, perTab };

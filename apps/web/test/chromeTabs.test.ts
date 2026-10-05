@@ -20,7 +20,13 @@ import assert from "node:assert/strict";
    Chrome's model, pinned as one pure function — src/lib/chromeTabs.ts:
 
      chromeTabLayout({ stripWidth, tabs: [{ id, active?, pinned? }] }) →
-       { width, perTab: Record<id, { showTitle, showClose, closeOverIcon }> }
+       { width, perTab: Record<id, { showTitle, showClose, closeOverIcon,
+       showIndicator }> }
+
+   (showIndicator joined the view with #129: titled tabs below
+   CHROME_TAB_INDICATOR_MIN hide the dot/badge so the title keeps readable
+   room. It gates only the truss-specific extras — the Chrome matrix above
+   is unchanged. Its contract lives in tabIndicator.test.ts.)
 
      - width: UNIFORM across all tabs every time =
        clamp(floor(stripWidth / count), CHROME_TAB_ICON, CHROME_TAB_MAX);
@@ -43,6 +49,7 @@ interface ChromeTabView {
   showTitle: boolean;
   showClose: "always" | "hover" | "never";
   closeOverIcon: boolean;
+  showIndicator: boolean;
 }
 interface ChromeTabsModule {
   CHROME_TAB_MAX: number;
