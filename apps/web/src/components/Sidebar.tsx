@@ -364,22 +364,24 @@ function ShellRow({ t }: { t: TerminalInfo }) {
       ) : (
         <span className="text-[12px] text-[var(--t-fg2)] truncate">{t.title ?? t.id}</span>
       )}
-      <IconBtn
-        icon={pin.icon}
-        label={pin.actionLabel}
-        active={!!t.pinned}
-        className={cn("ml-auto w-6 h-6", pinVisibilityCls(pin.visible))}
-        onClick={(e) => {
-          e.stopPropagation();
-          void store.pinTerminal(t.id, !t.pinned);
-        }}
-      />
-      <span className="hidden group-hover:flex items-center shrink-0" onClick={(e) => e.stopPropagation()}>
+      {/* one cluster, one gap (issue #110): the pin leads the same container
+          as the other actions — its opacity rule keeps the slot and the tab
+          order (#86), rename/kill reveal on hover inside the same box.
+          rowActions' shell array itself keeps its #85 shape (open/rename/kill
+          is a pinned contract), so the pin joins at render time. */}
+      <span className="ml-auto flex items-center shrink-0" onClick={(e) => e.stopPropagation()}>
+        <IconBtn
+          icon={pin.icon}
+          label={pin.actionLabel}
+          active={!!t.pinned}
+          className={cn("w-6 h-6", pinVisibilityCls(pin.visible))}
+          onClick={() => void store.pinTerminal(t.id, !t.pinned)}
+        />
         {rename && (
           <IconBtn
             icon={rename.icon ?? "edit"}
             label={rename.label}
-            className="w-6 h-6"
+            className="hidden group-hover:inline-grid w-6 h-6"
             onClick={() => {
               setName(t.title ?? "");
               setEditing(true);
@@ -390,7 +392,7 @@ function ShellRow({ t }: { t: TerminalInfo }) {
           <IconBtn
             icon={kill.icon ?? "x"}
             label={confirm ? (dead ? "Click again: remove this exited shell" : "Click again: kill this shell") : kill.label}
-            className={confirmCls(confirm)}
+            className={cn(confirmCls(confirm), "hidden group-hover:inline-grid")}
             onClick={() => confirmClick(() => void desktops.killTerminal(t.id))}
           />
         )}
@@ -431,26 +433,28 @@ function HostRow({ h, alias }: { h: HostInfo; alias?: string }) {
       <Icon name="host" size={12} className={h.online ? "text-[var(--t-sky)]" : "text-[var(--t-dim)]"} />
       <span className={cn("flex-1 truncate", !h.online && "opacity-50")}>{alias || h.label}</span>
       {h.revoked && !confirm && <span className="text-[8.5px] font-mono uppercase text-[var(--t-red)] shrink-0 group-hover:hidden">revoked</span>}
-      <IconBtn
-        icon={pin.icon}
-        label={pin.actionLabel}
-        active={!!h.pinned}
-        className={cn("w-6 h-6", pinVisibilityCls(pin.visible))}
-        onClick={(e) => {
-          e.stopPropagation();
-          void store.pinHost(h.id, !h.pinned);
-        }}
-      />
-      {del && (
-        <span className="hidden group-hover:flex items-center shrink-0" onClick={(e) => e.stopPropagation()}>
+      {/* one cluster, one gap (issue #110): the pin leads the same container
+          as delete — its opacity rule keeps the slot and the tab order (#86),
+          delete reveals on hover inside the same box. rowActions' host array
+          keeps its #85 shape (open/delete is a pinned contract), so the pin
+          joins at render time. */}
+      <span className="flex items-center shrink-0" onClick={(e) => e.stopPropagation()}>
+        <IconBtn
+          icon={pin.icon}
+          label={pin.actionLabel}
+          active={!!h.pinned}
+          className={cn("w-6 h-6", pinVisibilityCls(pin.visible))}
+          onClick={() => void store.pinHost(h.id, !h.pinned)}
+        />
+        {del && (
           <IconBtn
             icon={del.icon ?? "trash"}
             label={confirm ? `Click again: delete ${alias || h.label} (drops its agent if connected)` : del.label}
-            className={confirmCls(confirm)}
+            className={cn(confirmCls(confirm), "hidden group-hover:inline-grid")}
             onClick={() => confirmClick(() => void store.deleteHost(h.id))}
           />
-        </span>
-      )}
+        )}
+      </span>
     </div>
   );
 }
