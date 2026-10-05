@@ -2,6 +2,7 @@ import { useMemo, useState, useEffect, type ReactNode } from "react";
 import { store, useApp, useNow } from "@/lib/store";
 import { desktops, useDesktops } from "@/lib/desktops";
 import { ago, daysLeftInTrash, shortPath } from "@/lib/format";
+import { harnessDisplay, hostAliases } from "@/lib/device";
 import { openAgentShell, openDailyDriver, openFreeShell, openPanel, openSession } from "@/lib/workspace";
 import { HarnessMark, Icon, IconBtn, StateDot, TrussLogo, Spinner, STATE_META } from "./ui";
 import type { HostInfo, SessionMeta, TerminalInfo } from "@/lib/proto";
@@ -203,6 +204,8 @@ function Section({ title, action, children }: { title: string; action?: ReactNod
 function SessionRow({ s, now, archived, trashView }: { s: SessionMeta; now: number; archived?: boolean; trashView?: boolean }) {
   const focused = useApp((st) => st.focused === s.id);
   const pending = useApp((st) => st.views[s.id]?.pending.length ?? 0);
+  const hosts = useApp((st) => st.hosts);
+  const hostPrefs = useDesktops((st) => st.hosts);
   const [confirm, setConfirm] = useState(false);
   useEffect(() => {
     if (!confirm) return;
@@ -243,7 +246,7 @@ function SessionRow({ s, now, archived, trashView }: { s: SessionMeta; now: numb
       onClick={openable ? () => openSession(s.id) : undefined}
       onDoubleClick={openable ? () => openDailyDriver(s.id) : undefined}
       className={cn("group relative mx-0.5 flex items-center gap-2 px-2 t-session-row rounded-md transition-colors", openable ? "cursor-pointer" : "cursor-default", focused ? "bg-[var(--t-bg2)]" : "hover:bg-white/[0.03]")}
-      title={`${s.title}\n${s.harness}${s.model ? ` · ${s.model}` : ""}\n${shortPath(s.cwd)}\n${STATE_META[s.state]?.hint ?? s.state}${archived ? "\narchived — hidden from the main list" : ""}${openable ? "\n(double-click: chat + trajectory + context)" : ""}`}
+      title={`${s.title}\n${harnessDisplay(s.harness, hosts, hostAliases(hostPrefs))}${s.model ? ` · ${s.model}` : ""}\n${shortPath(s.cwd)}\n${STATE_META[s.state]?.hint ?? s.state}${archived ? "\narchived — hidden from the main list" : ""}${openable ? "\n(double-click: chat + trajectory + context)" : ""}`}
     >
       {focused && <span className="absolute left-0 top-2 bottom-2 w-[2px] rounded-full bg-[var(--t-amber)]" />}
       <HarnessMark harness={s.harness} size={17} className={dead ? "opacity-45" : ""} />
@@ -403,6 +406,8 @@ function ShellRow({ t }: { t: TerminalInfo }) {
 
 function HostRow({ h, alias }: { h: HostInfo; alias?: string }) {
   const [confirm, confirmClick] = useTwoClickConfirm();
+  const hosts = useApp((st) => st.hosts);
+  const hostPrefs = useDesktops((st) => st.hosts);
 
   const actions = hostRowActions(h);
   const del = actions.find((a) => a.dangerous);
@@ -427,7 +432,7 @@ function HostRow({ h, alias }: { h: HostInfo; alias?: string }) {
         }
       }}
       className="group w-full flex items-center gap-2 mx-0.5 px-2 h-7 text-[12px] text-[var(--t-mute)] hover:text-[var(--t-fg)] hover:bg-white/[0.03] rounded-md text-left cursor-pointer"
-      title={`${h.label} · ${h.online ? `online · ${h.agent?.adapters.join(", ")}` : "offline"} · open host details`}
+      title={`${h.label} · ${h.online ? `online · ${h.agent?.adapters.map((x) => harnessDisplay(x, hosts, hostAliases(hostPrefs))).join(", ")}` : "offline"} · open host details`}
     >
       <span className={cn("w-1.5 h-1.5 rounded-full shrink-0", h.online ? "bg-[var(--t-teal)]" : "bg-[var(--t-line2)]")} />
       <Icon name="host" size={12} className={h.online ? "text-[var(--t-sky)]" : "text-[var(--t-dim)]"} />

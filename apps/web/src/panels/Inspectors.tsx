@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from "react";
 import type { IDockviewPanelProps } from "dockview-react";
 import { store, useApp, useNow, capsOf, type Agent, type SessionView } from "@/lib/store";
 import { baseHarness, fmtCost, fmtMs, fmtTokens, shortPath, ago } from "@/lib/format";
+import { harnessDisplay, hostAliases } from "@/lib/device";
+import { useDesktops } from "@/lib/desktops";
 import { Btn, Empty, HarnessMark, Icon, Kbd, Select, Spinner, StateDot, TrussLogo } from "@/components/ui";
 import { openDailyDriver, openFreeShell } from "@/lib/workspace";
 import type { SkillInfo } from "@/lib/proto";
@@ -49,6 +51,9 @@ export function ContextPanel({ params }: IDockviewPanelProps<P>) {
 
 function ContextBody({ id, view }: { id: string; view: SessionView }) {
   const meta = useApp((s) => s.sessions[id]);
+  const hosts = useApp((s) => s.hosts);
+  const hostPrefs = useDesktops((s) => s.hosts);
+  const harnessName = harnessDisplay(meta.harness, hosts, hostAliases(hostPrefs));
   const h = baseHarness(meta.harness);
   const ctx = view.ctx;
   const totals = useMemo(() => {
@@ -73,7 +78,7 @@ function ContextBody({ id, view }: { id: string; view: SessionView }) {
   if (!ctx) {
     return (
       <div className="space-y-4">
-        <Empty icon="gauge" title={CTX_REPORTERS.has(h) ? "No usage reported yet" : `${meta.harness} doesn't report context usage`}>
+        <Empty icon="gauge" title={CTX_REPORTERS.has(h) ? "No usage reported yet" : `${harnessName} doesn't report context usage`}>
           {CTX_REPORTERS.has(h) ? "Context occupancy appears after the first completed turn." : "Truss won't estimate what the harness doesn't report. Token and cost totals from the trajectory are below."}
         </Empty>
         <StatsRow {...totals} calls={view.callOrder.length} />
@@ -121,7 +126,7 @@ function ContextBody({ id, view }: { id: string; view: SessionView }) {
           <ByBar by={ctx.by} total={ctx.total} />
         ) : (
           <div className="text-[11.5px] text-[var(--t-mute)] leading-relaxed border border-dashed border-[var(--t-line2)] rounded-md px-3 py-2">
-            {meta.harness} reports a single occupancy number — no per-category breakdown (system / tools / history). Shown as soon as a harness reports it.
+            {harnessName} reports a single occupancy number — no per-category breakdown (system / tools / history). Shown as soon as a harness reports it.
           </div>
         )}
       </div>
@@ -207,15 +212,18 @@ export function TeamPanel({ params }: IDockviewPanelProps<P>) {
   const id = params.sessionId!;
   const { meta, view } = useHydrated(id);
   const caps = useApp((s) => (meta ? capsOf(s, meta.harness) : undefined));
+  const hosts = useApp((s) => s.hosts);
+  const hostPrefs = useDesktops((s) => s.hosts);
   if (!meta) return <Empty icon="tree" title="Session no longer exists" />;
   if (!view || view.hydration === "loading") return <div className="h-full grid place-items-center"><Spinner /></div>;
+  const harnessName = harnessDisplay(meta.harness, hosts, hostAliases(hostPrefs));
   const roots = view.agentOrder.filter((a) => !view.agents[a].parent || !view.agents[view.agents[a].parent!]);
   return (
     <div className="h-full flex flex-col bg-[var(--t-bg1)] t-panel">
       <PanelHead id={id} label="team" />
       <div className="flex-1 min-h-0 overflow-auto t-scroll p-3">
         {!caps?.subagents ? (
-          <Empty icon="tree" title={`${meta.harness} doesn't spawn subagents`}>Team trees appear for harnesses that emit subagent events — today, Claude Code's Task/Agent tool.</Empty>
+          <Empty icon="tree" title={`${harnessName} doesn't spawn subagents`}>Team trees appear for harnesses that emit subagent events — today, Claude Code's Task/Agent tool.</Empty>
         ) : roots.length === 0 ? (
           <Empty icon="tree" title="No subagents yet">When the agent delegates work (Task tool), each subagent shows up here as a live node.</Empty>
         ) : (
@@ -450,6 +458,8 @@ interface DayRow {
 
 /** Global cost + token ledger across all sessions (server-aggregated). */
 export function CostPanel() {
+  const hosts = useApp((s) => s.hosts);
+  const hostPrefs = useDesktops((s) => s.hosts);
   const [data, setData] = useState<CostData | null>(null);
   const [days, setDays] = useState<DayRow[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -512,7 +522,7 @@ export function CostPanel() {
               key={s.id}
               onClick={() => openDailyDriver(s.id)}
               className="w-full grid grid-cols-[1fr_64px_72px_64px_56px] gap-2 px-2 h-8 items-center text-left border-b border-[var(--t-line)]/50 hover:bg-white/[0.03] transition-colors"
-              title={`${s.title}\n${s.harness} · open chat + trajectory + context`}
+              title={`${s.title}\n${harnessDisplay(s.harness, hosts, hostAliases(hostPrefs))} · open chat + trajectory + context`}
             >
               <span className="flex items-center gap-2 min-w-0">
                 <HarnessMark harness={s.harness} size={14} />

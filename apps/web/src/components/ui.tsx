@@ -2,6 +2,9 @@ import { useEffect, useLayoutEffect, useRef, useState, type ReactNode, type Butt
 import { createPortal } from "react-dom";
 import { cn } from "@/utils/cn";
 import { harnessStyle, hostOf } from "@/lib/format";
+import { harnessDisplay, hostAliases, hostDisplay } from "@/lib/device";
+import { useApp } from "@/lib/store";
+import { useDesktops } from "@/lib/desktops";
 import { clampPopoverPos } from "@/lib/popover";
 import { selectTriggerHeight } from "@/lib/controls";
 import { HarnessLogo } from "./harnessLogos";
@@ -32,6 +35,12 @@ export function TrussLogo({ size = 22 }: { size?: number }) {
 
 /* ---------- harness identity ---------- */
 export function HarnessMark({ harness, size = 20, className }: { harness: string; size?: number; className?: string }) {
+  /* the mark's tooltip is a user-facing surface too (issue #109 audit): it
+     resolves through the same alias-or-label rule as every other surface,
+     self-served here so the ~12 call sites stay untouched */
+  const hosts = useApp((s) => s.hosts);
+  const hostPrefs = useDesktops((s) => s.hosts);
+  const aliases = hostAliases(hostPrefs);
   const h = harnessStyle(harness);
   const host = hostOf(harness);
   const logo = <HarnessLogo harness={harness} size={size} />;
@@ -39,10 +48,10 @@ export function HarnessMark({ harness, size = 20, className }: { harness: string
     <span
       className={cn("relative inline-grid place-items-center rounded-[5px] font-mono font-semibold leading-none shrink-0 overflow-hidden", className)}
       style={logo ? { width: size, height: size, boxShadow: `inset 0 0 0 1px color-mix(in oklab, ${h.color} 35%, transparent)` } : { width: size, height: size, fontSize: size * 0.58, color: h.color, background: `color-mix(in oklab, ${h.color} 14%, transparent)`, boxShadow: `inset 0 0 0 1px color-mix(in oklab, ${h.color} 35%, transparent)` }}
-      title={harness}
+      title={harnessDisplay(harness, hosts, aliases)}
     >
       {logo ?? h.glyph}
-      {host && <span className="absolute -right-1 -bottom-1 w-2 h-2 rounded-full bg-[var(--t-sky)] ring-2 ring-[var(--t-bg1)]" title={`remote: ${host}`} />}
+      {host && <span className="absolute -right-1 -bottom-1 w-2 h-2 rounded-full bg-[var(--t-sky)] ring-2 ring-[var(--t-bg1)]" title={`remote: ${hostDisplay(host, hosts, aliases)}`} />}
     </span>
   );
 }
