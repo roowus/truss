@@ -183,7 +183,7 @@ function ChatHeader({ id }: { id: string }) {
       {menu && (
         <>
           <div className="fixed inset-0 z-40" onClick={() => setMenu(false)} />
-          <div className="absolute right-2 top-[42px] z-50 w-52 rounded-lg bg-[var(--t-bg2)] border border-[var(--t-line2)] shadow-2xl py-1 t-pop">
+          <div className="absolute right-2 top-[42px] z-50 w-64 rounded-lg bg-[var(--t-bg2)] border border-[var(--t-line2)] shadow-2xl py-1 t-pop">
             {plan.overflow.includes("select") && (
               <div className="px-2 py-1.5" onClick={(e) => e.stopPropagation()}>
                 <Select
@@ -241,14 +241,24 @@ function ChatHeader({ id }: { id: string }) {
                 Resume in {resumeBase}'s CLI{hostId ? ` on ${device}` : ""}
               </button>
             )}
-            <div className="px-3 py-1.5 text-[11px] text-[var(--t-dim)] leading-relaxed break-all">
-              <span className="font-mono text-[var(--t-mute)]">{formatSessionRef(meta, hosts)}</span><br />
-              {harnessName}{meta.model && ` · ${meta.model}`}<br />{shortPath(meta.cwd)}
+            <div className="px-3 py-1.5 text-[11px] leading-relaxed">
+              <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-2.5 gap-y-0.5">
+                <dt className="text-[var(--t-dim)]">Session</dt>
+                <dd className="font-mono text-[var(--t-mute)] truncate">#{meta.id}</dd>
+                <dt className="text-[var(--t-dim)]">Harness</dt>
+                <dd className="font-mono text-[var(--t-mute)] truncate" title={resumeBase + (meta.model ? ` · ${meta.model}` : "")}>
+                  {resumeBase}{meta.model && ` · ${meta.model}`}
+                </dd>
+                <dt className="text-[var(--t-dim)]">Host</dt>
+                <dd className="font-mono text-[var(--t-mute)] truncate" title={device}>{device}</dd>
+                <dt className="text-[var(--t-dim)]">Directory</dt>
+                <dd className="font-mono text-[var(--t-mute)] truncate" title={meta.cwd}>{shortPath(meta.cwd)}</dd>
+              </dl>
               {resumeCmd && (
-                <>
-                  <br />
-                  <span className="font-mono text-[var(--t-mute)]">{resumeCmd}</span>
-                </>
+                <div className="mt-1.5">
+                  <div className="text-[var(--t-dim)]">Resume on {hostId ? device : "this server"}</div>
+                  <div className="font-mono text-[var(--t-mute)] break-all">{resumeCmd}</div>
+                </div>
               )}
             </div>
           </div>
