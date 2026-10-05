@@ -1,14 +1,47 @@
 #!/bin/bash
-# preview-reap.sh — tear down previews for closed/merged PRs.
+# preview-reap.sh — tear down previews for closed/merged PRs and retitle
+# their worker sessions.
 # A merged PR's preview is done by definition: stop its truss-pr@N service
-# (the unit's ExecStopPost runs tilt down + removes the worktree), and remove
-# orphaned worktrees whose service isn't running.
+# (the unit's ExecStopPost runs tilt down + removes the worktree), remove
+# orphaned worktrees whose service isn't running, and flip the worker
+# session's title bracket to [merged] — for EVERY merged PR with a ledger
+# entry, whether or not it still had preview artifacts (a session-spawned
+# tilt stack dies with dsh restarts and leaves no service to stop).
 # Runs from cron; cheap when there's nothing to do.
 set -u
 cd /home/ubuntu/projects/truss || exit 1
+LEDGER="$HOME/.local/state/truss-sessions.json"
 
 declare -A STATE
 while read -r n s; do STATE[$n]=$s; done < <(gh pr list --repo roowus/truss --state all --limit 200 --json number,state --jq '.[] | "\(.number) \(.state)"' 2>/dev/null)
+
+# retitle <pr> <bracket>: flip the worker session's title via dsh-spawn.
+retitle() {
+  local n=$1 bracket=$2
+  local SID TITLE PRTITLE
+  SID=$(python3 -c "
+import json
+try:
+    for e in json.load(open('$LEDGER')):
+        if str(e.get('pr')) == '$n': print(e['session']); break
+except Exception: pass
+" 2>/dev/null)
+  [ -n "$SID" ] || return 0
+  PRTITLE=$(gh pr view "$n" -R roowus/truss --json title --jq .title 2>/dev/null | cut -c1-50)
+  TITLE="#$n [$bracket]${PRTITLE:+ — $PRTITLE}"
+  python3 - "$SID" "$TITLE" <<'EOF'
+import json, sys, urllib.request
+req = urllib.request.Request(
+    "http://127.0.0.1:3080/plugins/dsh-spawn/title",
+    data=json.dumps({"sessionId": sys.argv[1], "title": sys.argv[2]}).encode(),
+    headers={"content-type": "application/json"}, method="POST")
+try:
+    urllib.request.urlopen(req, timeout=5)
+except Exception:
+    pass
+EOF
+  echo "$(date -Is) retitled ${SID:0:24} -> $TITLE"
+}
 
 reaped=0
 # 1. running services for closed/merged PRs
@@ -18,19 +51,6 @@ for unit in $(systemctl list-units --all "truss-pr@*" --no-pager --plain 2>/dev/
     MERGED|CLOSED)
       echo "$(date -Is) reaping preview for PR $n (state ${STATE[$n]})"
       sudo -n systemctl stop "truss-pr@$n" && reaped=$((reaped+1))
-      # retitle the worker session [merged] — it is idle by now
-      SID=$(python3 -c "
-import json, sys
-try:
-    for e in json.load(open('$HOME/.local/state/truss-sessions.json')):
-        if str(e.get('pr')) == '$n': print(e['session']); break
-except Exception: pass
-" 2>/dev/null)
-      if [ -n "$SID" ]; then
-        PRTITLE=$(gh pr view "$n" -R roowus/truss --json title --jq .title 2>/dev/null | cut -c1-50)
-        TITLE="#$n [merged]${PRTITLE:+ — $PRTITLE}"
-        curl -sS -m 5 -X POST http://127.0.0.1:3080/plugins/dsh-spawn/title           -H 'content-type: application/json'           -d "{"sessionId": "$SID", "title": "$TITLE"}" >/dev/null 2>&1 &&           echo "$(date -Is) retitled $SID -> $TITLE"
-      fi
       ;;
   esac
 done
@@ -42,10 +62,49 @@ for wt in pr-preview/w/*/; do
   case "${STATE[$n]:-}" in
     MERGED|CLOSED)
       echo "$(date -Is) removing orphaned worktree w/$n"
-      git worktree remove --force "$wt" 2>/dev/null && reaped=$((reaped+1)) || true
+      if git worktree remove --force "$wt" 2>/dev/null; then
+        reaped=$((reaped+1))
+      elif [ -d "$wt" ]; then
+        # registration already gone (service teardown ran first); the dir is
+        # stale files only — remove it directly, guarded to pr-preview/w/
+        case "$(readlink -f "$wt")" in
+          "$(readlink -f pr-preview/w)"/*) rm -rf "$wt" && reaped=$((reaped+1)) ;;
+          *) echo "$(date -Is) REFUSED to remove unexpected path $wt" ;;
+        esac
+      fi
       ;;
   esac
 done
+
+# 3. merged-PR retitles — independent of whether any preview artifact
+#    survived; the ledger is the source of truth for worker sessions
+while read -r n; do
+  [ -n "$n" ] || continue
+  [ "${STATE[$n]:-}" = "MERGED" ] || continue
+  retitle "$n" merged
+  # mark the ledger entry so this fires once
+  python3 - "$LEDGER" "$n" <<'EOF'
+import json, sys
+p, n = sys.argv[1], sys.argv[2]
+try:
+    entries = json.load(open(p))
+except Exception:
+    sys.exit(0)
+for e in entries:
+    if str(e.get("pr")) == n:
+        e["state"] = "merged"
+json.dump(entries, open(p, "w"), indent=1)
+EOF
+done < <(python3 -c "
+import json
+try:
+    seen = set()
+    for e in json.load(open('$LEDGER')):
+        pr = e.get('pr')
+        if pr and e.get('state') != 'merged' and pr not in seen:
+            seen.add(pr); print(pr)
+except Exception: pass
+")
 
 [ "$reaped" -gt 0 ] && echo "$(date -Is) reaped $reaped"
 exit 0
