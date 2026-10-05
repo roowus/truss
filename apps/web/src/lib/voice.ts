@@ -67,7 +67,13 @@ export function recognitionRecorder(
   return {
     levelStream: () => meter,
     start() {
-      const myMeter = ++meterGen;
+      /* the metering mic's lifetime must equal the take's, however the take
+         ends — stop, cancel, the recognizer's own onerror/onend (Chrome's
+         no-speech lands ~8s in), or a synchronous throw below. Every one of
+         those paths releases it; a fresh start first sweeps any stale
+         stream so it can never be overwritten live (audit round 5, B1). */
+      releaseMeter();
+      const myMeter = meterGen;
       if (deps.getUserMedia) {
         /* requested synchronously like the capture path, so a stop/cancel
            landing right after start() still wins the generation race */
@@ -89,34 +95,42 @@ export function recognitionRecorder(
           /* no metering stream — the take still works, bars stay hidden */
         });
       }
-      const r = new Ctor();
-      rec = r;
-      r.lang = navigator.language || "en-US";
-      r.continuous = false;
-      r.interimResults = false;
-      let text = "";
-      result = new Promise<string>((res, rej) => {
-        settle = { res, rej };
-      });
-      r.onresult = (e) => {
-        for (let i = e.resultIndex; i < e.results.length; i++) {
-          const res = e.results[i];
-          if (res?.isFinal) text += res[0]?.transcript ?? "";
-        }
-      };
-      r.onerror = (e) => {
-        const s = settle;
-        settle = null;
-        const msg = e.error === "not-allowed" ? "microphone access denied" : `speech recognition failed (${e.error ?? "unknown"})`;
-        s?.rej(new Error(msg));
-      };
-      r.onend = () => {
-        const s = settle;
-        settle = null;
-        rec = null;
-        s?.res(text);
-      };
-      r.start();
+      try {
+        const r = new Ctor();
+        rec = r;
+        r.lang = navigator.language || "en-US";
+        r.continuous = false;
+        r.interimResults = false;
+        let text = "";
+        result = new Promise<string>((res, rej) => {
+          settle = { res, rej };
+        });
+        r.onresult = (e) => {
+          for (let i = e.resultIndex; i < e.results.length; i++) {
+            const res = e.results[i];
+            if (res?.isFinal) text += res[0]?.transcript ?? "";
+          }
+        };
+        r.onerror = (e) => {
+          releaseMeter(); // the take just died — the metering mic dies with it
+          result?.catch(() => {}); // a rejection nobody may await must not crash
+          const s = settle;
+          settle = null;
+          const msg = e.error === "not-allowed" ? "microphone access denied" : `speech recognition failed (${e.error ?? "unknown"})`;
+          s?.rej(new Error(msg));
+        };
+        r.onend = () => {
+          releaseMeter(); // onend fires on error paths too — idempotent
+          const s = settle;
+          settle = null;
+          rec = null;
+          s?.res(text);
+        };
+        r.start();
+      } catch (e) {
+        releaseMeter(); // construction/start threw: no take, no mic
+        throw e;
+      }
     },
     stop() {
       releaseMeter();

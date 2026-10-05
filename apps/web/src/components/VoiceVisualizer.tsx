@@ -10,10 +10,13 @@
    null (or on unmount), so the visualizer never keeps the mic alive. The
    AudioContext factory is injectable like the capture's platform pieces.
 
-   Honesty rule: the bars render ONLY while a real stream is attached. On
-   the SpeechRecognition path (no stream to read) or a failed attach, the
-   component stays hidden — parked "calm" bars are the silence signal and
-   would lie to the user while they speak (audit round 1, finding I2). */
+   Honesty rule: the bars render ONLY while a real stream is attached —
+   the capture's own stream on the MediaRecorder path, or the metering-only
+   getUserMedia the recognition path opens for exactly this purpose
+   (voice.ts). If no stream can be had (metering denied, no device, a
+   failed attach), the component stays hidden — parked "calm" bars are the
+   silence signal and would lie to the user while they speak (audit round
+   1, finding I2). */
 
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { levelBars, pushLevel } from "@/lib/voiceLevel";
