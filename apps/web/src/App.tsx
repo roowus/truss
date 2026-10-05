@@ -79,7 +79,10 @@ function Shell() {
         const live = desktops.state.spaces.filter((s) => !s.archived);
         if (canClose(live, desktops.state.activeId)) desktops.remove(desktops.state.activeId);
         else store.toast("info", "The last workspace stays open", "Truss always keeps at least one workspace.");
-      } else if (isReopenClosedChord(e)) {
+        /* Shift+Z is a text-redo chord, so unlike the window chords it must
+           yield while typing; Shift+T (browser-reserved, rarely delivered)
+           fires window-level wherever it does arrive */
+      } else if (isReopenClosedChord(e, !!typing)) {
         e.preventDefault();
         desktops.reopenClosed();
       } else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {

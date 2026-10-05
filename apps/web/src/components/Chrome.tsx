@@ -4,6 +4,7 @@ import { desktops, useDesktops } from "@/lib/desktops";
 import { fmtCost, harnessStyle, shortPath } from "@/lib/format";
 import { harnessDisplay, hostAliases } from "@/lib/device";
 import { openDailyDriver, openFreeShell, openPanel } from "@/lib/workspace";
+import { describeClosed } from "@/lib/workspaceClose";
 import { HarnessMark, Icon, StateDot } from "./ui";
 import { cn } from "@/utils/cn";
 
@@ -146,7 +147,7 @@ export function CommandPalette({ onClose, onNew }: { onClose: () => void; onNew:
       { id: "shell", label: "New free shell", icon: "term", run: () => openFreeShell() },
       { id: "settings", label: "Settings", icon: "settings", hint: "Ctrl/⌘ ,", run: () => openPanel("settings") },
       { id: "new-workspace", label: "New workspace", icon: "desktop", run: () => desktops.create() },
-      ...(closedTop ? [{ id: "reopen-workspace", label: `Reopen closed workspace: ${closedTop.name}`, icon: "desktop", hint: "Ctrl/⌘ Shift+T", run: () => desktops.reopenClosed() }] : []),
+      ...(closedTop ? [{ id: "reopen-closed", label: describeClosed(closedTop), icon: closedTop.type === "workspace" ? "desktop" : "layout", hint: "Ctrl/⌘ Shift+Z", run: () => desktops.reopenClosed() }] : []),
       { id: "welcome", label: "Open welcome", icon: "layout", run: () => openPanel("welcome") },
     ];
     const ws: Cmd[] = spaces.map((space, index) => ({ id: `ws-${space.id}`, label: `Switch to ${space.name}`, icon: "desktop", hint: `Alt+${index + 1}`, run: () => desktops.switchTo(space.id) }));

@@ -35,7 +35,7 @@ interface WorkspaceCloseModule {
   canClose(spaces: Space[], id: string): boolean;
   nextActiveAfterClose(spaces: Space[], closedId: string, activeId: string): string;
   isCloseWindowChord(e: { key: string; metaKey?: boolean; ctrlKey?: boolean; shiftKey?: boolean }): boolean;
-  isReopenClosedChord(e: { key: string; metaKey?: boolean; ctrlKey?: boolean; shiftKey?: boolean }): boolean;
+  isReopenClosedChord(e: { key: string; metaKey?: boolean; ctrlKey?: boolean; shiftKey?: boolean }, typing?: boolean): boolean;
   pushClosed(stack: unknown[], snapshot: unknown, cap?: number): unknown[];
   popClosed(stack: unknown[]): { snapshot: unknown; rest: unknown[] } | null;
 }
@@ -66,7 +66,7 @@ test("close guards: the last workspace never dies; the active neighbor follows C
   assert.equal(mod.nextActiveAfterClose(SPACES, "c", "a"), "a", "closing a background workspace never yanks focus");
 });
 
-test("the chords: Cmd/Ctrl+Shift+W closes, Cmd/Ctrl+Shift+T reopens — and only those", async () => {
+test("the chords: Cmd/Ctrl+Shift+W closes, Cmd/Ctrl+Shift+Z reopens — and only those", async () => {
   const mod = await load();
   assert.ok(mod, "workspaceClose module must exist (see module test)");
 
@@ -75,10 +75,19 @@ test("the chords: Cmd/Ctrl+Shift+W closes, Cmd/Ctrl+Shift+T reopens — and only
   assert.ok(!mod.isCloseWindowChord({ key: "w", metaKey: true }), "plain Cmd+W is the TAB close — untouched");
   assert.ok(!mod.isCloseWindowChord({ key: "w", shiftKey: true }), "no modifier, no fire");
 
-  assert.ok(mod.isReopenClosedChord({ key: "t", metaKey: true, shiftKey: true }), "reopen chord");
+  /* browsers reserve Cmd/Ctrl+Shift+T (the keydown never reaches a plain
+     tab), so the reachable reopen chord is Shift+Z; Shift+T stays as a
+     legacy alias wherever a setup does pass it through */
+  assert.ok(mod.isReopenClosedChord({ key: "z", metaKey: true, shiftKey: true }), "the advertised reopen chord");
+  assert.ok(mod.isReopenClosedChord({ key: "Z", ctrlKey: true, shiftKey: true }), "caps-tolerant");
+  assert.ok(mod.isReopenClosedChord({ key: "t", metaKey: true, shiftKey: true }), "legacy Chrome-parity alias");
+  assert.ok(!mod.isReopenClosedChord({ key: "z", metaKey: true, shiftKey: true }, true), "while typing, Shift+Z stays text redo");
+  assert.ok(mod.isReopenClosedChord({ key: "t", metaKey: true, shiftKey: true }, true), "the legacy alias fires even mid-typing when delivered");
+  assert.ok(!mod.isReopenClosedChord({ key: "z", metaKey: true }), "plain Cmd+Z stays undo");
   assert.ok(!mod.isReopenClosedChord({ key: "t", metaKey: true }), "plain Cmd+T stays a new tab");
 
-  /* the two chords never collide */
+  /* the chords never collide */
+  assert.ok(!(mod.isCloseWindowChord({ key: "z", metaKey: true, shiftKey: true })));
   assert.ok(!(mod.isCloseWindowChord({ key: "t", metaKey: true, shiftKey: true })));
   assert.ok(!(mod.isReopenClosedChord({ key: "w", metaKey: true, shiftKey: true })));
 });
@@ -97,10 +106,12 @@ test("the undo stack: LIFO, capped, snapshots carry name + layout", async () => 
   assert.equal((popped?.snapshot as { layout: { panels: string[] } }).layout.panels[0], "feed:1", "the layout comes back whole");
   assert.equal(popped?.rest.length, 1);
 
-  /* the cap: old entries drop off, never unbounded */
+  /* the cap: old entries drop off, never unbounded (25 since #124 put hungry
+     tab closes on the same stack; Chrome keeps ~25) */
   let big: unknown[] = [];
-  for (let i = 0; i < 10; i++) big = mod.pushClosed(big, { name: `w${i}` });
-  assert.ok(big.length <= 5, `bounded (got ${big.length})`);
+  for (let i = 0; i < 30; i++) big = mod.pushClosed(big, { name: `w${i}` });
+  assert.ok(big.length <= 25, `bounded (got ${big.length})`);
+  assert.equal((mod.popClosed(big)?.snapshot as { name: string }).name, "w29", "still LIFO at the cap");
 
   assert.equal(mod.popClosed([]), null, "empty stack → nothing to reopen");
 });

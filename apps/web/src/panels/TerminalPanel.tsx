@@ -8,7 +8,7 @@ import { cn } from "@/utils/cn";
 import { desktops, useDesktops } from "@/lib/desktops";
 import { shortPath } from "@/lib/format";
 import { Btn, Icon } from "@/components/ui";
-import { openFreeShell, getDockApi } from "@/lib/workspace";
+import { openFreeShell } from "@/lib/workspace";
 
 type P = { terminalId: string; sessionId?: string; cwd?: string };
 
@@ -137,9 +137,10 @@ export function TerminalPanel({ params, api, containerApi }: IDockviewPanelProps
               size="xs"
               variant="amber"
               onClick={async () => {
+                /* killTerminal already closes every view of this shell in
+                   every workspace, this panel included (audit B1) */
                 await desktops.killTerminal(params.terminalId);
                 await openFreeShell(cwd);
-                getDockApi()?.getPanel(api.id)?.api.close();
               }}
             >
               New shell

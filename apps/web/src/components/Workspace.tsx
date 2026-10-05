@@ -295,15 +295,15 @@ function GroupActions({ props, spaceId }: { props: IDockviewHeaderActionsProps; 
         </svg>
       </button>
       {/* a batch tab close, at the group's corner: closes every tab in the
-          group in one gesture, each tab behaving exactly as if its own X
-          was clicked (no undo, matching the per-tab X; orphaned shells stop
-          via onDidRemovePanel -> cleanupTerminalLater in desktops.register).
-          Panel-level undo is a separate feature — see the PR discussion. */}
+          group in one gesture, remembered as ONE undo entry so the reopen
+          chord (Cmd/Ctrl+Shift+Z) restores the group whole (issue #124;
+          orphaned shells stop via onDidRemovePanel -> cleanupTerminalLater
+          in desktops.register) */}
       <button
         className="w-6 h-6 grid place-items-center rounded text-[var(--t-dim)] hover:text-[var(--t-red)] hover:bg-white/5"
-        title="Close this whole tab group"
+        title="Close this whole tab group (Ctrl/⌘ Shift+Z reopens)"
         aria-label="Close this whole tab group"
-        onClick={() => { for (const p of [...props.group.panels]) p.api.close(); }}
+        onClick={() => desktops.closeGroup(spaceId, [...props.group.panels])}
       >
         <Icon name="x" size={12} />
       </button>
@@ -333,7 +333,13 @@ const DesktopCanvas = memo(function DesktopCanvas({ id, visible }: { id: string;
   const contextMenu = useCallback(({ panel }: GetTabContextMenuItemsParams): (BuiltInContextMenuItem | ReactContextMenuItemConfig)[] => {
     const others = desktops.state.spaces.filter((s) => s.id !== id);
     return [
-      "close", "closeOthers", "separator",
+      "close",
+      /* the batch close goes through the undo stack as ONE entry, matching
+         the group-corner X (built-in closeOthers would record N singles) */
+      ...(panel.group
+        ? [{ label: "Close Others", action: () => desktops.closeGroup(id, panel.group.panels.filter((p) => p.id !== panel.id)) }]
+        : ["closeOthers" as const]),
+      "separator",
       ...others.map((space) => ({ label: `Copy to ${space.name}`, action: () => desktops.transferPanel(id, panel.id, space.id) })),
       ...(others.length ? ["separator" as const] : []),
       ...others.map((space) => ({ label: `Move to ${space.name}`, action: () => desktops.transferPanel(id, panel.id, space.id, true) })),
