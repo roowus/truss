@@ -4,6 +4,7 @@ import { store, useApp } from "@/lib/store";
 import { desktops, useDesktops } from "@/lib/desktops";
 import { openFreeShell, openPanel } from "@/lib/workspace";
 import { shortPath } from "@/lib/format";
+import { harnessDisplay, hostAliases } from "@/lib/device";
 import { HarnessMark, Icon } from "./ui";
 
 const ICONS: Record<string, string> = {
@@ -28,6 +29,7 @@ export function TabPicker({ anchor, spaceId, groupId, onClose }: Props) {
   const sessions = order.map((id) => sessionMap[id]).filter(Boolean);
   const agents = useApp((s) => s.agents);
   const agentError = useApp((s) => s.agentsError);
+  const hosts = useApp((s) => s.hosts);
   const hostPrefs = useDesktops((s) => s.hosts);
   const spaces = useDesktops((s) => s.spaces);
   const [pos, setPos] = useState(() => position(anchor));
@@ -111,7 +113,7 @@ export function TabPicker({ anchor, spaceId, groupId, onClose }: Props) {
             <>
               <Section>For {focus.title}</Section>
               {(["chat", "trajectory", "context", "team", "files", "git", "skills", "tasks"] as const).filter((kind) => match(kind === "git" ? "git changes branches graph" : kind === "files" ? "files browser workspace" : kind === "tasks" ? "tasks board kanban" : kind)).map((kind) => (
-                <Row key={kind} icon={ICONS[kind]} label={kind[0].toUpperCase() + kind.slice(1)} hint={focus.harness} onClick={() => panel(kind)} />
+                <Row key={kind} icon={ICONS[kind]} label={kind[0].toUpperCase() + kind.slice(1)} hint={harnessDisplay(focus.harness, hosts, hostAliases(hostPrefs))} onClick={() => panel(kind)} />
               ))}
             </>
           )}
