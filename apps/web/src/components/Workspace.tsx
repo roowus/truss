@@ -291,7 +291,7 @@ function GroupActions({ props, spaceId }: { props: IDockviewHeaderActionsProps; 
           onDidRemovePanel -> cleanupTerminalLater in desktops.register) */}
       <button
         className="w-6 h-6 grid place-items-center rounded text-[var(--t-dim)] hover:text-[var(--t-red)] hover:bg-white/5"
-        title="Close this whole tab group (Ctrl/⌘ Shift+T reopens)"
+        title="Close this whole tab group (Ctrl/⌘ Shift+Z reopens)"
         aria-label="Close this whole tab group"
         onClick={() => desktops.closeGroup(spaceId, [...props.group.panels])}
       >

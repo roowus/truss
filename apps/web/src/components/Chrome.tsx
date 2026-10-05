@@ -147,7 +147,7 @@ export function CommandPalette({ onClose, onNew }: { onClose: () => void; onNew:
       { id: "shell", label: "New free shell", icon: "term", run: () => openFreeShell() },
       { id: "settings", label: "Settings", icon: "settings", hint: "Ctrl/⌘ ,", run: () => openPanel("settings") },
       { id: "new-workspace", label: "New workspace", icon: "desktop", run: () => desktops.create() },
-      ...(closedTop ? [{ id: "reopen-closed", label: describeClosed(closedTop), icon: closedTop.type === "workspace" ? "desktop" : "layout", hint: "Ctrl/⌘ Shift+T", run: () => desktops.reopenClosed() }] : []),
+      ...(closedTop ? [{ id: "reopen-closed", label: describeClosed(closedTop), icon: closedTop.type === "workspace" ? "desktop" : "layout", hint: "Ctrl/⌘ Shift+Z", run: () => desktops.reopenClosed() }] : []),
       { id: "welcome", label: "Open welcome", icon: "layout", run: () => openPanel("welcome") },
     ];
     const ws: Cmd[] = spaces.map((space, index) => ({ id: `ws-${space.id}`, label: `Switch to ${space.name}`, icon: "desktop", hint: `Alt+${index + 1}`, run: () => desktops.switchTo(space.id) }));

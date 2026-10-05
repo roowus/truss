@@ -3,9 +3,12 @@
  * core; DesktopStrip.tsx renders the workspace hover X, Workspace.tsx the
  * per-tab X and group-corner X, App.tsx binds the chords, and desktops.ts
  * runs the teardown/restore. Chrome's model, adapted: a window's X closes
- * everything in one gesture, Cmd+Shift+W closes the window, Cmd+Shift+T
+ * everything in one gesture, Cmd+Shift+W closes the window, and a chord
  * reopens what you just closed — except Chrome quits on the last window and
- * truss always keeps at least one workspace.
+ * truss always keeps at least one workspace. Chrome's own Cmd+Shift+T is
+ * browser-reserved (the keydown never reaches a plain tab), so the reopen
+ * chord is Cmd/Ctrl+Shift+Z — "undo the close" — with Shift+T kept as a
+ * legacy alias for setups that do pass it through.
  *
  * The undo stack is ONE mixed LIFO for everything closable (Chrome parity:
  * the chord restores whatever went last, tab or window): ClosedSnapshot for
@@ -143,8 +146,15 @@ const chord = (e: ChordEvent, key: string) =>
 /** Cmd/Ctrl+Shift+W closes the active workspace. Plain Cmd+W stays the tab close. */
 export const isCloseWindowChord = (e: ChordEvent) => chord(e, "w");
 
-/** Cmd/Ctrl+Shift+T reopens whatever closed last — a tab, a tab group, or a workspace. */
-export const isReopenClosedChord = (e: ChordEvent) => chord(e, "t");
+/**
+ * Cmd/Ctrl+Shift+Z reopens whatever closed last — a tab, a tab group, or a
+ * workspace. Chrome reserves Cmd/Ctrl+Shift+T for itself (the keydown never
+ * reaches a plain browser tab — the #120 audit's B1, confirmed by hand), so
+ * the advertised chord is Shift+Z: "undo the close". It is a text-redo chord,
+ * so it must NOT fire while typing (inputs and terminals keep their redo);
+ * Shift+T stays as a legacy alias for environments that pass it through.
+ */
+export const isReopenClosedChord = (e: ChordEvent, typing = false) => chord(e, "t") || (chord(e, "z") && !typing);
 
 /* Sized for the mixed stack: tab closes vastly outnumber workspace closes,
    and Chrome keeps ~25 — a 5-deep cap let six quick tab closes evict a

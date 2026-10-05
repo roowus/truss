@@ -371,7 +371,7 @@ class DesktopManager {
     for (const tid of terminals) this.cleanupTerminalLater(tid);
     this.queueSave();
     /* The chord is browser-reserved in some tabs, so name the sure path too. */
-    store.toast("info", `Closed workspace "${space.name}"`, "Reopen it from the command palette (Ctrl/⌘ K) or with Ctrl/⌘ Shift+T.");
+    store.toast("info", `Closed workspace "${space.name}"`, "Reopen it from the command palette (Ctrl/⌘ K) or with Ctrl/⌘ Shift+Z.");
   }
 
   /** The entry reopenClosed() would restore, or null when the undo stack is empty. */
