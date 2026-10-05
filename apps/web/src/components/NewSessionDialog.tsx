@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { store, useApp } from "@/lib/store";
 import { useDesktops } from "@/lib/desktops";
 import { harnessStyle, hostOf, shortPath } from "@/lib/format";
@@ -335,8 +335,14 @@ function DirPicker({ onPick, onClose }: { onPick: (path: string) => void; onClos
   const listRef = useRef<HTMLDivElement>(null);
   /* the directory whose remembered scroll is waiting to be applied —
      undefined means "nothing to restore" (a hidden-toggle refetch must not
-     yank the list back to a stale position) */
+     yank the list back to a stale position). `loadedFor` records which
+     directory the current rows belong to: the fetch is async, so a
+     restore may only fire once the listing for the target has actually
+     committed — applying it on the navigation commit itself would hit the
+     PREVIOUS directory's rows and then be wiped when the spinner collapses
+     the container (audit round 1, B1) */
   const pendingRestore = useRef<string | null | undefined>(undefined);
+  const loadedFor = useRef<string | null | undefined>(undefined);
   const go = (next: string | null, via: "enter" | "climb") => {
     if (next === path) return; // re-clicking the current crumb stays put
     nav.rememberScroll(path, listRef.current?.scrollTop ?? 0);
@@ -357,6 +363,7 @@ function DirPicker({ onPick, onClose }: { onPick: (path: string) => void; onClos
         if (r.roots) setRoots(r.roots);
         setDirs(r.dirs ?? []);
         setParent(r.parent ?? null);
+        loadedFor.current = path;
       })
       .catch((e: any) => {
         if (alive) setErr(e?.message ?? String(e));
@@ -372,12 +379,13 @@ function DirPicker({ onPick, onClose }: { onPick: (path: string) => void; onClos
   /* the listing is either the root list or the current path's subdirs */
   const rows: BrowseDir[] = path === null ? roots.map((r) => ({ name: r, path: r })) : dirs;
 
-  /* Apply the pending scroll restore once the destination's rows are on
-     screen (the fetch is async, so this can't happen inside `go`). Runs
-     after every render; the guard makes it a no-op unless a navigation is
-     waiting AND its listing has finished loading. */
-  useEffect(() => {
+  /* Apply the pending scroll restore only once the rows on screen ARE the
+     destination's (loadedFor === target), in a layout effect so the list
+     never paints at the top first. Runs after every commit; the guard makes
+     it a no-op unless a navigation is waiting AND its listing has landed. */
+  useLayoutEffect(() => {
     if (pendingRestore.current === undefined || busy || err) return;
+    if (loadedFor.current !== pendingRestore.current) return;
     const target = pendingRestore.current;
     pendingRestore.current = undefined;
     if (listRef.current) listRef.current.scrollTop = nav.scrollMemory(target);
