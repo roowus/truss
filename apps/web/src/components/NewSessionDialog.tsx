@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { store, useApp } from "@/lib/store";
 import { useDesktops } from "@/lib/desktops";
 import { harnessStyle, hostOf, shortPath } from "@/lib/format";
@@ -34,6 +34,19 @@ export function NewSessionDialog({ onClose, preset }: { onClose: () => void; pre
   useEffect(() => {
     if (!harness && harnesses[0]) setHarness(harnesses[0].id);
   }, [harnesses]);
+
+  /* fallback for the boot-time probe (store.init probes as soon as the
+     harness list lands, so the picker is normally filled before the dialog
+     ever opens). A dialog can still see an empty probeable catalog when the
+     boot fetch failed or a harness registered later — ask once per open; the
+     predicate lives in the store, and the server bounds repeats. */
+  const probedRef = useRef(false);
+  useEffect(() => {
+    if (probedRef.current || !harnesses.length) return;
+    probedRef.current = true;
+    void store.probeEmptyCatalogs();
+  }, [harnesses]);
+
   const hModels = models.filter((m) => m.harness === harness);
   useEffect(() => setModel(hModels[0] ? `${hModels[0].provider}/${hModels[0].model}` : ""), [harness, models.length]);
 

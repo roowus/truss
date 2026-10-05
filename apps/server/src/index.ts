@@ -72,6 +72,14 @@ import {
 import { collectMetrics } from "@truss/proto";
 import { registerAdapter, unregisterAdapter } from "./sessions.js";
 
+/* Node crashes the process on an unhandled rejection by default — one
+   adapter hiccup would take every session down with it (issue #97). The
+   event pumps guard their own known failure points; this is the backstop
+   for everything else: log loudly, keep serving. */
+process.on("unhandledRejection", (err) => {
+  console.error("unhandledRejection (kept alive):", err);
+});
+
 const PORT = Number(process.env.TRUSS_PORT ?? 4040);
 const app = Fastify({ logger: process.env.TRUSS_TEST ? false : true });
 
@@ -541,7 +549,22 @@ app.delete("/api/hosts/:id", async (req, reply) => {
 
 /* ── REST ── */
 
+/* the probe ask is a JSON POST, not a GET param: ?probe=1 on the plain GET
+   would be the API's first side-effectful GET, and cross-site triggerable
+   without a preflight (audit round 1). No CORS headers are served, so the
+   JSON preflight refuses cross-origin callers — but only for non-safelisted
+   content types: a text/plain form POST needs no preflight and fastify 5
+   parses text/plain by default, so it would reach the handler (audit round
+   3). Unlike the other POSTs this route needs no body, so junk content types
+   are refused outright. */
 app.get("/api/harnesses", async () => ({ harnesses: listHarnesses(), models: await listModels() }));
+
+app.post("/api/harnesses/probe", async (req, reply) => {
+  if (!req.headers["content-type"]?.startsWith("application/json")) {
+    return reply.code(415).send({ error: "expected application/json" });
+  }
+  return { harnesses: listHarnesses(), models: await listModels({ probe: true }) };
+});
 
 app.get("/api/sessions", async () => ({
   sessions: store.listSessions().map((s) => ({ ...s, live: isLive(s.id) })),

@@ -5,52 +5,17 @@ import { harnessStyle, hostOf } from "@/lib/format";
 import { clampPopoverPos } from "@/lib/popover";
 import { selectTriggerHeight } from "@/lib/controls";
 import { HarnessLogo } from "./harnessLogos";
+import { ICON_PATHS } from "@/lib/icons";
 import type { SessionState } from "@/lib/proto";
 
-/* ---------- icons (1.5px stroke, 16px grid) ---------- */
-const paths: Record<string, ReactNode> = {
-  plus: <path d="M8 3v10M3 8h10" />,
-  x: <path d="M4 4l8 8M12 4l-8 8" />,
-  chat: <path d="M2.5 3.5h11v7h-6l-3 2.5v-2.5h-2z" />,
-  wave: <path d="M1.5 8h2l1.5-4 2 8 2-6 1.5 3 1-1h3" />,
-  term: <><path d="M2 3h12v10H2z" /><path d="M4.5 6l2 2-2 2M8 10.5h3" /></>,
-  gauge: <><path d="M2.5 11a5.5 5.5 0 1 1 11 0" /><path d="M8 11l2.5-3.5" /></>,
-  tree: <><path d="M4 2.5v11M4 6h4M4 11h4" /><circle cx="10" cy="6" r="1.6" /><circle cx="10" cy="11" r="1.6" /></>,
-  spark: <path d="M8 1.5l1.6 4.9 4.9 1.6-4.9 1.6L8 14.5l-1.6-4.9L1.5 8l4.9-1.6z" />,
-  stop: <rect x="4" y="4" width="8" height="8" rx="1" />,
-  send: <path d="M2.5 8h9M8 4l4 4-4 4" />,
-  trash: <path d="M3 4.5h10M6 4.5V3h4v1.5M4.5 4.5l.7 9h5.6l.7-9" />,
-  power: <><path d="M8 2v6" /><path d="M4.6 4.2a5 5 0 1 0 6.8 0" /></>,
-  chev: <path d="M6 4l4 4-4 4" />,
-  down: <path d="M4 6l4 4 4-4" />,
-  folder: <path d="M2 4h4l1.5 1.5H14V12H2z" />,
-  tag: <><path d="M2 2h4.5l5.5 5.5a1 1 0 0 1 0 1.4l-3.1 3.1a1 1 0 0 1-1.4 0L2 6.5z" /><circle cx="4.8" cy="4.8" r="0.9" /></>,
-  archive: <><rect x="2" y="3" width="12" height="3.4" rx="0.8" /><path d="M3.3 6.4v5.4a1.2 1.2 0 0 0 1.2 1.2h7a1.2 1.2 0 0 0 1.2-1.2V6.4" /><path d="M6.6 9h2.8" /></>,
-  cost: <><circle cx="8" cy="8" r="6" /><path d="M8 4.5v7M10.2 5.8c-.5-.7-1.3-1-2.2-1-1.4 0-2.3.8-2.3 1.9 0 2.5 4.7 1.3 4.7 3.4 0 1.2-1.1 1.9-2.4 1.9-1 0-1.9-.4-2.4-1.1" /></>,
-  lock: <><rect x="3" y="7" width="10" height="7" rx="1" /><path d="M5 7V5a3 3 0 0 1 6 0v2" /></>,
-  clip: <path d="M10.5 4.5 6 9a3.2 3.2 0 0 0 4.5 4.5l5-5a2.15 2.15 0 0 0-3-3l-5 5a1.1 1.1 0 0 0 1.5 1.5l4.3-4.3" />,
-  check: <path d="M3 8.5l3 3 7-7" />,
-  alert: <><path d="M8 2l6.5 11.5h-13z" /><path d="M8 6.5v3M8 11.5v.5" /></>,
-  retry: <><path d="M13 8a5 5 0 1 1-1.5-3.5" /><path d="M13 2.5v3h-3" /></>,
-  layout: <><rect x="2" y="2.5" width="12" height="11" /><path d="M7 2.5v11M7 8h7" /></>,
-  search: <><circle cx="7" cy="7" r="4.5" /><path d="M10.5 10.5L14 14" /></>,
-  bolt: <path d="M9 1.5L3.5 9H8l-1 5.5L12.5 7H8z" />,
-  host: <><rect x="2" y="3" width="12" height="4" rx=".5" /><rect x="2" y="9" width="12" height="4" rx=".5" /><path d="M4.5 5h.01M4.5 11h.01" /></>,
-  brain: <path d="M6 3a2 2 0 0 0-2 2 2 2 0 0 0-1.5 3A2 2 0 0 0 4 11a2 2 0 0 0 2 2h0V3zM10 3a2 2 0 0 1 2 2 2 2 0 0 1 1.5 3A2 2 0 0 1 12 11a2 2 0 0 1-2 2V3z" />,
-  restart: <><path d="M3 8a5 5 0 0 1 8.5-3.5L13 6" /><path d="M13 2.5V6H9.5" /><path d="M13 8a5 5 0 0 1-8.5 3.5L3 10" /></>,
-  dots: <g fill="currentColor" stroke="none"><circle cx="3.2" cy="8" r="1.2" /><circle cx="8" cy="8" r="1.2" /><circle cx="12.8" cy="8" r="1.2" /></g>,
-  settings: <><circle cx="8" cy="8" r="2.3" /><path d="M6.6 1.7h2.8l.4 1.5 1.2.7 1.5-.3 1.4 2.4-1.1 1.1v1.4l1.1 1.1-1.4 2.4-1.5-.3-1.2.7-.4 1.5H6.6l-.4-1.5-1.2-.7-1.5.3-1.4-2.4 1.1-1.1V7.1L2.1 6l1.4-2.4 1.5.3 1.2-.7z" /></>,
-  desktop: <><rect x="1.5" y="2" width="10" height="8" rx="1" /><path d="M4 12h10V5.5M6.5 12v2M4 14h6" /></>,
-  copy: <><rect x="5" y="5" width="9" height="9" rx="1" /><path d="M11 5V3a1 1 0 0 0-1-1H3a1 1 0 0 0-1 1v7a1 1 0 0 0 1 1h2" /></>,
-  edit: <><path d="M3 11.5V13h1.5l8-8-1.5-1.5-8 8zM10.5 4l1.5-1.5 1.5 1.5L12 5.5" /></>,
-  arrow: <path d="M2.5 8h10M8.5 4l4 4-4 4" />,
-  mic: <><rect x="5.5" y="1.5" width="5" height="8" rx="2.5" /><path d="M3.5 7.5a4.5 4.5 0 0 0 9 0M8 12v2.5M5.5 14.5h5" /></>,
-  pin: <><path d="M9.9 2.6l3.5 3.5-1.3.4-2.5 2.5-.4 1.3-2.6-2.6 1.3-.4 2.5-2.5z" /><path d="M6.6 9.4L2.8 13.2" /></>,
-};
-export function Icon({ name, size = 14, className }: { name: keyof typeof paths | string; size?: number; className?: string }) {
+/* the glyph registry lives in @/lib/icons (issue #99); filled entries
+   (fill: true, e.g. pinSolid) render fill="currentColor" with no stroke,
+   everything else strokes as before */
+export function Icon({ name, size = 14, className }: { name: keyof typeof ICON_PATHS | string; size?: number; className?: string }) {
+  const def = ICON_PATHS[name];
   return (
-    <svg width={size} height={size} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round" className={cn("shrink-0", className)} aria-hidden>
-      {paths[name]}
+    <svg width={size} height={size} viewBox="0 0 16 16" fill={def?.fill ? "currentColor" : "none"} stroke={def?.fill ? "none" : "currentColor"} strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round" className={cn("shrink-0", className)} aria-hidden>
+      {def && <path d={def.path} />}
     </svg>
   );
 }

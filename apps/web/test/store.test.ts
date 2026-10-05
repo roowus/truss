@@ -335,3 +335,109 @@ test("msg.start attachments ride onto the message (transcript chips survive relo
   v2 = reduce(v2, { type: "msg.start", sessionId: "s", messageId: "m2", role: "user", at: 1000 } as never, T0);
   assert.ok(!("attachments" in v2.msgs["m2"]), "no phantom field on plain messages");
 });
+
+/* REGRESSION — developer report on the PR #98 preview: a hermes session
+   stuck on "Booting…" forever while the server row already read idle.
+
+   The create POST response is read server-side BEFORE the boot pump sinks
+   the first state event, so it always carries state "spawning". A warm
+   harness (second hermes session on one process) boots in well under the
+   350ms refresh debounce: the live idle frame heals the row via
+   refreshSessions, and then the late POST response writes "spawning" back
+   over it. No further state events come, so the composer stays blocked on
+   Booting forever. The response row must never regress a live state. */
+test("createSession: a stale 'spawning' POST row never regresses a live state the bus already applied", async () => {
+  const staleRow = {
+    id: "boot-race", harness: "hermes", title: "t", cwd: "/tmp",
+    state: "spawning", created_at: 0, updated_at: 0,
+  };
+  store.set((s) => ({
+    backend: {
+      createSession: async () => ({ session: { ...staleRow } }),
+      getEvents: async () => ({ events: [] }),
+    } as never,
+    sessions: {
+      ...s.sessions,
+      /* the live idle frame won the race into the row (via refreshSessions)
+         before the POST response landed */
+      "boot-race": { ...staleRow, state: "idle", live: true } as never,
+    },
+  }));
+  await store.createSession({ harness: "hermes", cwd: "/tmp" } as never);
+  assert.equal(
+    store.state.sessions["boot-race"].state,
+    "idle",
+    "the response's stale 'spawning' must not clobber the live idle — today it wedges the session on Booting forever",
+  );
+  delete store.state.sessions["boot-race"];
+  delete store.state.views["boot-race"];
+});
+
+test("createSession: with no live state applied yet, the response row lands as-is (Booting shows until boot)", async () => {
+  store.set(() => ({
+    backend: {
+      createSession: async () => ({
+        session: { id: "boot-fresh", harness: "dsh", title: "t", cwd: "/tmp", state: "spawning", created_at: 0, updated_at: 0 },
+      }),
+      getEvents: async () => ({ events: [] }),
+    } as never,
+  }));
+  await store.createSession({ harness: "dsh", cwd: "/tmp" } as never);
+  assert.equal(store.state.sessions["boot-fresh"].state, "spawning", "a cold boot still shows Booting");
+  delete store.state.sessions["boot-fresh"];
+  delete store.state.views["boot-fresh"];
+});
+
+test("models.updated refetches harnesses (a probe-filled catalog reaches open pickers live)", async () => {
+  /* issue #101: a lazy adapter (hermes/dsh) probes on a fresh server and
+     announces the filled catalog with models.updated — the store must refetch
+     /api/harnesses so an open New Session dialog sees the models appear */
+  const s = store as unknown as {
+    onFrame: (f: { seq: number; ev: unknown }) => void;
+    refreshHarnesses: () => Promise<void>;
+  };
+  let refetches = 0;
+  s.refreshHarnesses = async () => {
+    refetches++;
+  };
+  try {
+    s.onFrame({ seq: 30, ev: { type: "models.updated", sessionId: "", harness: "hermes" } as never });
+    assert.equal(refetches, 1);
+    s.onFrame({ seq: 31, ev: { type: "models.updated", sessionId: "", harness: "dsh" } as never });
+    assert.equal(refetches, 2);
+  } finally {
+    delete (s as Record<string, unknown>).refreshHarnesses;
+  }
+});
+
+test("probeEmptyCatalogs asks only when a probeable harness has an empty catalog (boot-time probe)", async () => {
+  /* fired from store.init so the probe's ~1s overlaps page load instead of
+     the first dialog open (developer feedback on the PR #104 preview) */
+  const s = store as unknown as {
+    probeEmptyCatalogs: () => Promise<void>;
+    refreshHarnesses: (probe?: boolean) => Promise<void>;
+  };
+  const calls: (boolean | undefined)[] = [];
+  s.refreshHarnesses = async (probe?: boolean) => {
+    calls.push(probe);
+  };
+  try {
+    /* probeable + empty → ask */
+    store.set({ harnesses: [{ id: "hermes", capabilities: {} as never, probeable: true }], models: [] } as never);
+    await s.probeEmptyCatalogs();
+    assert.deepEqual(calls, [true]);
+
+    /* catalog present → no ask */
+    store.set({ models: [{ harness: "hermes", provider: "p", model: "m", label: "l" }] } as never);
+    await s.probeEmptyCatalogs();
+    assert.equal(calls.length, 1);
+
+    /* empty but NOT probeable (pi without models.json, remote adapters) → no ask */
+    store.set({ harnesses: [{ id: "pi", capabilities: {} as never }], models: [] } as never);
+    await s.probeEmptyCatalogs();
+    assert.equal(calls.length, 1);
+  } finally {
+    delete (s as Record<string, unknown>).refreshHarnesses;
+    store.set({ harnesses: [], models: [] });
+  }
+});

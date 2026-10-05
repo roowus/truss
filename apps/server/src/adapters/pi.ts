@@ -15,6 +15,9 @@ import { cwdFallbackNote, resolveCwd } from "./types.js";
  * U+2028/U+2029 which are valid inside JSON strings) — we split bytes on LF.
  */
 
+/** tests/ops can point at a different pi binary (issue #29/#97) */
+const PI_BIN = process.env.TRUSS_PI_BIN ?? "pi";
+
 interface PiUsage {
   input?: number;
   output?: number;
@@ -177,11 +180,17 @@ export const piAdapter: HarnessAdapter = {
     const canResumeInPlace = !!opts.resumeRef && !cwdFellBack;
     const args = ["--mode", "rpc", "--session-dir", sessionDir, "--provider", provider, "--model", model];
     if (canResumeInPlace && opts.resumeRef) args.push("--session", opts.resumeRef);
-    const proc = spawn("pi", args, {
+    const proc = spawn(PI_BIN, args, {
       cwd: safeCwd,
       stdio: ["pipe", "pipe", "inherit"], // stderr is diagnostics, never protocol
       env: { ...process.env },
     });
+
+    /* a write can land in the child's death window (kill in flight, prompt
+       on a just-exited process): EPIPE on a stream with no 'error' listener
+       is an uncaughtException and the WHOLE server dies (verified in the
+       issue #97 audit; acp.ts has always had this guard, pi never did) */
+    proc.stdin!.on("error", () => {});
 
     const h: PiHandle = {
       sessionId: opts.sessionId,

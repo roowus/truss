@@ -41,6 +41,11 @@ import { join } from "node:path";
 const LOG_DIR = mkdtempSync(join(tmpdir(), "truss-fake-acp-"));
 const LOG = join(LOG_DIR, "set-model.log");
 
+/* the adapter now persists its discovered catalog to kv (issue #101) —
+   isolate the DB before the import below opens it */
+const DATA_DIR = mkdtempSync(join(tmpdir(), "truss-test-model-resume-data-"));
+process.env.TRUSS_DATA_DIR = DATA_DIR;
+
 /* the fake hermes-acp: NDJSON ACP over stdio; answers initialize, session/new
    and session/resume (both carrying a two-model catalog, current = glm-4.7),
    logs every session/set_model, rehomes the magic resumeRef "rehome-me" (as
@@ -148,5 +153,6 @@ import { after } from "node:test";
 after(() => {
   try {
     rmSync(LOG_DIR, { recursive: true, force: true });
+    rmSync(DATA_DIR, { recursive: true, force: true });
   } catch {}
 });

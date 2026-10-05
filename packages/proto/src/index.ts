@@ -118,6 +118,16 @@ export interface AgentsChanged {
   sessionId: string; // always "" — carried for the frame shape only
 }
 
+/** a harness's model catalog just filled in (lazy adapters discover it from
+    the first session boot, or from the first-boot probe — issue #101).
+    Broadcast-only; clients refetch /api/harnesses. sessionId is "" — carried
+    for the frame shape only, like todo.upsert. */
+export interface ModelsUpdated {
+  type: "models.updated";
+  sessionId: string;
+  harness: HarnessId;
+}
+
 /* ── message stream ── */
 /** a file attached to a user prompt (lands in the workspace .truss-uploads/) */
 export interface PromptAttachment {
@@ -255,6 +265,7 @@ export type ProtoEvent =
   | TodoUpsert
   | FeedUpsert
   | AgentsChanged
+  | ModelsUpdated
   | MsgStart
   | MsgChunk
   | MsgDone

@@ -27,6 +27,8 @@ import { cwdFallbackNote, resolveCwd } from "./types.js";
 const anthropicBaseUrl = () =>
   process.env.TRUSS_CLAUDE_BASE_URL ?? "http://127.0.0.1:45821/api/anthropic";
 const defaultModel = () => process.env.TRUSS_CLAUDE_MODEL ?? "glm-4.7";
+/** tests/ops can point at a different claude binary (issue #97) */
+const CLAUDE_BIN = process.env.TRUSS_CLAUDE_BIN ?? "claude";
 const mcpBase = () => process.env.TRUSS_MCP_BASE ?? "http://127.0.0.1:4040";
 
 export const CLAUDE_MODELS = [
@@ -194,7 +196,7 @@ export const claudeAdapter: HarnessAdapter = {
 
     /* a deleted cwd kills spawn with ENOENT — fall back to ~ and say so */
     const { cwd: safeCwd, fellBack: cwdFellBack } = resolveCwd(opts.cwd);
-    const proc = spawn("claude", args, {
+    const proc = spawn(CLAUDE_BIN, args, {
         cwd: safeCwd,
         stdio: ["pipe", "pipe", "inherit"],
         env: {
@@ -205,6 +207,12 @@ export const claudeAdapter: HarnessAdapter = {
         },
       },
     );
+
+    /* a write can land in the child's death window: EPIPE on a stream with
+       no 'error' listener is an uncaughtException and the WHOLE server dies
+       (verified in the issue #97 audit; acp.ts has always had this guard,
+       claude never did) */
+    proc.stdin!.on("error", () => {});
 
     const h: ClaudeHandle = {
       sessionId: opts.sessionId,
