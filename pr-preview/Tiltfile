@@ -27,10 +27,10 @@ local_resource(
 local_resource(
     'server',
     serve_cmd='cd %s/apps/server && TRUSS_PORT=%d TRUSS_DATA_DIR=%s/apps/server/data-pr%s ./node_modules/.bin/tsx watch src/index.ts' % (wt, port_srv, wt, pr),
-    /* the node-agent bundle is built from the agent's sources at server
-       boot, but tsx watch only follows the server's own imports — agent
-       edits (e.g. issue #123's discovery + data-dir fix) would serve a
-       STALE bundle until someone restarts by hand */
+    # the node-agent bundle is built from the agent's sources at server
+    # boot, but tsx watch only follows the server's own imports — agent
+    # edits (e.g. issue #123's discovery + data-dir fix) would serve a
+    # STALE bundle until someone restarts by hand
     deps=[wt + '/packages/node-agent/src'],
     resource_deps=['checkout'],
     labels=['app'],

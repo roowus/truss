@@ -28,7 +28,10 @@ export function resolveDefaultCwd(input: CwdDefaultInput): string {
   return "";
 }
 
-/* ── the picked host's default, for the hostDefault candidate ── */
+/* ── the picked host's record, shared by the hostDefault/hostSuggested
+     candidates (audit round 3, B2: the resolution rule must exist ONCE —
+     two copies would silently diverge, and the pref would resolve while
+     the suggestion didn't, or vice versa) ── */
 
 /** Structural minimums so this helper stays pure (no store/proto imports). */
 export interface HostPrefLike {
@@ -39,35 +42,42 @@ export interface HostLike {
   agent?: { hostname?: string; suggestedCwd?: string };
 }
 
-/**
- * The harness id's "@host" suffix keys the per-host preference. Server-side
- * the suffix IS the host id (`${adapterId}@${hostId}`, remote.ts), so the
- * direct hit is the real path; the registry walk covers suffixes that are a
- * hostname or short hostname instead of the host id.
- */
-export function hostDefaultFor(harnessId: string, prefs: Record<string, HostPrefLike>, hosts: HostLike[] = []): string {
+/** the "@host" suffix of a harness id; "" for local harnesses */
+function hostSuffix(harnessId: string): string {
   const at = harnessId.indexOf("@");
-  if (at < 0) return "";
-  const suffix = harnessId.slice(at + 1);
+  return at < 0 ? "" : harnessId.slice(at + 1);
+}
+
+/**
+ * Resolve a harness-id suffix to its host record. Server-side the suffix IS
+ * the host id (`${adapterId}@${hostId}`, remote.ts), so the direct hit is
+ * the real path; the full/short hostname forms cover suffixes that are a
+ * hostname instead of the host id.
+ */
+function hostFor(suffix: string, hosts: HostLike[]): HostLike | undefined {
+  return hosts.find((h) => h.id === suffix || h.agent?.hostname === suffix || h.agent?.hostname?.split(".")[0] === suffix);
+}
+
+/** the picked host's default, for the hostDefault candidate */
+export function hostDefaultFor(harnessId: string, prefs: Record<string, HostPrefLike>, hosts: HostLike[] = []): string {
+  const suffix = hostSuffix(harnessId);
   if (!suffix) return "";
   const direct = prefs[suffix]?.defaultCwd;
   if (direct) return direct;
-  const host = hosts.find((h) => h.id === suffix || h.agent?.hostname === suffix || h.agent?.hostname?.split(".")[0] === suffix);
+  const host = hostFor(suffix, hosts);
   return (host && prefs[host.id]?.defaultCwd) || "";
 }
 
 /**
  * The picked host's OWN suggestion (issue #123): what the remote's agent
  * announced at hello (a projects-family dir when one exists there, else its
- * home). Same suffix resolution as hostDefaultFor; "" for local harnesses,
- * unknown hosts, and pre-discovery agents (which carry no suggestion — the
- * chain then falls through to this machine's defaults, today's behavior).
+ * home). Same suffix resolution as hostDefaultFor (shared hostFor above);
+ * "" for local harnesses, unknown hosts, and pre-discovery agents (which
+ * carry no suggestion — the chain then falls through to this machine's
+ * defaults, today's behavior).
  */
 export function hostSuggestedFor(harnessId: string, hosts: HostLike[] = []): string {
-  const at = harnessId.indexOf("@");
-  if (at < 0) return "";
-  const suffix = harnessId.slice(at + 1);
+  const suffix = hostSuffix(harnessId);
   if (!suffix) return "";
-  const host = hosts.find((h) => h.id === suffix || h.agent?.hostname === suffix || h.agent?.hostname?.split(".")[0] === suffix);
-  return host?.agent?.suggestedCwd ?? "";
+  return hostFor(suffix, hosts)?.agent?.suggestedCwd ?? "";
 }
