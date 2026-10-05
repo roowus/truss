@@ -3,6 +3,7 @@ import type { IDockviewPanelProps } from "dockview-react";
 import { store, useApp, useNow } from "@/lib/store";
 import { desktops, useDesktops, type HostPreference } from "@/lib/desktops";
 import { ago, harnessStyle, hostOf, shortPath } from "@/lib/format";
+import { harnessDisplay, hostAliases } from "@/lib/device";
 import { openPanel, renameHostPanels } from "@/lib/workspace";
 import { agentRunCommand } from "@/lib/installCommand";
 import { Btn, HarnessMark, Icon, Select, StateDot } from "@/components/ui";
@@ -13,6 +14,8 @@ const blank: HostPreference = { alias: "", defaultCwd: "", defaultProject: "", p
 export function HostPanel({ params }: IDockviewPanelProps<{ hostId: string }>) {
   const hostId = params.hostId;
   const host = useApp((s) => s.hosts.find((h) => h.id === hostId));
+  const hosts = useApp((s) => s.hosts);
+  const hostPrefs = useDesktops((s) => s.hosts);
   const agent = host?.agent;
   const error = useApp((s) => s.agentsError);
   const harnesses = useApp((s) => s.harnesses);
@@ -213,7 +216,7 @@ export function HostPanel({ params }: IDockviewPanelProps<{ hostId: string }>) {
                 ariaLabel="Preferred adapter"
                 options={[
                   { value: "", label: "First available" },
-                  ...remoteHarnesses.map((h) => ({ value: h.id, label: h.id })),
+                  ...remoteHarnesses.map((h) => ({ value: h.id, label: harnessDisplay(h.id, hosts, hostAliases(hostPrefs)) })),
                 ]}
               />
             </Field>

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { store, useApp } from "@/lib/store";
 import { useDesktops } from "@/lib/desktops";
 import { harnessStyle, hostOf, shortPath } from "@/lib/format";
+import { hostAliases, hostDisplay } from "@/lib/device";
 import { resolveDefaultCwd, hostDefaultFor } from "@/lib/cwdDefault";
 import type { BrowseDir } from "@/lib/proto";
 import { openPanel, openSession } from "@/lib/workspace";
@@ -24,6 +25,7 @@ export function NewSessionDialog({ onClose, preset }: { onClose: () => void; pre
   const hosts = useApp((s) => s.hosts);
   const defaultCwd = useDesktops((s) => s.settings.defaultCwd);
   const hostPrefs = useDesktops((s) => s.hosts);
+  const aliases = useMemo(() => hostAliases(hostPrefs), [hostPrefs]);
   const recentCwds = useMemo(() => [...new Set(order.map((i) => sessions[i]?.cwd).filter(Boolean))].slice(0, 8), [order, sessions]);
   const projects = useMemo(() => [...new Set(order.map((i) => sessions[i]?.project).filter(Boolean) as string[])], [order, sessions]);
 
@@ -162,7 +164,7 @@ export function NewSessionDialog({ onClose, preset }: { onClose: () => void; pre
                       <div className="flex items-center gap-2">
                         <HarnessMark harness={h.id} size={22} />
                         <div className="min-w-0">
-                          <div className="text-[12.5px] text-[var(--t-fg)] font-medium truncate">{st.name}{host && <span className="text-[var(--t-sky)] font-mono text-[10.5px]"> @{host}</span>}</div>
+                          <div className="text-[12.5px] text-[var(--t-fg)] font-medium truncate">{st.name}{host && <span className="text-[var(--t-sky)] font-mono text-[10.5px]"> @{hostDisplay(host, hosts, aliases)}</span>}</div>
                           <div className="font-mono text-[10.5px] text-[var(--t-dim)]">{h.id}</div>
                         </div>
                       </div>

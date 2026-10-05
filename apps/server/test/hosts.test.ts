@@ -41,6 +41,22 @@ test("createHost mints a token: plaintext returned once, only the HASH stored", 
   }
 });
 
+test("createHost caps very long labels: the id stays bounded, safe, and unique", async () => {
+  const { cleanup } = await freshServer("hosts-longlabel");
+  try {
+    const hosts = await import("../src/hosts.js");
+    const long = "My Extremely Long Hostname With A Domain And Some Paste That Just Keeps Going And Going And Going";
+    const { host } = hosts.createHost(long);
+    assert.ok(host.id.length <= 48, `slug ids are capped at 48 chars — got ${host.id.length}`);
+    assert.match(host.id, /^[a-z0-9][a-z0-9-]*$/, "the capped id stays url/env-safe");
+    assert.ok(!host.id.endsWith("-"), "the cap never leaves a dangling dash");
+    const dupe = hosts.createHost(long);
+    assert.notEqual(dupe.host.id, host.id, "two capped duplicates stay distinct");
+  } finally {
+    cleanup();
+  }
+});
+
 test("verifyAgentToken accepts the minted token, rejects wrong ones, touches last_seen", async () => {
   const { cleanup } = await freshServer("hosts-verify");
   try {

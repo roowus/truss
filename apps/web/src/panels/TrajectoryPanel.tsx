@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState, Fragment } from "react";
 import type { IDockviewPanelProps } from "dockview-react";
 import { store, useApp, useNow, type Call, type SessionView } from "@/lib/store";
 import { argSummary, fmtCost, fmtMs, fmtTokens, harnessStyle } from "@/lib/format";
+import { harnessDisplay, hostAliases } from "@/lib/device";
+import { useDesktops } from "@/lib/desktops";
 import { Empty, HarnessMark, Icon, Spinner } from "@/components/ui";
 import { cn } from "@/utils/cn";
 
@@ -25,6 +27,9 @@ export function TrajectoryPanel({ params }: IDockviewPanelProps<P>) {
 
 function Trajectory({ id, view }: { id: string; view: SessionView }) {
   const meta = useApp((s) => s.sessions[id]);
+  const hosts = useApp((s) => s.hosts);
+  const hostPrefs = useDesktops((s) => s.hosts);
+  const harnessName = harnessDisplay(meta.harness, hosts, hostAliases(hostPrefs));
   const [filter, setFilter] = useState<"all" | "errors" | "retries">("all");
   const [open, setOpen] = useState<Record<string, boolean>>({});
   const calls = useMemo(() => view.callOrder.map((c) => view.calls[c]), [view.callOrder, view.calls]);
@@ -64,7 +69,7 @@ function Trajectory({ id, view }: { id: string; view: SessionView }) {
         <Stat label="errors" value={String(stats.errs)} tone={stats.errs ? "red" : undefined} />
         <Stat label="retries" value={String(stats.retries)} tone={stats.retries ? "amber" : undefined} />
         <Stat label="Σ latency" value={fmtMs(stats.lat)} />
-        <Stat label="tokens in/out" value={stats.hasTok ? `${fmtTokens(stats.tin)} / ${fmtTokens(stats.tout)}` : "—"} title={stats.hasTok ? undefined : `${meta.harness} reports tokens per turn, not per call`} />
+        <Stat label="tokens in/out" value={stats.hasTok ? `${fmtTokens(stats.tin)} / ${fmtTokens(stats.tout)}` : "—"} title={stats.hasTok ? undefined : `${harnessName} reports tokens per turn, not per call`} />
         <Stat label="cost" value={stats.hasCost ? fmtCost(stats.cost) : "—"} />
         <div className="ml-auto flex items-center gap-0.5 shrink-0 p-0.5 rounded-md bg-[var(--t-bg0)] border border-[var(--t-line)]">
           {(["all", "errors", "retries"] as const).map((f) => (
@@ -140,7 +145,7 @@ function Trajectory({ id, view }: { id: string; view: SessionView }) {
       )}
       {!stats.hasTok && calls.length > 0 && (
         <div className="shrink-0 px-3 py-1.5 border-t border-[var(--t-line)] text-[11px] text-[var(--t-dim)]">
-          <span className="font-mono">—</span> = not reported. {meta.harness} emits token counts per turn, not per call; Truss shows the absence instead of inventing zeros.
+          <span className="font-mono">—</span> = not reported. {harnessName} emits token counts per turn, not per call; Truss shows the absence instead of inventing zeros.
         </div>
       )}
     </div>
