@@ -112,7 +112,7 @@ export function Toasts() {
           <Icon name={t.kind === "error" ? "alert" : t.kind === "ok" ? "check" : "bolt"} size={14} className={cn("mt-0.5", t.kind === "error" ? "text-[var(--t-red)]" : t.kind === "ok" ? "text-[var(--t-teal)]" : "text-[var(--t-sky)]")} />
           <div className="flex-1 min-w-0">
             <div className="text-[12.5px] text-[var(--t-fg)] font-medium">{t.title}</div>
-            {t.body && <div className="mt-0.5 text-[11.5px] text-[var(--t-mute)] break-words">{t.body}</div>}
+            {t.body && <div className="mt-0.5 text-[11.5px] text-[var(--t-mute)] break-words whitespace-pre-line">{t.body}</div>}
           </div>
           <button onClick={() => store.dismiss(t.id)} className="self-start text-[var(--t-dim)] hover:text-[var(--t-fg)]"><Icon name="x" size={12} /></button>
         </div>

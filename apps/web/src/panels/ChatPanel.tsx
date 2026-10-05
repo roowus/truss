@@ -208,10 +208,14 @@ function ChatHeader({ id }: { id: string }) {
             ))}
             <div className="my-1 border-t border-[var(--t-line)]" />
             <button
-              onClick={() => {
+              onClick={async () => {
                 const refText = formatSessionRef(meta, hosts);
-                void navigator.clipboard.writeText(refText);
-                store.toast("ok", "Reference copied", refText);
+                try {
+                  await navigator.clipboard.writeText(refText);
+                  store.toast("ok", "Reference copied", refText);
+                } catch (e) {
+                  store.toast("error", "Copy failed", e instanceof Error ? e.message : String(e));
+                }
                 setMenu(false);
               }}
               className="w-full flex items-center gap-2.5 px-3 h-8 text-left text-[12.5px] text-[var(--t-fg2)] hover:bg-white/[0.05]"
@@ -221,10 +225,14 @@ function ChatHeader({ id }: { id: string }) {
               Copy reference
             </button>
             <button
-              onClick={() => {
+              onClick={async () => {
                 const full = formatSessionRefFull({ ...meta, harnessRef: meta.harness_ref }, hosts);
-                void navigator.clipboard.writeText(full);
-                store.toast("ok", "Full details copied", full);
+                try {
+                  await navigator.clipboard.writeText(full);
+                  store.toast("ok", "Full details copied", full);
+                } catch (e) {
+                  store.toast("error", "Copy failed", e instanceof Error ? e.message : String(e));
+                }
                 setMenu(false);
               }}
               className="w-full flex items-center gap-2.5 px-3 h-8 text-left text-[12.5px] text-[var(--t-fg2)] hover:bg-white/[0.05]"
