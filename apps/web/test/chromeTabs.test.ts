@@ -21,12 +21,13 @@ import assert from "node:assert/strict";
 
      chromeTabLayout({ stripWidth, tabs: [{ id, active?, pinned? }] }) →
        { width, perTab: Record<id, { showTitle, showClose, closeOverIcon,
-       showIndicator }> }
+       showIndicator, showBadge }> }
 
-   (showIndicator joined the view with #129: titled tabs below
-   CHROME_TAB_INDICATOR_MIN hide the dot/badge so the title keeps readable
-   room. It gates only the truss-specific extras — the Chrome matrix above
-   is unchanged. Its contract lives in tabIndicator.test.ts.)
+   (showIndicator/showBadge joined the view with #129: titled tabs below
+   CHROME_TAB_INDICATOR_MIN hide the dot/badge, and below the higher
+   CHROME_TAB_BADGE_MIN the badge, so the title keeps readable room. They
+   gate only the truss-specific extras — the Chrome matrix above is
+   unchanged. Their contract lives in tabIndicator.test.ts.)
 
      - width: UNIFORM across all tabs every time =
        clamp(floor(stripWidth / count), CHROME_TAB_ICON, CHROME_TAB_MAX);
@@ -50,6 +51,7 @@ interface ChromeTabView {
   showClose: "always" | "hover" | "never";
   closeOverIcon: boolean;
   showIndicator: boolean;
+  showBadge: boolean;
 }
 interface ChromeTabsModule {
   CHROME_TAB_MAX: number;

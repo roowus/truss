@@ -29,12 +29,28 @@ import { readFileSync } from "node:fs";
    - the reserve follows the indicator: hidden indicators mean no reserve
      (the #125 "no indicator -> 0" rule), so padding falls back to pr-1.
 
+   AMENDED (PR #130 audit round 1, finding B1): the badge costs more than
+   the dot, so it gets its own, higher floor —
+
+     CHROME_TAB_BADGE_SLOT (the badge's row footprint: the 17px pill plus
+       the 6px gap it adds)
+     CHROME_TAB_BADGE_MIN = CHROME_TAB_INDICATOR_MIN + CHROME_TAB_BADGE_SLOT
+     ChromeTabView.showBadge: boolean
+
+   - between the two floors a titled tab shows the dot but hides the badge
+     (a dot + badge row is 87px of fixed content — at 94px its title span
+     is 7px, the exact unreadable state this issue names);
+   - at CHROME_TAB_BADGE_MIN the dot + badge row keeps the same 30px of
+     title room the floor guarantees the dot-only row.
+
    The #95 matrix is untouched: width, showTitle, showClose and
-   closeOverIcon behave exactly as before — showIndicator only gates the
-   truss-specific extras Chrome doesn't have. */
+   closeOverIcon behave exactly as before — showIndicator/showBadge only
+   gate the truss-specific extras Chrome doesn't have. */
 
 interface ChromeTabsIndicator {
   CHROME_TAB_INDICATOR_MIN: number;
+  CHROME_TAB_BADGE_MIN: number;
+  CHROME_TAB_BADGE_SLOT: number;
   CHROME_TAB_TITLE_MIN: number;
   CHROME_TAB_CLOSE_SLOT: number;
   CHROME_TAB_CLOSE_MIN: number;
@@ -42,14 +58,14 @@ interface ChromeTabsIndicator {
   CHROME_TAB_ICON: number;
   chromeTabLayout(input: { stripWidth: number; tabs: { id: string; active?: boolean; pinned?: boolean }[] }): {
     width: number;
-    perTab: Record<string, { showTitle: boolean; showIndicator: boolean }>;
+    perTab: Record<string, { showTitle: boolean; showIndicator: boolean; showBadge: boolean }>;
   };
 }
 
 async function load(): Promise<ChromeTabsIndicator | null> {
   const spec = "../src/lib/chromeTabs"; // the module exists; the exports are the contract
   const mod: any = await import(spec);
-  return typeof mod?.CHROME_TAB_INDICATOR_MIN === "number" ? mod : null;
+  return typeof mod?.CHROME_TAB_INDICATOR_MIN === "number" && typeof mod?.CHROME_TAB_BADGE_MIN === "number" ? mod : null;
 }
 
 test("chromeTabs.ts exports CHROME_TAB_INDICATOR_MIN with the derivation the fix needs", async () => {
@@ -64,6 +80,19 @@ test("chromeTabs.ts exports CHROME_TAB_INDICATOR_MIN with the derivation the fix
     mod.CHROME_TAB_INDICATOR_MIN < mod.CHROME_TAB_CLOSE_MIN,
     "indicators come back well before the roomy band — they must not vanish across the whole tight range",
   );
+
+  /* the badge floor (audit round 1, B1): the dot+badge row is the dot row
+     plus exactly the badge's slot, so the floor rises by exactly that */
+  assert.equal(
+    mod.CHROME_TAB_BADGE_MIN,
+    mod.CHROME_TAB_INDICATOR_MIN + mod.CHROME_TAB_BADGE_SLOT,
+    "the badge costs its slot on top of the indicator floor — no more, no less",
+  );
+  assert.ok(mod.CHROME_TAB_BADGE_SLOT >= 17 + 6, "the slot covers the 17px pill plus its 6px row gap");
+  assert.ok(
+    mod.CHROME_TAB_BADGE_MIN <= mod.CHROME_TAB_CLOSE_MIN,
+    "the badge is back by the roomy band at the latest — it must not vanish across the whole tight range",
+  );
 });
 
 test("a dotted tab at the indicator floor keeps its pre-reserve title room", async () => {
@@ -77,6 +106,14 @@ test("a dotted tab at the indicator floor keeps its pre-reserve title room", asy
   assert.ok(
     mod.CHROME_TAB_INDICATOR_MIN - FIXED_WITH_DOT_AND_RESERVE >= PRE_RESERVE_SPAN_AT_FLOOR,
     "at the floor the title is at least as readable as a dotted tab was at 72px before #125",
+  );
+
+  /* the dot + badge row (audit round 1, B1): the badge adds its slot to
+     the dotted row's 64px; the badge floor must leave the same room */
+  const FIXED_WITH_DOT_BADGE_AND_RESERVE = FIXED_WITH_DOT_AND_RESERVE + mod.CHROME_TAB_BADGE_SLOT;
+  assert.ok(
+    mod.CHROME_TAB_BADGE_MIN - FIXED_WITH_DOT_BADGE_AND_RESERVE >= PRE_RESERVE_SPAN_AT_FLOOR,
+    "a dot + badge tab at the badge floor keeps the same readable title — the case the issue names",
   );
 });
 
@@ -101,9 +138,20 @@ test("showIndicator follows the width: on at/above the floor, off below it and o
 
   const sliver = at(mod.CHROME_TAB_ICON * 3, { active: true });
   assert.equal(sliver.perTab.t.showIndicator, false, "slivers show no indicators (they show no title)");
+  assert.equal(sliver.perTab.t.showBadge, false, "slivers show no badge either");
 
   const pinned = at(mod.CHROME_TAB_MAX * 2, { pinned: true }, 2);
   assert.equal(pinned.perTab.t.showIndicator, false, "pinned tabs are icon-only — no indicators");
+  assert.equal(pinned.perTab.t.showBadge, false, "pinned tabs show no badge");
+
+  /* between the two floors: the dot shows, the badge hides (audit round 1,
+     B1 — a dot + badge row would still swallow the title here) */
+  const mid = at(mod.CHROME_TAB_INDICATOR_MIN * 3, {});
+  assert.equal(mid.perTab.t.showIndicator, true, "mid-band: the dot fits");
+  assert.equal(mid.perTab.t.showBadge, false, "mid-band: the badge waits for its own floor");
+  const badgeFloor = at(mod.CHROME_TAB_BADGE_MIN * 3, {});
+  assert.equal(badgeFloor.width, mod.CHROME_TAB_BADGE_MIN);
+  assert.equal(badgeFloor.perTab.t.showBadge, true, "at the badge floor the badge shows");
 
   /* every titled width below the floor hides indicators; every width at or
      above shows them — no gap band, no overlap band */
@@ -112,14 +160,22 @@ test("showIndicator follows the width: on at/above the floor, off below it and o
     const want: boolean = out.width >= mod.CHROME_TAB_INDICATOR_MIN;
     assert.equal(out.perTab.t.showIndicator, want, `width ${out.width}: showIndicator is exactly the floor test`);
     if (!want) assert.equal(out.perTab.t.showTitle, true, `width ${out.width}: the band stays titled`);
+    const wantBadge: boolean = out.width >= mod.CHROME_TAB_BADGE_MIN;
+    assert.equal(out.perTab.t.showBadge, wantBadge, `width ${out.width}: showBadge is exactly the badge-floor test`);
+    if (wantBadge) assert.ok(out.perTab.t.showIndicator, `width ${out.width}: the badge never shows without the dot's floor passed`);
   }
 });
 
-test("read-through: the tab row gates dot, badge, and reserve on showIndicator", () => {
+test("read-through: the tab row gates dot on showIndicator, badge on showBadge, and the reserve on both", () => {
   const src = readFileSync(new URL("../src/components/Workspace.tsx", import.meta.url), "utf8");
-  const gates = src.match(/view\.showIndicator/g) ?? [];
+  const dotGates = src.match(/view\.showIndicator/g) ?? [];
   assert.ok(
-    gates.length >= 3,
-    "Workspace.tsx must gate the state dot, the pending badge, AND the trailing-reserve input on view.showIndicator — otherwise a narrow titled tab still loses its title to the fade mask",
+    dotGates.length >= 2,
+    "Workspace.tsx must gate the state dot AND the trailing-reserve input on view.showIndicator — otherwise a narrow titled tab still loses its title to the fade mask",
+  );
+  const badgeGates = src.match(/view\.showBadge/g) ?? [];
+  assert.ok(
+    badgeGates.length >= 2,
+    "Workspace.tsx must gate the pending badge AND the trailing-reserve input on view.showBadge — otherwise a mid-band tab (94–116px) with a pending request still loses its title (audit round 1, B1)",
   );
 });

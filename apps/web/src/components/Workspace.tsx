@@ -99,7 +99,7 @@ function TrussTab({ api, params }: IDockviewPanelHeaderProps<{ sessionId?: strin
      observe the header for resizes (sash/window) and the strip's childList
      only for tab add/remove — never the strip's own width. */
   const rootRef = useRef<HTMLDivElement>(null);
-  const [view, setView] = useState<ChromeTabView>({ showTitle: true, showClose: "always", closeOverIcon: false, showIndicator: true });
+  const [view, setView] = useState<ChromeTabView>({ showTitle: true, showClose: "always", closeOverIcon: false, showIndicator: true, showBadge: true });
   const measureRef = useRef<() => void>(() => {});
   useEffect(() => {
     /* The dockview tab element is resolved LAZILY, on every measure — never
@@ -192,8 +192,9 @@ function TrussTab({ api, params }: IDockviewPanelHeaderProps<{ sessionId?: strin
      (it is the trailing element), on slivers, or with no indicator (the
      title fades to the edge, like Chrome). Below the indicator floor
      (issue #129) the row renders no indicator, so nothing is reserved and
-     the title keeps the full width. */
-  const hasIndicator = view.showIndicator && Boolean((kind === "chat" && meta) || pending > 0);
+     the title keeps the full width; each indicator gates on its own floor
+     (the badge's is higher — audit round 1). */
+  const hasIndicator = Boolean((view.showIndicator && kind === "chat" && meta) || (view.showBadge && pending > 0));
   const trailingReserve = tabTrailingReserve(view, hasIndicator);
   return (
     <div
@@ -229,7 +230,10 @@ function TrussTab({ api, params }: IDockviewPanelHeaderProps<{ sessionId?: strin
           titled tab shows its title instead of a dot it has no room for —
           the same tradeoff slivers make one band lower */}
       {view.showTitle && view.showIndicator && meta && kind === "chat" && <StateDot state={meta.state} size={6} />}
-      {view.showTitle && view.showIndicator && pending > 0 && (
+      {/* the badge waits for its own, higher floor (issue #129 audit):
+          in the dot-only band it would still swallow the title; the
+          sidebar badge and the global pending pill carry the signal */}
+      {view.showTitle && view.showBadge && pending > 0 && (
         <span className="inline-flex items-center gap-0.5 min-w-4 h-4 px-1 rounded-full bg-[var(--t-amber)] text-[#1b1305] text-[9.5px] font-bold t-pulse-soft shrink-0" title={`${pending} permission request(s) waiting`}>
           <Icon name="lock" size={9} />
           {pending > 1 && <span>{pending}</span>}
