@@ -242,24 +242,33 @@ function ChatHeader({ id }: { id: string }) {
               </button>
             )}
             <div className="px-3 py-1.5 text-[11px] leading-relaxed">
-              <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-2.5 gap-y-0.5">
-                <dt className="text-[var(--t-dim)]">Session</dt>
-                <dd className="font-mono text-[var(--t-mute)] truncate">#{meta.id}</dd>
-                <dt className="text-[var(--t-dim)]">Harness</dt>
-                <dd className="font-mono text-[var(--t-mute)] truncate" title={resumeBase + (meta.model ? ` · ${meta.model}` : "")}>
-                  {resumeBase}{meta.model && ` · ${meta.model}`}
-                </dd>
-                <dt className="text-[var(--t-dim)]">Host</dt>
-                <dd className="font-mono text-[var(--t-mute)] truncate" title={device}>{device}</dd>
-                <dt className="text-[var(--t-dim)]">Directory</dt>
-                <dd className="font-mono text-[var(--t-mute)] truncate" title={meta.cwd}>{shortPath(meta.cwd)}</dd>
+              {/* the all-ids dump, displayed: every id we hold, labeled, full
+                  cwd — labels mirror the copyable dump format (issue #132) so
+                  the menu and the clipboard always agree */}
+              <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-2.5 gap-y-0.5 font-mono">
+                <dt className="text-[var(--t-dim)]">truss</dt>
+                <dd className="text-[var(--t-mute)] break-all">{meta.id}</dd>
+                {meta.harness_ref && (
+                  <>
+                    <dt className="text-[var(--t-dim)]">{resumeBase} session</dt>
+                    <dd className="text-[var(--t-mute)] break-all">{meta.harness_ref}</dd>
+                  </>
+                )}
+                {hostId && (
+                  <>
+                    <dt className="text-[var(--t-dim)]">host</dt>
+                    <dd className="text-[var(--t-mute)] break-all">{hostId}</dd>
+                  </>
+                )}
+                <dt className="text-[var(--t-dim)]">cwd</dt>
+                <dd className="text-[var(--t-mute)] break-all">{meta.cwd}</dd>
+                {resumeCmd && (
+                  <>
+                    <dt className="text-[var(--t-dim)]">resume</dt>
+                    <dd className="text-[var(--t-mute)] break-all">{resumeCmd}</dd>
+                  </>
+                )}
               </dl>
-              {resumeCmd && (
-                <div className="mt-1.5">
-                  <div className="text-[var(--t-dim)]">Resume on {hostId ? device : "this server"}</div>
-                  <div className="font-mono text-[var(--t-mute)] break-all">{resumeCmd}</div>
-                </div>
-              )}
             </div>
           </div>
         </>
