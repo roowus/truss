@@ -614,7 +614,7 @@ function Composer({ id, active }: { id: string; active: boolean }) {
     else v.start();
   };
   const voiceTitle =
-    voiceState === "recording" ? "Stop dictation — the transcript lands in the draft" :
+    voiceState === "recording" ? "Stop dictation · the transcript lands in the draft · Esc cancels" :
     voiceState === "transcribing" ? "Transcribing… click to cancel" :
     voiceState === "error" ? `Dictation failed: ${voiceRef.current?.error() ?? "unknown error"}` :
     "Dictate into the draft (Esc cancels a take)";
@@ -640,12 +640,11 @@ function Composer({ id, active }: { id: string; active: boolean }) {
     tone = "amber";
     hint = <><Icon name="lock" size={12} /> {meta.harness} can't take input mid-run — draft is held, or <button className="underline" onClick={() => store.interrupt(id)}>interrupt</button>.</>;
   }
-  /* an active voice take owns the hint line while it lives; the waveform
-     itself plays inside the composer bar (issue #112, review feedback) */
-  if (voiceState === "recording") {
-    tone = "amber";
-    hint = <><Icon name="mic" size={12} /> Dictating… click the mic to finish, Esc to cancel.</>;
-  } else if (voiceState === "error") {
+  /* an active voice take no longer touches the hint line (review feedback:
+     the hint pushed the composer bar up) — the recording state lives
+     entirely in the bar: mic button pulses, the overlay carries the clock,
+     the waveform, and the Esc affordance */
+  if (voiceState === "error") {
     tone = "red";
     hint = <><Icon name="alert" size={12} /> Dictation failed: {voiceRef.current?.error() ?? "unknown error"}</>;
   }
@@ -759,6 +758,9 @@ function Composer({ id, active }: { id: string; active: boolean }) {
           <div className="pointer-events-none absolute inset-0 flex items-center gap-2 px-1.5 rounded-sm bg-[var(--t-bg0)] text-[var(--t-amber)] overflow-hidden">
             <span className="shrink-0 text-[11.5px] tabular-nums">{fmtTakeTime(voiceNow - (voiceStart ?? voiceNow))}</span>
             <VoiceVisualizer levelStream={voiceLevelStream} className="flex min-w-0 flex-1 items-center gap-[2px] h-5" />
+            {/* the Esc affordance lives in the bar itself — no hint line
+                below, so the composer never shifts when a take starts */}
+            <span className="shrink-0 text-[10px] text-[var(--t-dim)]">Esc to cancel</span>
           </div>
         )}
         </div>
