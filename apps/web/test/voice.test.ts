@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { appendTranscript, mediaRecorderCapture, transcribeAudio, type MediaRecorderLike, type MediaStreamLike } from "../src/lib/voice";
+import { appendTranscript, createBrowserVoiceInput, mediaRecorderCapture, transcribeAudio, type MediaRecorderLike, type MediaStreamLike } from "../src/lib/voice";
 import { createVoiceInput } from "../src/lib/voiceInput";
 
 /* Companion tests for the DOM-side voice wiring (issue #15) — the pure
@@ -229,4 +229,15 @@ test("B5 follow-through: overlapping startups cannot clear each other's invalida
   assert.equal(pf.recorders.length, 1, "exactly one recorder, from the fresh take");
   rec.cancel?.();
   assert.equal(tracks[1].stopped, true, "and it releases cleanly");
+});
+
+test("createBrowserVoiceInput: the typed levelStream seam exists and reads null before any take", () => {
+  /* issue #112, audit round 1 (I1): the browser controller re-wraps
+     createVoiceInput's passthrough — a dropped method or a lost ?? null
+     blanks the visualizer while shipping green. Node has no window, so
+     this builds the MediaRecorder-path controller without touching the
+     mic (nothing is requested until start()). */
+  const v = createBrowserVoiceInput({ onText: () => {} });
+  assert.equal(typeof v.levelStream, "function", "the browser controller exposes levelStream()");
+  assert.equal(v.levelStream(), null, "no take running → no stream");
 });

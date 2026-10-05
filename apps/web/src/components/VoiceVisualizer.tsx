@@ -6,15 +6,17 @@
    The stream is only borrowed: the recorder releases it on stop/cancel, and
    this component tears its audio nodes down as soon as the getter reads
    null (or on unmount), so the visualizer never keeps the mic alive. The
-   AudioContext factory is injectable like the capture's platform pieces;
-   when the browser has no AudioContext or the recorder exposes no stream
-   (the SpeechRecognition path), the bars simply stay calm. */
+   AudioContext factory is injectable like the capture's platform pieces.
 
-import { useEffect, useRef, type CSSProperties } from "react";
+   Honesty rule: the bars render ONLY while a real stream is attached. On
+   the SpeechRecognition path (no stream to read) or a failed attach, the
+   component stays hidden — parked "calm" bars are the silence signal and
+   would lie to the user while they speak (audit round 1, finding I2). */
+
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { levelBars } from "@/lib/voiceLevel";
 import type { MediaStreamLike } from "@/lib/voice";
 
-const EMPTY = new Uint8Array(0);
 const FLOOR = 0.15; // resting bar height as a fraction — calm, not absent
 
 function defaultAudioContext(): AudioContext {
@@ -33,6 +35,7 @@ export function VoiceVisualizer(props: {
 }) {
   const bars = props.bars ?? 10;
   const host = useRef<HTMLSpanElement>(null);
+  const [live, setLive] = useState(false);
 
   useEffect(() => {
     const el = host.current;
@@ -43,6 +46,7 @@ export function VoiceVisualizer(props: {
     let analyser: AnalyserNode | null = null;
     let buf: Uint8Array<ArrayBuffer> | null = null;
     let attached: MediaStreamLike | null = null;
+    let failed = false; // one failed attach is final — no 60fps throw/catch churn
     let prev: number[] | undefined;
     let raf = 0;
 
@@ -60,6 +64,7 @@ export function VoiceVisualizer(props: {
       src = null;
       analyser = null;
       buf = null;
+      if (attached) setLive(false);
       attached = null;
       prev = undefined;
       const c = ctx;
@@ -77,31 +82,28 @@ export function VoiceVisualizer(props: {
     const tick = () => {
       const s = props.levelStream();
       if (!s) {
-        /* no live take (or no stream support): glide the bars to rest */
-        if (attached) detach();
-        paint(levelBars(EMPTY, bars, prev));
-        prev = undefined; // fully at rest — next attach starts calm
-      } else {
-        if (s !== attached) {
+        if (attached) detach(); // the take released the mic — hide and let go
+      } else if (s !== attached && !failed) {
+        detach();
+        try {
+          ctx = mkCtx();
+          void ctx.resume().catch(() => {}); // a take starts from a click, but resume is cheap insurance
+          src = ctx.createMediaStreamSource(s as unknown as MediaStream);
+          analyser = ctx.createAnalyser();
+          analyser.fftSize = 256;
+          src.connect(analyser); // analysis only — never routed to the speakers
+          buf = new Uint8Array(analyser.fftSize);
+          attached = s;
+          setLive(true);
+        } catch {
           detach();
-          try {
-            ctx = mkCtx();
-            void ctx.resume().catch(() => {}); // a take starts from a click, but resume is cheap insurance
-            src = ctx.createMediaStreamSource(s as unknown as MediaStream);
-            analyser = ctx.createAnalyser();
-            analyser.fftSize = 256;
-            src.connect(analyser); // analysis only — never routed to the speakers
-            buf = new Uint8Array(analyser.fftSize);
-            attached = s;
-          } catch {
-            detach();
-          }
+          failed = true; // stay hidden rather than retry every frame
         }
-        if (analyser && buf) {
-          analyser.getByteTimeDomainData(buf);
-          prev = levelBars(buf, bars, prev);
-          paint(prev);
-        }
+      }
+      if (analyser && buf) {
+        analyser.getByteTimeDomainData(buf);
+        prev = levelBars(buf, bars, prev);
+        paint(prev);
       }
       raf = requestAnimationFrame(tick);
     };
@@ -114,7 +116,14 @@ export function VoiceVisualizer(props: {
 
   const bar: CSSProperties = { transform: `scaleY(${FLOOR})` };
   return (
-    <span ref={host} aria-hidden="true" className={props.className ?? "inline-flex items-center gap-[2px] h-3 shrink-0"}>
+    /* always mounted (the rAF loop needs the node) but hidden until a real
+       stream attaches — no false silence signal on streamless paths */
+    <span
+      ref={host}
+      aria-hidden="true"
+      style={live ? undefined : { display: "none" }}
+      className={props.className ?? "inline-flex items-center gap-[2px] h-3 shrink-0"}
+    >
       {Array.from({ length: bars }, (_, i) => (
         <span key={i} style={bar} className="block w-[2.5px] h-full rounded-full bg-current origin-center" />
       ))}
