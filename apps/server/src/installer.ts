@@ -123,10 +123,17 @@ fi
 
 RESP=$(curl -fsSL -X POST -H 'content-type: application/json' \\
   -d "{\\"code\\":\\"$CODE\\"}" \\
-  "$SERVER/i/redeem") || {
+  "$SERVER/i/redeem") && rc=0 || rc=$?
+# split the failure honestly (audit B3): curl 6/7/28 mean the SERVER is
+# unreachable — re-minting a code never fixes that; 22 is the HTTP answer
+if [ "$rc" -eq 6 ] || [ "$rc" -eq 7 ] || [ "$rc" -eq 28 ]; then
+  echo "cannot reach $SERVER — check the address (is tailscale up on both ends?), then retry" >&2
+  exit 1
+fi
+if [ "$rc" -ne 0 ]; then
   echo "that code did not work — used up, expired, or mis-typed. Mint a fresh one in the wizard." >&2
   exit 1
-}
+fi
 
 TOKEN=$(printf '%s' "$RESP" | sed -n 's/.*"token":"\\([^"]*\\)".*/\\1/p')
 HOST_ID=$(printf '%s' "$RESP" | sed -n 's/.*"hostId":"\\([^"]*\\)".*/\\1/p')
