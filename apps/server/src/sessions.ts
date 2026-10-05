@@ -247,14 +247,63 @@ export async function createSession(
 function goLive(id: string, adapter: HarnessAdapter, handle: AdapterHandle) {
   live.set(id, { adapter, handle });
   void (async () => {
-    for await (const ev of adapter.events(handle)) {
-      /* harness refs can arrive late (claude: with the first turn; pi: async
-         get_state) — persist as soon as they appear or change */
-      const ref = handle.harnessRef;
-      if (ref && store.getSession(id)?.harness_ref !== ref) {
-        store.setHarnessRef(id, ref);
+    try {
+      for await (const ev of adapter.events(handle)) {
+        try {
+          /* harness refs can arrive late (claude: with the first turn; pi:
+             async get_state) — persist as soon as they appear or change */
+          const ref = handle.harnessRef;
+          if (ref && store.getSession(id)?.harness_ref !== ref) {
+            store.setHarnessRef(id, ref);
+          }
+          sink(ev);
+        } catch (err) {
+          /* one bad event (a sqlite hiccup mid-persist, a broadcast throw)
+             must not kill the pump — and before this guard it was an
+             unhandledRejection, which crashes the whole server on Node 22 */
+          console.error(`event sink failed for ${id}:`, err);
+        }
       }
-      sink(ev);
+    } catch (err) {
+      console.error(`event pump for ${id} threw:`, err);
+    } finally {
+      /* the event stream ending means the harness is gone (process exit,
+         socket drop, queue closed upstream). Leave the entry in `live` and
+         the next prompt writes into a dead handle while the auto-resume
+         branch never fires — the "chat doesn't work" black hole (issue #97).
+         Drop the entry — only if it is still THIS handle, never the retry
+         that already replaced it — and flip the row to error so sendPrompt's
+         closed/error gate resumes instead of refusing. */
+      if (live.get(id)?.handle === handle) {
+        live.delete(id);
+        /* release the dead handle (unsubscribes its client hooks, ends its
+           pipes) — without this each death/resume cycle leaks the handle's
+           registrations; and cancel unanswered permission cards exactly as
+           closeSession does, because a dead harness can't be answered */
+        try {
+          adapter.dispose(handle);
+        } catch {
+          /* already gone */
+        }
+        /* the same hazard the loop guards applies here: a store throw after
+           live.delete would skip the error flip and leave the row stuck
+           "running" with no live entry — every later prompt refused until a
+           restart's reconcileOnBoot heals it */
+        try {
+          const row = store.getSession(id);
+          if (row && row.state !== "closed" && row.state !== "error") {
+            sink({
+              type: "session.state",
+              sessionId: id,
+              state: "error",
+              detail: "harness event stream ended; the next prompt resumes the session",
+            });
+          }
+          if (row && row.state !== "closed") settleOrphanedPerms(id);
+        } catch (err) {
+          console.error(`pump-end cleanup failed for ${id}:`, err);
+        }
+      }
     }
   })();
 }
@@ -267,7 +316,7 @@ function goLive(id: string, adapter: HarnessAdapter, handle: AdapterHandle) {
    leaves live (its permission cards would silently no-op, and nothing could
    ever dispose the key holder). Sharing the in-flight attempt leaves one
    spawn, so there is no second registration to refuse. */
-const resuming = new Map<string, Promise<boolean>>();
+const resuming = new Map<string, Promise<LiveSession | false>>();
 
 /**
  * Resume a previously-closed session whose harness persisted its own session
@@ -277,6 +326,15 @@ const resuming = new Map<string, Promise<boolean>>();
  * spawnTimeoutMs applies); a call that starts after one settled runs fresh.
  */
 export function resumeSession(id: string, opts: { spawnTimeoutMs?: number } = {}): Promise<boolean> {
+  return resumeLiveSession(id, opts).then((s) => Boolean(s));
+}
+
+/* sendPrompt needs the live ENTRY, not a boolean: a harness that dies
+   instantly after spawning (its event stream ends on the first microtask)
+   has its `live` entry reaped by the goLive pump's finally before a
+   boolean-_then-live.get could read it — the resume happened but the prompt
+   still threw "harness process not running" (issue #97 pump-end test). */
+function resumeLiveSession(id: string, opts: { spawnTimeoutMs?: number } = {}): Promise<LiveSession | false> {
   const inFlight = resuming.get(id);
   if (inFlight) return inFlight;
   const attempt = resumeSessionOnce(id, opts).finally(() => {
@@ -286,7 +344,7 @@ export function resumeSession(id: string, opts: { spawnTimeoutMs?: number } = {}
   return attempt;
 }
 
-async function resumeSessionOnce(id: string, opts: { spawnTimeoutMs?: number }): Promise<boolean> {
+async function resumeSessionOnce(id: string, opts: { spawnTimeoutMs?: number }): Promise<LiveSession | false> {
   const row = store.getSession(id);
   if (!row?.harness_ref) return false;
   const adapter = adapters.get(row.harness);
@@ -309,7 +367,7 @@ async function resumeSessionOnce(id: string, opts: { spawnTimeoutMs?: number }):
     }
     store.setSessionState(id, "idle");
     sink({ type: "session.state", sessionId: id, state: "idle" });
-    return true;
+    return { adapter, handle };
   } catch (err) {
     console.error(`resume failed for ${id}:`, err);
     return false;
@@ -328,8 +386,8 @@ export async function sendPrompt(
     /* dead but resumable (closed by restart, or adapter died into error) —
        the harness persisted its own session */
     if ((row.state === "closed" || row.state === "error") && row.harness_ref) {
-      const ok = await resumeSession(sessionId);
-      if (ok) s = live.get(sessionId);
+      const resumed = await resumeLiveSession(sessionId);
+      if (resumed) s = resumed;
     }
     if (!s) throw new Error(`session is ${row.state} — harness process not running`);
   }

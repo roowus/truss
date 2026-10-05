@@ -63,9 +63,9 @@ process.stdin.on("data", (c) => {
             }) + "\\n");
           }, pushAt);
         }
-        setTimeout(() => answer({ ok: true }), +(process.env.TRUSS_TEST_RESUME_DELAY || 0));
+        setTimeout(() => answer({ sessionId: sid }), +(process.env.TRUSS_TEST_RESUME_DELAY || 0));
       } else {
-        answer({ ok: true });
+        answer({ sessionId: sid });
       }
       continue;
     }
@@ -183,7 +183,7 @@ process.stdin.on("data", (c) => {
       resumes++;
       const sid = r.params && r.params.sessionId;
       setTimeout(() => {
-        answer({ ok: true });
+        answer({ sessionId: sid });
         if (resumes === 2) {
           setTimeout(() => {
             process.stdout.write(JSON.stringify({
@@ -318,7 +318,7 @@ process.stdin.on("data", (c) => {
     if (r.method === "session/resume") {
       resumes++;
       const sid = r.params && r.params.sessionId;
-      pending.push(JSON.stringify({ jsonrpc: "2.0", id: r.id, result: { ok: true } }) + "\\n");
+      pending.push(JSON.stringify({ jsonrpc: "2.0", id: r.id, result: { sessionId: sid } }) + "\\n");
       if (resumes === 1 && !flushArmed) {
         flushArmed = true;
         setTimeout(() => {

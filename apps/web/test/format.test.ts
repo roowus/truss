@@ -17,6 +17,7 @@ import {
   shortPath,
   argSummary,
   procCell,
+  deadSessionHint,
 } from "../src/lib/format";
 
 test("procCell: missing columns from a pre-upgrade node-agent render a dash, not a blank or NaN", () => {
@@ -181,4 +182,15 @@ test("argSummary: nullish, passthrough, primitives, preferred keys, truncation",
   assert.equal(out.length, 91);
   assert.ok(out.endsWith("…"));
   assert.equal(out, JSON.stringify(big).slice(0, 90) + "…");
+});
+
+test("deadSessionHint: suppressed while the error banner is up, shown when dead, never when alive", () => {
+  assert.equal(deadSessionHint(true, false, "hermes"), "Not running — sending resumes hermes with its history.");
+  assert.equal(
+    deadSessionHint(true, true, "hermes"),
+    null,
+    "the banner already says the session can't be resumed — the hint must not contradict it",
+  );
+  assert.equal(deadSessionHint(false, false, "hermes"), null);
+  assert.equal(deadSessionHint(false, true, "hermes"), null);
 });

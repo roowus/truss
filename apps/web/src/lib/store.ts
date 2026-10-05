@@ -557,11 +557,24 @@ class Store {
   /* ---------- actions ---------- */
   async createSession(body: CreateSessionBody) {
     const { session } = await this.be.createSession(body);
-    this.set((s) => ({
-      sessions: { ...s.sessions, [session.id]: session },
-      order: [session.id, ...s.order.filter((x) => x !== session.id)],
-      stateSince: { ...s.stateSince, [session.id]: Date.now() },
-    }));
+    this.set((s) => {
+      /* the POST row is read server-side before the boot pump sinks the
+         first state event, so it can carry a stale "spawning" while the
+         live idle frame already landed over the bus (warm harnesses boot
+         in under the refresh debounce). Writing the stale row back wedges
+         the composer on "Booting…" forever — no further state events come.
+         A live state already in the row always wins over the response. */
+      const prev = s.sessions[session.id];
+      const row =
+        prev && prev.state !== "spawning" && session.state === "spawning"
+          ? { ...session, state: prev.state, live: prev.live }
+          : session;
+      return {
+        sessions: { ...s.sessions, [session.id]: row },
+        order: [session.id, ...s.order.filter((x) => x !== session.id)],
+        stateSince: { ...s.stateSince, [session.id]: Date.now() },
+      };
+    });
     void this.ensureHydrated(session.id);
     return session;
   }

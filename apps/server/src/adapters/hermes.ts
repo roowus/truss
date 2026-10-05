@@ -7,6 +7,7 @@ import {
   AcpClient,
   beginAcpTurn,
   busyNote,
+  classifyAcpSettle,
   disposeAcpSession,
   handleAcpUpdate,
   makeSessionState,
@@ -119,16 +120,37 @@ export const hermesAdapter: HarnessAdapter = {
     let res: { sessionId: string; models?: HermesModelState };
     if (opts.resumeRef) {
       /* hermes-acp advertises sessionCapabilities.resume; cwd is required.
-         READ the response (issue #14): it carries the model catalog AND the
-         real session id — hermes mints a fresh one when the persisted session
-         is gone, and addressing the dead id makes every later call a whisper
-         into the void */
-      const r = (await client.call("session/resume", {
-        sessionId: opts.resumeRef,
-        cwd: opts.cwd,
-        mcpServers: [],
-      })) as { sessionId?: string; models?: HermesModelState } | null;
-      res = { sessionId: r?.sessionId ?? opts.resumeRef, models: r?.models };
+         READ the response (issue #14): it carries the model catalog and may
+         carry the real session id — hermes mints a fresh one when the
+         persisted session is gone, and addressing the dead id makes every
+         later call a whisper into the void.
+         Current hermes-acp omits the id entirely (probed live: the ACK is
+         {models, modes} for a live session AND for a dead ref it silently
+         recreates) — the real id arrives as params.sessionId of the
+         session/update frames right after. Adopt THAT id; an ACK with
+         neither id nor following update is the ghost and must fail (issue
+         #97). The watcher claims its id so two cold resumes can't both
+         adopt the first one reported. */
+      const watching = client.watchForSessionUpdate(Number(process.env.TRUSS_ACP_RESUME_WATCH_MS) || 5000);
+      try {
+        const r = (await client.call("session/resume", {
+          sessionId: opts.resumeRef,
+          cwd: opts.cwd,
+          mcpServers: [],
+        })) as { sessionId?: string; models?: HermesModelState } | null;
+        const sessionId = r?.sessionId ?? (await watching.promise);
+        if (!sessionId) {
+          throw new Error(
+            `session/resume answered without a sessionId and no session/update followed; refusing to adopt the dead ref ${opts.resumeRef}`,
+          );
+        }
+        res = { sessionId, models: r?.models };
+      } finally {
+        /* a rejected resume call must not leave the watcher armed to its
+           timeout — a late fire would hold a claim only a future onSession
+           for that id could release */
+        watching.cancel();
+      }
     } else {
       res = (await client.call("session/new", { cwd: resolveCwd(opts.cwd).cwd, mcpServers: trussMcp(opts.sessionId) })) as {
         sessionId: string;
@@ -152,6 +174,20 @@ export const hermesAdapter: HarnessAdapter = {
     h.resumed = Boolean(opts.resumeRef);
     h.onFrame = (rec) => handleServerMessage(h, rec);
     client.onSession(res.sessionId, h.onFrame);
+    /* the shared process dying strands every session it served: close the
+       queue with a terminal error so the event pump ends, the session leaves
+       `live`, and the next prompt resumes instead of writing into a dead
+       handle (issue #97). push-after-close is a no-op, so a dispose racing
+       the exit is safe. */
+    h.offProcessExit = client.onProcessExit((err) => {
+      h.queue.push({
+        type: "session.state",
+        sessionId: opts.sessionId,
+        state: "error",
+        detail: `hermes process died: ${err.message}`,
+      });
+      h.queue.close();
+    });
     h.queue.push({ type: "session.state", sessionId: opts.sessionId, state: "idle" });
     return h;
   },
@@ -178,11 +214,13 @@ export const hermesAdapter: HarnessAdapter = {
         0,
       )
       .then((result) => {
-        /* hermes settles with real per-turn usage */
+        /* hermes settles with real per-turn usage — but read the result
+           first: an instant refusal/empty settle is the ghost black hole,
+           a loud failure, never a silent 200 (issue #97) */
         const usage = (result as { usage?: { inputTokens?: number; outputTokens?: number } } | null)
           ?.usage;
         settleAcpTurn(h, {
-          ok: true,
+          ...classifyAcpSettle(h, result),
           tokensIn: usage?.inputTokens,
           tokensOut: usage?.outputTokens,
         });
