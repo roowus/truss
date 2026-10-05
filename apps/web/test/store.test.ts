@@ -441,3 +441,35 @@ test("probeEmptyCatalogs asks only when a probeable harness has an empty catalog
     store.set({ harnesses: [], models: [] });
   }
 });
+
+test("init fires the boot-time catalog probe once the harness list lands", async () => {
+  /* pins the headline wiring of the boot-probe commit: deleting the
+     probeEmptyCatalogs() call in init must fail here, not ship green and
+     silently regress to "picker visibly empty until the first dialog open"
+     (audit round 5) */
+  const s = store as unknown as {
+    init: (b: unknown) => Promise<void>;
+    probeEmptyCatalogs: () => Promise<void>;
+  };
+  let probes = 0;
+  s.probeEmptyCatalogs = async () => {
+    probes++;
+  };
+  const be = {
+    connectEvents: () => () => {},
+    harnesses: async () => ({ harnesses: [], models: [] }),
+    agents: async () => ({ agents: [] }),
+    listSessions: async () => ({ sessions: [] }),
+    listTerminals: async () => ({ terminals: [] }),
+    todos: async () => ({ todos: [] }),
+    feed: async () => ({ items: [] }),
+    hosts: async () => ({ hosts: [] }),
+  };
+  try {
+    await s.init(be);
+    assert.equal(probes, 1, "init asks once after the boot fetch");
+  } finally {
+    delete (s as Record<string, unknown>).probeEmptyCatalogs;
+    store.set({ backend: null } as never);
+  }
+});

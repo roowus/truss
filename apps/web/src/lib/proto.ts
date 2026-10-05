@@ -14,7 +14,8 @@ export interface HarnessInfo {
   id: HarnessId;
   capabilities: Capabilities;
   /** the adapter can fill an empty model catalog on request (lazy ACP
-      discovery: hermes, dsh) — the New Session dialog probes only these */
+      discovery: hermes, dsh) — the web app probes only these (at page boot;
+      the New Session dialog re-asks once per open as a fallback) */
   probeable?: boolean;
 }
 
