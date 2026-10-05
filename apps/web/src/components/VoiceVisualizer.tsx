@@ -1,7 +1,9 @@
-/* Live mic-level bars for an active dictation take (issue #112). Rides the
-   capture seam: the recorder lends its granted stream via levelStream()
-   (voice.ts), an AnalyserNode turns it into time-domain byte frames, and
-   levelBars() smooths them into bar heights.
+/* Live mic waveform for an active dictation take (issue #112) — the Voice
+   Memos / iMessage look: a strip of bars scrolling left, newest amplitude
+   at the right edge. Rides the capture seam: the recorder lends its granted
+   stream via levelStream() (voice.ts), an AnalyserNode turns it into
+   time-domain byte frames, and levelBars()/pushLevel() (voiceLevel.ts) do
+   the pure smoothing and history bookkeeping.
 
    The stream is only borrowed: the recorder releases it on stop/cancel, and
    this component tears its audio nodes down as soon as the getter reads
@@ -14,10 +16,11 @@
    would lie to the user while they speak (audit round 1, finding I2). */
 
 import { useEffect, useRef, useState, type CSSProperties } from "react";
-import { levelBars } from "@/lib/voiceLevel";
+import { levelBars, pushLevel } from "@/lib/voiceLevel";
 import type { MediaStreamLike } from "@/lib/voice";
 
-const FLOOR = 0.15; // resting bar height as a fraction — calm, not absent
+const FLOOR = 0.12; // resting bar height as a fraction — calm, not absent
+const SAMPLE_EVERY = 3; // push a history bar every Nth frame (~50ms → ~2s strip)
 
 function defaultAudioContext(): AudioContext {
   const w = window as unknown as { AudioContext?: typeof AudioContext; webkitAudioContext?: typeof AudioContext };
@@ -33,7 +36,7 @@ export function VoiceVisualizer(props: {
   createAudioContext?: () => AudioContext;
   className?: string;
 }) {
-  const bars = props.bars ?? 10;
+  const bars = props.bars ?? 40;
   const host = useRef<HTMLSpanElement>(null);
   const [live, setLive] = useState(false);
 
@@ -47,7 +50,9 @@ export function VoiceVisualizer(props: {
     let buf: Uint8Array<ArrayBuffer> | null = null;
     let attached: MediaStreamLike | null = null;
     let failed = false; // one failed attach is final — no 60fps throw/catch churn
-    let prev: number[] | undefined;
+    let prevEnv: number[] | undefined; // levelBars smoothing state (single envelope channel)
+    let history: number[] = []; // recent smoothed envelopes, newest last
+    let frame = 0;
     let raf = 0;
 
     const detach = () => {
@@ -66,16 +71,20 @@ export function VoiceVisualizer(props: {
       buf = null;
       if (attached) setLive(false);
       attached = null;
-      prev = undefined;
+      prevEnv = undefined;
+      history = [];
       const c = ctx;
       ctx = null;
       if (c) void c.close().catch(() => {});
     };
 
-    const paint = (heights: number[]) => {
+    const paint = () => {
+      /* right-align the history: empty slots on the left rest at the floor */
       const kids = el.children;
-      for (let i = 0; i < heights.length && i < kids.length; i++) {
-        (kids[i] as HTMLElement).style.transform = `scaleY(${FLOOR + heights[i] * (1 - FLOOR)})`;
+      const off = bars - history.length;
+      for (let i = 0; i < bars && i < kids.length; i++) {
+        const h = i >= off ? history[i - off] : 0;
+        (kids[i] as HTMLElement).style.transform = `scaleY(${FLOOR + (h ?? 0) * (1 - FLOOR)})`;
       }
     };
 
@@ -102,8 +111,13 @@ export function VoiceVisualizer(props: {
       }
       if (analyser && buf) {
         analyser.getByteTimeDomainData(buf);
-        prev = levelBars(buf, bars, prev);
-        paint(prev);
+        /* one smoothed envelope per frame; the strip samples it ~20×/s so
+           the scroll reads as speech, not as a 60fps blur */
+        prevEnv = levelBars(buf, 1, prevEnv);
+        if (++frame % SAMPLE_EVERY === 0) {
+          history = pushLevel(history, prevEnv[0] ?? 0, bars);
+          paint();
+        }
       }
       raf = requestAnimationFrame(tick);
     };
@@ -122,10 +136,10 @@ export function VoiceVisualizer(props: {
       ref={host}
       aria-hidden="true"
       style={live ? undefined : { display: "none" }}
-      className={props.className ?? "inline-flex items-center gap-[2px] h-3 shrink-0"}
+      className={props.className ?? "inline-flex items-center gap-[1px] h-3 shrink-0"}
     >
       {Array.from({ length: bars }, (_, i) => (
-        <span key={i} style={bar} className="block w-[2.5px] h-full rounded-full bg-current origin-center" />
+        <span key={i} style={bar} className="block w-[2px] h-full rounded-full bg-current origin-center" />
       ))}
     </span>
   );

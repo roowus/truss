@@ -118,3 +118,37 @@ test("the capture exposes the live stream for visualization — with the generat
   await starting;
   assert.equal((slow as any).levelStream?.() ?? null, null, "a stale take exposes nothing");
 });
+
+test("pushLevel: scrolling amplitude history (the Voice Memos strip)", async () => {
+  const mod = await import("../src/lib/voiceLevel.js");
+  const { pushLevel } = mod;
+
+  /* newest lands at the right edge, oldest falls off once full */
+  let h: number[] = [];
+  h = pushLevel(h, 0.5, 3);
+  h = pushLevel(h, 0.9, 3);
+  assert.deepEqual(h, [0.5, 0.9]);
+  h = pushLevel(h, 0.1, 3);
+  h = pushLevel(h, 0.7, 3);
+  assert.deepEqual(h, [0.9, 0.1, 0.7], "capped at barCount, newest last");
+
+  const before = [0.2, 0.4];
+  pushLevel(before, 0.6, 3);
+  assert.deepEqual(before, [0.2, 0.4], "input history is never mutated");
+
+  /* clamped into [0,1]; a non-finite sample reads as silence, never NaN */
+  assert.deepEqual(pushLevel([], 7, 3), [1]);
+  assert.deepEqual(pushLevel([], -2, 3), [0]);
+  const safe = pushLevel([], NaN, 3);
+  assert.ok(safe.every(Number.isFinite), "no NaN in the strip");
+  assert.deepEqual(pushLevel([0.5], 0.5, 0), [0.5].slice(1).concat(0.5).slice(0, 0), "barCount 0 keeps nothing");
+});
+
+test("levelBars with barCount 1 is the envelope the strip samples", async () => {
+  const mod = await import("../src/lib/voiceLevel.js");
+  const env = mod.levelBars(loud, 1);
+  assert.equal(env.length, 1);
+  assert.ok(env[0] > 0.8, "a loud frame's envelope reads ~1");
+  const decayed = mod.levelBars(silent, 1, env);
+  assert.ok(decayed[0] < env[0] && decayed[0] > 0.05, "the envelope glides down, feeding a smooth scroll");
+});

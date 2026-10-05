@@ -6,6 +6,7 @@ import {
   harnessStyle,
   HARNESS,
   fmtMs,
+  fmtTakeTime,
   fmtTokens,
   fmtCost,
   fmtUptime,
@@ -193,4 +194,15 @@ test("deadSessionHint: suppressed while the error banner is up, shown when dead,
   );
   assert.equal(deadSessionHint(false, false, "hermes"), null);
   assert.equal(deadSessionHint(false, true, "hermes"), null);
+});
+
+test("fmtTakeTime: recording-clock style for the dictation chip (issue #112)", () => {
+  assert.equal(fmtTakeTime(0), "0:00");
+  assert.equal(fmtTakeTime(999), "0:00", "sub-second floors, never rounds up");
+  assert.equal(fmtTakeTime(7000), "0:07");
+  assert.equal(fmtTakeTime(59_999), "0:59");
+  assert.equal(fmtTakeTime(60_000), "1:00");
+  assert.equal(fmtTakeTime(754_000), "12:34");
+  assert.equal(fmtTakeTime(-5), "0:00", "a clock skew never shows a negative");
+  assert.equal(fmtTakeTime(NaN), "0:00", "garbage in, calm zero out");
 });

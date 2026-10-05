@@ -1,7 +1,7 @@
 import { createContext, memo, useCallback, useContext, useEffect, useLayoutEffect, useRef, useState, useMemo, type ReactNode } from "react";
 import type { IDockviewPanelProps } from "dockview-react";
 import { store, useApp, useNow, capsOf, type Msg, type ToolRun, type Perm, type SessionView } from "@/lib/store";
-import { argSummary, fmtMs, harnessStyle, shortPath, baseHarness, deadSessionHint } from "@/lib/format";
+import { argSummary, fmtMs, fmtTakeTime, harnessStyle, shortPath, baseHarness, deadSessionHint } from "@/lib/format";
 import { deviceLabel } from "@/lib/device";
 import { buildModelOptions, modelValue, splitModelValue } from "@/lib/models";
 import { planHeaderFit, HEADER_CLUSTER, HEADER_GAP } from "@/lib/headerFit";
@@ -536,6 +536,12 @@ function Composer({ id, active }: { id: string; active: boolean }) {
       onState: setVoiceState,
     }));
   useEffect(() => () => voiceRef.current?.cancel(), []); // drop a live take when the panel unmounts
+  /* the take's start wall-time, for the 0:07-style clock in the chip */
+  const [voiceStart, setVoiceStart] = useState<number | null>(null);
+  useEffect(() => {
+    setVoiceStart(voiceState === "recording" ? Date.now() : null);
+  }, [voiceState]);
+  const voiceNow = useNow(500, voiceStart !== null);
   /* stable getter for the visualizer (issue #112): the stream appears once
      the mic grant lands, so the component polls rather than subscribes */
   const voiceLevelStream = useCallback(() => voiceRef.current?.levelStream() ?? null, []);
@@ -638,7 +644,7 @@ function Composer({ id, active }: { id: string; active: boolean }) {
      bars (issue #112) so the user can see the mic hears them */
   if (voiceState === "recording") {
     tone = "amber";
-    hint = <><Icon name="mic" size={12} /> <VoiceVisualizer levelStream={voiceLevelStream} /> Dictating… click the mic to finish, Esc to cancel.</>;
+    hint = <><Icon name="mic" size={12} /> <VoiceVisualizer levelStream={voiceLevelStream} /> Dictating {fmtTakeTime(voiceNow - (voiceStart ?? voiceNow))} — click the mic to finish, Esc to cancel.</>;
   } else if (voiceState === "error") {
     tone = "red";
     hint = <><Icon name="alert" size={12} /> Dictation failed: {voiceRef.current?.error() ?? "unknown error"}</>;

@@ -33,3 +33,14 @@ export function levelBars(frame: ArrayLike<number>, barCount: number, prev?: num
   }
   return out;
 }
+
+/** advance a scrolling amplitude history (the Voice Memos look): the newest
+    level lands at the right edge, the oldest falls off once the strip is
+    full. Input is never mutated; the level is clamped into [0,1]. */
+export function pushLevel(history: readonly number[], level: number, barCount: number): number[] {
+  const count = Math.max(0, Math.floor(barCount));
+  if (count === 0) return []; // no bars: the strip keeps nothing
+  const keep = history.slice(Math.max(0, history.length - count + 1));
+  keep.push(Math.min(1, Math.max(0, Number.isFinite(level) ? level : 0)));
+  return keep;
+}

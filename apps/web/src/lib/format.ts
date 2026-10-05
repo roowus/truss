@@ -17,6 +17,11 @@ export function fmtMs(ms?: number) {
   const m = Math.floor(ms / 60_000);
   return `${m}m${String(Math.round((ms % 60_000) / 1000)).padStart(2, "0")}s`;
 }
+/** recording-clock style for the dictation chip (issue #112): 0:00, 0:07, 12:34 */
+export function fmtTakeTime(ms: number) {
+  const s = Math.max(0, Math.floor((Number.isFinite(ms) ? ms : 0) / 1000));
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+}
 export function fmtTokens(n?: number) {
   if (n === undefined || n === null) return "—";
   if (n < 1000) return String(n);
