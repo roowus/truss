@@ -39,10 +39,14 @@ test("the bundled node-agent boots: no sqlite in its boot path", async (t) => {
     child.stdout.on("data", (d) => (out += d));
     child.stderr.on("data", (d) => (err += d));
     await new Promise((r) => setTimeout(r, 5000));
+    const aliveAt5s = child.exitCode === null;
     child.kill("SIGKILL");
 
-    assert.ok(!err.includes("ES module scope"), `no CJS globals evaluated in the ESM bundle — stderr: ${err.slice(0, 300)}`);
-    assert.ok(!/bindings|better.sqlite|\.node\b/i.test(err), `no native-module load attempted — stderr: ${err.slice(0, 300)}`);
+    assert.ok(
+      aliveAt5s,
+      `the agent is a daemon: healthy = still retrying the dead dial after 5s — it exited (${child.exitCode}) with stderr: ${err.slice(0, 400)}`,
+    );
+    assert.ok(!/ReferenceError|ES module scope|bindings|better.sqlite/i.test(err), `no module-load crash — stderr: ${err.slice(0, 300)}`);
     assert.ok(
       out.includes("[node-agent] host boot-test"),
       `the agent got past module init to its boot banner — stdout: ${out.slice(0, 300)} stderr: ${err.slice(0, 300)}`,

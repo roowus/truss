@@ -16,8 +16,7 @@
  * (better-sqlite3's native binding cannot bundle — the agent crashed at
  * boot on it, caught in PR #113 preview testing). The agent needs no
  * persistence — every discovery live-reports to the server — so a missing
- * store simply reads as an empty catalog. The dynamic import also keeps
- * esbuild from initializing db.js on the agent's boot path at all.
+ * store simply reads as an empty catalog.
  */
 
 interface KvStore {
@@ -26,9 +25,17 @@ interface KvStore {
 }
 
 let kvStore: KvStore | null = null;
-const storeReady: Promise<void> = import("../db.js").then(
+/* the specifier is indirect ON PURPOSE: esbuild cannot analyze it, so the
+   agent bundle keeps a runtime import (which fails on the agent — no db.js
+   ships — and the catch below reads as memory-only) instead of bundling
+   db.js + better-sqlite3. Bundling it was fatal even with a deferred,
+   caught init: bindings' failed native probe leaves a broken global
+   Error.prepareStackTrace behind, and the next error formatted (the first
+   failed dial) kills the process with a phantom __filename crash. */
+const dbSpecifier = "../db.js";
+const storeReady: Promise<void> = import(dbSpecifier).then(
   (m) => {
-    kvStore = m.store;
+    kvStore = m.store as KvStore;
   },
   () => {
     /* no database in this process (the bundled node-agent) — memory-only */
