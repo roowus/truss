@@ -18,6 +18,23 @@ for unit in $(systemctl list-units --all "truss-pr@*" --no-pager --plain 2>/dev/
     MERGED|CLOSED)
       echo "$(date -Is) reaping preview for PR $n (state ${STATE[$n]})"
       sudo -n systemctl stop "truss-pr@$n" && reaped=$((reaped+1))
+      # retitle the worker session [merged] — it is idle by now
+      SID=$(python3 -c "
+import json, sys
+try:
+    for e in json.load(open('$HOME/.local/state/truss-sessions.json')):
+        if str(e.get('pr')) == '$n': print(e['session']); break
+except Exception: pass
+" 2>/dev/null)
+      if [ -n "$SID" ]; then
+        TITLE=$(python3 -c "
+import json
+for e in json.load(open('$HOME/.local/state/truss-sessions.json')):
+    if str(e.get('pr')) == '$n':
+        print('work: #%s [merged]' % e.get('issue')); break
+")
+        curl -sS -m 5 -X POST http://127.0.0.1:3080/plugins/dsh-spawn/title           -H 'content-type: application/json'           -d "{"sessionId": "$SID", "title": "$TITLE"}" >/dev/null 2>&1 &&           echo "$(date -Is) retitled $SID -> $TITLE"
+      fi
       ;;
   esac
 done
