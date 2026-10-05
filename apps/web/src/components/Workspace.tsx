@@ -285,10 +285,11 @@ function GroupActions({ props, spaceId }: { props: IDockviewHeaderActionsProps; 
           {max ? <path d="M6 2v4H2M10 2v4h4M6 14v-4H2M10 14v-4h4" /> : <path d="M2 6V2h4M14 6V2h-4M2 10v4h4M14 10v4h-4" />}
         </svg>
       </button>
-      {/* the Chrome window X, at the group's corner: closes every tab in the
-          group in one gesture. Panel close events ride the same teardown as
-          the per-tab X (orphaned shells stop via onDidRemovePanel ->
-          cleanupTerminalLater in desktops.register). */}
+      {/* a batch tab close, at the group's corner: closes every tab in the
+          group in one gesture, each tab behaving exactly as if its own X
+          was clicked (no undo, matching the per-tab X; orphaned shells stop
+          via onDidRemovePanel -> cleanupTerminalLater in desktops.register).
+          Panel-level undo is a separate feature — see the PR discussion. */}
       <button
         className="w-6 h-6 grid place-items-center rounded text-[var(--t-dim)] hover:text-[var(--t-red)] hover:bg-white/5"
         title="Close this whole tab group"
