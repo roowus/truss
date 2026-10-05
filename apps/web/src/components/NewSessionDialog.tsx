@@ -79,7 +79,9 @@ export function NewSessionDialog({ onClose, preset }: { onClose: () => void; pre
      harness list lands, so the picker is normally filled before the dialog
      ever opens). A dialog can still see an empty probeable catalog when the
      boot fetch failed or a harness registered later — ask once per open; the
-     predicate lives in the store, and the server bounds repeats. */
+     predicate lives in the store. Repeats stay cheap: the local lazy
+     catalogs cool down for 30s (model-catalog-cache), and a remote
+     adapter's probe is one bounded tunnel ask (5s timeout, issue #123). */
   const probedRef = useRef(false);
   useEffect(() => {
     if (probedRef.current || !harnesses.length) return;

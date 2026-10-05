@@ -1,7 +1,7 @@
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { bootServer, waitFor, type TestServer } from "./server-harness.js";
-import { freshServer } from "./helpers.js";
+import { freshServer, tick } from "./helpers.js";
 
 /* SPEC-TESTS for remote model + directory discovery —
    https://github.com/roowus/truss/issues/123
@@ -102,6 +102,34 @@ async function fakeDiscoveringAgent(host: string, token: string) {
 
 before(async () => {
   srv = await bootServer("remote-discovery");
+  /* the probe trigger in these tests reaches EVERY empty probeable adapter,
+     and the real hermes/dsh probe boots a throwaway harness process (their
+     probeModels opens a session to harvest its catalog) — swap them for
+     inert fakes at the registerAdapter seam (the api-harnesses-probe
+     pattern); the assertions below only look at pi@<host> rows */
+  const sessionsMod: any = await import("../src/sessions.js");
+  for (const id of ["hermes", "dsh"]) {
+    sessionsMod.registerAdapter(id, {
+      id,
+      capabilities: { permissions: false, subagents: false, streaming: true, queueWhileRunning: false },
+      async listModels() {
+        return [];
+      },
+      async probeModels() {
+        return false;
+      },
+      async spawn(): Promise<never> {
+        throw new Error("not under test");
+      },
+      send() {},
+      interrupt() {},
+      async *events() {
+        await new Promise(() => {});
+        yield undefined as never;
+      },
+      dispose() {},
+    });
+  }
 });
 after(async () => {
   await srv.close();
@@ -116,8 +144,15 @@ test("a connected host's models reach the picker and its suggested cwd reaches t
   const hostId = created.host.id as string;
   const agent = await fakeDiscoveringAgent(hostId, created.token as string);
   try {
-    /* trigger the catalog probe the New Session dialog fires */
-    await fetch(`${srv.base}/api/harnesses/probe`, { method: "POST" });
+    /* trigger the catalog probe the New Session dialog fires — with the
+       JSON content-type the route's CSRF gate demands (a bare POST is a
+       415 and would exercise nothing; audit round 1, B2) */
+    const probe = await fetch(`${srv.base}/api/harnesses/probe`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "{}",
+    });
+    assert.equal(probe.status, 200, "the dialog's probe ask is accepted");
 
     /* the picker's catalog must carry the remote's real models */
     await waitFor(async () => {
@@ -168,32 +203,8 @@ test("a pre-discovery agent degrades to today's behavior (no suggestion, empty c
 
     /* the probe ask is answered 200 and the unanswering agent simply leaves
        its harness's catalog empty — the picker shows the bare default, as
-       today. The real hermes/dsh adapters are swapped for inert fakes first
-       (the api-harnesses-probe seam): their probe boots a real throwaway
-       harness, which this test is not about. */
-    const sessionsMod: any = await import("../src/sessions.js");
-    for (const id of ["hermes", "dsh"]) {
-      sessionsMod.registerAdapter(id, {
-        id,
-        capabilities: { permissions: false, subagents: false, streaming: true, queueWhileRunning: false },
-        async listModels() {
-          return [];
-        },
-        async probeModels() {
-          return false;
-        },
-        async spawn(): Promise<never> {
-          throw new Error("not under test");
-        },
-        send() {},
-        interrupt() {},
-        async *events() {
-          await new Promise(() => {});
-          yield undefined as never;
-        },
-        dispose() {},
-      });
-    }
+       today (hermes/dsh are the inert fakes from before(), so this ask
+       never boots a real harness) */
     const probe = await fetch(`${srv.base}/api/harnesses/probe`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -207,6 +218,54 @@ test("a pre-discovery agent degrades to today's behavior (no suggestion, empty c
     );
   } finally {
     ws.close();
+  }
+});
+
+test("the probe guards junk rows, keys the cache per adapter, and a real socket close clears it", async () => {
+  /* in-process registry drive (no server needed for these pins): capture
+     the registered RemoteAdapters and the frames the probes send */
+  const remote: any = await import("../src/remote.js");
+  const registered = new Map<string, unknown>();
+  remote.wireRemoteRegistry({
+    register: (id: string, a: unknown) => registered.set(id, a),
+    unregister: (id: string) => registered.delete(id),
+    sessionGone: () => {},
+  });
+  const frames: any[] = [];
+  const socket = { send: (s: string) => frames.push(JSON.parse(s)), close: () => {}, readyState: 1 };
+  try {
+    /* a TWO-adapter host — the per-adapter keying claim (pi@box rows must
+       never surface under claude@box) needs a host that announces both */
+    remote.agentHello(
+      "box-7",
+      "box",
+      [
+        { id: "pi", capabilities: { permissions: false, subagents: false, streaming: true, queueWhileRunning: true } },
+        { id: "claude", capabilities: { permissions: false, subagents: false, streaming: true, queueWhileRunning: true } },
+      ],
+      socket,
+      {},
+    );
+    const probes = frames.filter((f) => f.type === "models.list");
+    assert.equal(probes.length, 2, "hello kicks one catalog probe per adapter");
+    for (const p of probes) {
+      const rows =
+        p.adapterId === "pi"
+          ? [{ provider: "p", model: "m", label: "M" }, { provider: "junk" }, "nope", null]
+          : [{ provider: "c", model: "cm", label: "CM" }];
+      remote.agentFrame("box-7", { type: "models.result", reqId: p.reqId, models: rows });
+    }
+    await tick(20); // let the probe promises settle into the cache
+    assert.deepEqual(remote.hostModels("box-7", "pi"), [{ provider: "p", model: "m", label: "M" }], "rows missing provider/model/label never reach the picker");
+    assert.deepEqual(remote.hostModels("box-7", "claude"), [{ provider: "c", model: "cm", label: "CM" }], "cached per adapter — pi's rows never leak into claude@box");
+    /* a REAL socket close (not the test-facing setter) is the disconnect
+       path the picker relies on */
+    remote.agentBye("box-7", socket);
+    assert.deepEqual(remote.hostModels("box-7"), [], "a real disconnect drops the probed models");
+  } finally {
+    /* hand the registry wiring back as no-ops so nothing later in this file
+       double-registers against the map captured above */
+    remote.wireRemoteRegistry({ register: () => {}, unregister: () => {}, sessionGone: () => {} });
   }
 });
 

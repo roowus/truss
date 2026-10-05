@@ -20,7 +20,9 @@ export interface CatalogModel {
   label: string;
 }
 
-function isCatalogModel(m: unknown): m is CatalogModel {
+/* exported for the other tunnel-facing catalog consumer: remote.ts guards
+   models.result rows with the same shape check (issue #123, audit B3) */
+export function isCatalogModel(m: unknown): m is CatalogModel {
   const o = m as CatalogModel;
   return !!o && typeof o.provider === "string" && typeof o.model === "string" && typeof o.label === "string";
 }

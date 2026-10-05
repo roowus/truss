@@ -248,9 +248,13 @@ app.get("/agent/connect", { websocket: true }, (socket, req) => {
           protocol: typeof msg.protocol === "number" ? msg.protocol : undefined,
           bundleHash: typeof msg.bundleHash === "string" ? msg.bundleHash : undefined,
           /* directory discovery (issue #123) — absent from pre-probe agents,
-             which then simply carry no cwd suggestion */
+             which then simply carry no cwd suggestion. Strings only, capped
+             (audit B3): the tunnel is a trust boundary, and map(String)
+             would turn junk entries into "[object Object]" suggestions */
           home: typeof msg.home === "string" ? msg.home : undefined,
-          suggestedCwds: Array.isArray(msg.suggestedCwds) ? (msg.suggestedCwds as unknown[]).map(String) : undefined,
+          suggestedCwds: Array.isArray(msg.suggestedCwds)
+            ? msg.suggestedCwds.filter((d): d is string => typeof d === "string").slice(0, 16)
+            : undefined,
         },
       );
       /* welcome: the server's half of the handshake — the agent warns its

@@ -1,4 +1,5 @@
 import type { HarnessAdapter, AdapterHandle, SessionOpts } from "./adapters/types.js";
+import { isCatalogModel } from "./adapters/model-catalog-cache.js";
 import type { HarnessId, ProtoEvent } from "@truss/proto";
 
 /**
@@ -57,6 +58,10 @@ const pendingModelProbes = new Map<
 /** hostId → adapterId → probed catalog (issue #123). A disconnect clears the
    host's entry — the picker never offers a dead host's models. */
 const hostModelsCache = new Map<string, Map<string, ModelRow[]>>();
+/* cap on cached rows per adapter (audit B3) — far above any real catalog
+   (pi's synced models.json runs to the mid-hundreds), so it only stops a
+   buggy agent from growing the map without bound */
+const MAX_CACHED_MODELS = 1000;
 
 /**
  * The probed-models cache (issue #123). `setHostModels(host, null)` is the
@@ -470,12 +475,16 @@ export function agentFrame(hostId: string, msg: Record<string, unknown>) {
     }
     case "models.result": {
       /* a probe answer (issue #123) — resolve the waiting probeModels; an
-         unknown reqId (late answer after timeout/bye) drops harmlessly */
-      const { reqId, models } = msg as { reqId: string; models?: ModelRow[] };
+         unknown reqId (late answer after timeout/bye) drops harmlessly.
+         Rows are shape-guarded and capped (audit B3): the tunnel is a trust
+         boundary, and a buggy agent must not put junk rows into the picker
+         (a row missing `label` renders "undefined/undefined") or bloat the
+         cache without bound. */
+      const { reqId, models } = msg as { reqId: string; models?: unknown };
       const pending = pendingModelProbes.get(reqId);
       if (pending) {
         pendingModelProbes.delete(reqId);
-        pending.res(Array.isArray(models) ? models : []);
+        pending.res(Array.isArray(models) ? models.filter(isCatalogModel).slice(0, MAX_CACHED_MODELS) : []);
       }
       return;
     }
