@@ -1,7 +1,7 @@
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { bootServer, waitFor, type TestServer } from "./server-harness.js";
-import { freshServer, tick } from "./helpers.js";
+import { freshServer } from "./helpers.js";
 
 /* SPEC-TESTS for remote model + directory discovery —
    https://github.com/roowus/truss/issues/123
@@ -221,53 +221,12 @@ test("a pre-discovery agent degrades to today's behavior (no suggestion, empty c
   }
 });
 
-test("the probe guards junk rows, keys the cache per adapter, and a real socket close clears it", async () => {
-  /* in-process registry drive (no server needed for these pins): capture
-     the registered RemoteAdapters and the frames the probes send */
-  const remote: any = await import("../src/remote.js");
-  const registered = new Map<string, unknown>();
-  remote.wireRemoteRegistry({
-    register: (id: string, a: unknown) => registered.set(id, a),
-    unregister: (id: string) => registered.delete(id),
-    sessionGone: () => {},
-  });
-  const frames: any[] = [];
-  const socket = { send: (s: string) => frames.push(JSON.parse(s)), close: () => {}, readyState: 1 };
-  try {
-    /* a TWO-adapter host — the per-adapter keying claim (pi@box rows must
-       never surface under claude@box) needs a host that announces both */
-    remote.agentHello(
-      "box-7",
-      "box",
-      [
-        { id: "pi", capabilities: { permissions: false, subagents: false, streaming: true, queueWhileRunning: true } },
-        { id: "claude", capabilities: { permissions: false, subagents: false, streaming: true, queueWhileRunning: true } },
-      ],
-      socket,
-      {},
-    );
-    const probes = frames.filter((f) => f.type === "models.list");
-    assert.equal(probes.length, 2, "hello kicks one catalog probe per adapter");
-    for (const p of probes) {
-      const rows =
-        p.adapterId === "pi"
-          ? [{ provider: "p", model: "m", label: "M" }, { provider: "junk" }, "nope", null]
-          : [{ provider: "c", model: "cm", label: "CM" }];
-      remote.agentFrame("box-7", { type: "models.result", reqId: p.reqId, models: rows });
-    }
-    await tick(20); // let the probe promises settle into the cache
-    assert.deepEqual(remote.hostModels("box-7", "pi"), [{ provider: "p", model: "m", label: "M" }], "rows missing provider/model/label never reach the picker");
-    assert.deepEqual(remote.hostModels("box-7", "claude"), [{ provider: "c", model: "cm", label: "CM" }], "cached per adapter — pi's rows never leak into claude@box");
-    /* a REAL socket close (not the test-facing setter) is the disconnect
-       path the picker relies on */
-    remote.agentBye("box-7", socket);
-    assert.deepEqual(remote.hostModels("box-7"), [], "a real disconnect drops the probed models");
-  } finally {
-    /* hand the registry wiring back as no-ops so nothing later in this file
-       double-registers against the map captured above */
-    remote.wireRemoteRegistry({ register: () => {}, unregister: () => {}, sessionGone: () => {} });
-  }
-});
+/* NOTE: the guards/keying/real-close pins live in their own file
+   (remote-discovery-guards.test.ts) — they rewire remote.ts's module-global
+   registry callbacks for capture, and in THIS file's process (which boots
+   the real server) that clobber would silently break any live-loop test
+   appended after them (audit round 2, B1). Own file, own process, the
+   clobber dies with it. */
 
 test("an offline host's probed models drop out of the catalog (no stale offers)", async () => {
   const { cleanup } = await freshServer("discovery-pure");
