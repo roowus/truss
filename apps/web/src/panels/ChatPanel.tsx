@@ -9,6 +9,7 @@ import { planHeaderFit, HEADER_CLUSTER, HEADER_GAP } from "@/lib/headerFit";
 import { CHAT_WIDTH_DEFAULT, chatHandleGeometry, commitChatWidth, dragDisplayWidth, readChatWidthPref, resolveChatWidth, writeChatWidthPref } from "@/lib/chatWidth";
 import { filesFromTransfer, isFileDrag } from "@/lib/attach";
 import { formatSessionRef } from "@/lib/sessionRef";
+import { resumeCommand } from "@/lib/resumeCommand";
 import { RAIL_INSET, activeRailIndex, railIndexAtOffset, railMarkTop, railNaturalHeight, turnRailItems } from "@/lib/turnRail";
 import { createBrowserVoiceInput, appendTranscript } from "@/lib/voice";
 import type { VoiceController, VoiceState } from "@/lib/voiceInput";
@@ -105,6 +106,12 @@ function ChatHeader({ id }: { id: string }) {
   const hostId = meta.harness.includes("@") ? meta.harness.split("@")[1] : undefined;
   const device = deviceLabel(meta.harness, hosts, aliases);
 
+  /* the harness-native resume hint (issue #131): the visible id is truss's;
+     the harness's own CLI wants its harness_ref — surfaced here, copyable,
+     with the host named when the session runs remotely */
+  const resumeCmd = resumeCommand(meta.harness, meta.harness_ref);
+  const resumeBase = baseHarness(meta.harness);
+
   /* model picker: the catalog lists base harnesses; remote sessions share
      the base harness's catalog */
   const currentValue = modelValue(meta.provider, meta.model);
@@ -176,7 +183,7 @@ function ChatHeader({ id }: { id: string }) {
       {menu && (
         <>
           <div className="fixed inset-0 z-40" onClick={() => setMenu(false)} />
-          <div className="absolute right-2 top-[42px] z-50 w-52 rounded-lg bg-[var(--t-bg2)] border border-[var(--t-line2)] shadow-2xl py-1 t-pop">
+          <div className="absolute right-2 top-[42px] z-50 w-64 rounded-lg bg-[var(--t-bg2)] border border-[var(--t-line2)] shadow-2xl py-1 t-pop">
             {plan.overflow.includes("select") && (
               <div className="px-2 py-1.5" onClick={(e) => e.stopPropagation()}>
                 <Select
@@ -220,9 +227,48 @@ function ChatHeader({ id }: { id: string }) {
               <Icon name="clip" size={13} className="text-[var(--t-mute)]" />
               Copy reference
             </button>
-            <div className="px-3 py-1.5 text-[11px] text-[var(--t-dim)] leading-relaxed break-all">
-              <span className="font-mono text-[var(--t-mute)]">{formatSessionRef(meta, hosts)}</span><br />
-              {harnessName}{meta.model && ` · ${meta.model}`}<br />{shortPath(meta.cwd)}
+            {resumeCmd && (
+              <button
+                onClick={() => {
+                  void navigator.clipboard.writeText(resumeCmd);
+                  store.toast("ok", "Resume command copied", resumeCmd);
+                  setMenu(false);
+                }}
+                className="w-full flex items-center gap-2.5 px-3 h-8 text-left text-[12.5px] text-[var(--t-fg2)] hover:bg-white/[0.05]"
+                title={`Copy the command that resumes this session in ${resumeBase}'s own CLI — run it on ${hostId ? device : "this server"}`}
+              >
+                <Icon name="term" size={13} className="text-[var(--t-mute)]" />
+                Resume in {resumeBase}'s CLI{hostId ? ` on ${device}` : ""}
+              </button>
+            )}
+            <div className="px-3 py-1.5 text-[11px] leading-relaxed">
+              {/* the all-ids dump, displayed: every id we hold, labeled, full
+                  cwd — labels mirror issue #132's PROPOSED dump format; its
+                  copyable half ("Copy full details") is #132's own to land */}
+              <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-2.5 gap-y-0.5 font-mono">
+                <dt className="text-[var(--t-dim)]">truss</dt>
+                <dd className="text-[var(--t-mute)] break-all">{meta.id}</dd>
+                {meta.harness_ref && (
+                  <>
+                    <dt className="text-[var(--t-dim)]">{resumeBase} session</dt>
+                    <dd className="text-[var(--t-mute)] break-all">{meta.harness_ref}</dd>
+                  </>
+                )}
+                {hostId && (
+                  <>
+                    <dt className="text-[var(--t-dim)]">host</dt>
+                    <dd className="text-[var(--t-mute)] break-all">{hostId}</dd>
+                  </>
+                )}
+                <dt className="text-[var(--t-dim)]">cwd</dt>
+                <dd className="text-[var(--t-mute)] break-all">{meta.cwd}</dd>
+                {resumeCmd && (
+                  <>
+                    <dt className="text-[var(--t-dim)]">resume</dt>
+                    <dd className="text-[var(--t-mute)] break-all">{resumeCmd}</dd>
+                  </>
+                )}
+              </dl>
             </div>
           </div>
         </>
