@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { store, useApp } from "@/lib/store";
 import { useDesktops } from "@/lib/desktops";
 import { harnessStyle, hostOf, shortPath } from "@/lib/format";
-import { resolveDefaultCwd, hostDefaultFor } from "@/lib/cwdDefault";
+import { resolveDefaultCwd, hostDefaultFor, hostSuggestedFor } from "@/lib/cwdDefault";
 import type { BrowseDir } from "@/lib/proto";
 import { openPanel, openSession } from "@/lib/workspace";
 import { Btn, HarnessMark, Icon, Kbd, Select, Spinner } from "./ui";
@@ -34,7 +34,9 @@ export function NewSessionDialog({ onClose, preset }: { onClose: () => void; pre
   const [project, setProject] = useState(preset?.project ?? sessions[order[0]]?.project ?? "");
 
   /* The default working directory follows the named precedence
-     (preset > picked host > Settings > most recent) and re-resolves as the
+     (preset > picked host's pref > host's own suggestion > Settings >
+     most recent — issue #123 added the remote's hello-announced suggestion
+     between the pref and this machine's defaults) and re-resolves as the
      harness pick, host prefs, and settings load — until the user types or
      picks a directory themselves, which marks the field as theirs.
 
@@ -54,6 +56,7 @@ export function NewSessionDialog({ onClose, preset }: { onClose: () => void; pre
     const next = resolveDefaultCwd({
       preset: preset?.cwd,
       hostDefault: hostDefaultFor(harness, hostPrefs, hosts),
+      hostSuggested: hostSuggestedFor(harness, hosts),
       settingsDefault: defaultCwd,
       recent: recentSnapshot.current,
     });
@@ -235,7 +238,7 @@ export function NewSessionDialog({ onClose, preset }: { onClose: () => void; pre
           </div>
           {remoteHost && (
             <div className="-mt-3 text-[11px] text-[var(--t-dim)] flex items-center gap-1.5">
-              <Icon name="host" size={11} /> Directory browsing runs on this server. For @{remoteHost}, the host default from the Hosts panel is prefilled above.
+              <Icon name="host" size={11} /> Directory browsing runs on this server. For @{remoteHost}, the host's own suggested directory is prefilled above (a Hosts panel default, when set, still wins).
             </div>
           )}
           {recentCwds.length > 0 && (

@@ -293,11 +293,12 @@ class Store {
 
   /**
    * Ask the server to probe probeable harnesses whose catalog is empty
-   * (first boot on a fresh server, issue #101). Harnesses with a
-   * legitimately empty catalog (pi without models.json, remote adapters) are
-   * not probeable, so the ask never fires on their account. The probe runs
-   * server-side in the background; the filled catalog lands via the
-   * models.updated broadcast and a refetch.
+   * (first boot on a fresh server, issue #101). Since issue #123 that
+   * includes remote adapters — their probe tunnels a models.list to the
+   * agent and caches the answer. Harnesses with a legitimately empty
+   * catalog (pi without models.json) are not probeable, so the ask never
+   * fires on their account. The probe runs server-side in the background;
+   * the filled catalog lands via the models.updated broadcast and a refetch.
    */
   async probeEmptyCatalogs() {
     const { harnesses, models } = this.state;

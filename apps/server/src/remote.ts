@@ -25,7 +25,15 @@ interface AgentInfo {
      bundle is finally visible (installed agents never auto-update) */
   protocol?: number;
   bundleHash?: string;
+  /** directory discovery (issue #123): announced at hello — the remote's
+     home and its existing projects-family dirs. Old agents send neither and
+     degrade to today's behavior (no cwd suggestion). */
+  home?: string;
+  suggestedCwds?: string[];
 }
+
+/** one model a harness offers — the listModels row shape (adapters/types) */
+type ModelRow = { provider: string; model: string; label: string };
 
 interface RemoteHandle extends AdapterHandle {
   hostId: string;
@@ -40,6 +48,44 @@ const queueHost = new Map<string, string>();
 const pendingSpawns = new Map<string, { hostId: string; res: (ok: boolean, error?: string) => void; timer: ReturnType<typeof setTimeout> }>();
 /** reqId → metrics resolver (Monitor tab polls through the tunnel) */
 const pendingMetrics = new Map<string, { hostId: string; res: (m: unknown) => void }>();
+/** reqId → models-probe resolver (issue #123): the reqId correlation pattern
+   from spawn acks, reused for the tunnel's models.list → models.result */
+const pendingModelProbes = new Map<
+  string,
+  { hostId: string; timer: ReturnType<typeof setTimeout>; res: (models: ModelRow[] | null) => void }
+>();
+/** hostId → adapterId → probed catalog (issue #123). A disconnect clears the
+   host's entry — the picker never offers a dead host's models. */
+const hostModelsCache = new Map<string, Map<string, ModelRow[]>>();
+
+/**
+ * The probed-models cache (issue #123). `setHostModels(host, null)` is the
+ * disconnect path: the whole host entry goes. Without an adapterId the set
+ * writes the host-wide ("*") slot — the test-facing form; the tunnel probe
+ * always keys by adapter so one harness's catalog never leaks into a
+ * sibling's (`pi@box` rows never surface under `claude@box`).
+ */
+export function setHostModels(hostId: string, models: ModelRow[] | null, adapterId?: string) {
+  if (models === null) {
+    hostModelsCache.delete(hostId);
+    return;
+  }
+  let per = hostModelsCache.get(hostId);
+  if (!per) {
+    per = new Map();
+    hostModelsCache.set(hostId, per);
+  }
+  per.set(adapterId ?? "*", models);
+}
+
+/** the cached catalog: per adapter when asked, flattened across adapters otherwise */
+export function hostModels(hostId: string, adapterId?: string): ModelRow[] {
+  const per = hostModelsCache.get(hostId);
+  if (!per) return [];
+  if (adapterId !== undefined) return per.get(adapterId) ?? [];
+  return [...per.values()].flat();
+}
+
 let reqCounter = 0;
 
 type RegisterFn = (id: HarnessId, adapter: HarnessAdapter) => void;
@@ -49,17 +95,22 @@ let stateSink: ((sessionId: string, detail: string) => void) | null = null;
 /* fired once per hello/bye/drop — open clients refetch the tunnel roster
    instead of rendering a stale one (issue #100 manual test) */
 let registrySink: (() => void) | null = null;
+/* fired when a tunnel probe fills a harness's catalog (issue #123) — open
+   pickers refetch, same contract as sessions.listModels' probe broadcast */
+let modelsSink: ((harness: string) => void) | null = null;
 
 export function wireRemoteRegistry(fns: {
   register: RegisterFn;
   unregister: (id: HarnessId) => void;
   sessionGone: (sessionId: string, detail: string) => void;
   registryChanged?: () => void;
+  modelsChanged?: (harness: string) => void;
 }) {
   registerFn = fns.register;
   unregisterFn = fns.unregister;
   stateSink = fns.sessionGone;
   registrySink = fns.registryChanged ?? null;
+  modelsSink = fns.modelsChanged ?? null;
 }
 
 class AsyncQueue<T> {
@@ -101,8 +152,44 @@ class RemoteAdapter implements HarnessAdapter {
     this.capabilities = caps;
   }
 
+  /* the catalog is whatever the last tunnel probe brought back (issue #123)
+     — empty until the agent answers a models.list, cleared when the host
+     drops, so the picker never offers a dead host's models */
   async listModels() {
-    return []; // remote model pickers come from the host's own config — v2
+    return hostModels(this.hostId, this.adapterId);
+  }
+
+  /**
+   * Ask the agent over the tunnel what this adapter can offer (issue #123).
+   * Rides the same trigger as the other lazy catalogs (POST
+   * /api/harnesses/probe → sessions.listModels({ probe: true })) and also
+   * fires once per hello so a freshly connected host fills in without
+   * waiting for a dialog. Resolves true when the catalog changed; an agent
+   * that predates the probe never answers and times out to false — old
+   * agents degrade to today's bare default, no crash.
+   */
+  async probeModels(): Promise<boolean> {
+    const agent = agents.get(this.hostId);
+    if (!agent || (agent.socket.readyState !== undefined && agent.socket.readyState !== 1)) return false;
+    const reqId = `models-${++reqCounter}`;
+    const models = await new Promise<ModelRow[] | null>((res) => {
+      const timer = setTimeout(() => {
+        if (pendingModelProbes.delete(reqId)) res(null); // pre-probe agent — no answer coming
+      }, 5000);
+      pendingModelProbes.set(reqId, {
+        hostId: this.hostId,
+        timer,
+        res: (m) => {
+          clearTimeout(timer);
+          res(m);
+        },
+      });
+      agent.socket.send(JSON.stringify({ type: "models.list", reqId, adapterId: this.adapterId }));
+    });
+    if (!models) return false;
+    const before = hostModels(this.hostId, this.adapterId);
+    setHostModels(this.hostId, models, this.adapterId);
+    return JSON.stringify(before) !== JSON.stringify(models);
   }
 
   async spawn(opts: SessionOpts): Promise<RemoteHandle> {
@@ -208,13 +295,34 @@ export function agentHello(
   hostname: string,
   adapterList: { id: string; capabilities: HarnessAdapter["capabilities"] }[],
   socket: AgentInfo["socket"],
-  meta: { sessions?: string[]; protocol?: number; bundleHash?: string } = {},
+  meta: { sessions?: string[]; protocol?: number; bundleHash?: string; home?: string; suggestedCwds?: string[] } = {},
 ) {
   const existing = agents.get(hostId);
   if (existing) agentBye(hostId, existing.socket);
-  agents.set(hostId, { hostId, hostname, socket, adapters: adapterList, protocol: meta.protocol, bundleHash: meta.bundleHash });
+  agents.set(hostId, {
+    hostId,
+    hostname,
+    socket,
+    adapters: adapterList,
+    protocol: meta.protocol,
+    bundleHash: meta.bundleHash,
+    home: meta.home,
+    suggestedCwds: meta.suggestedCwds,
+  });
   for (const a of adapterList) {
-    registerFn?.(`${a.id}@${hostId}` as HarnessId, new RemoteAdapter(hostId, a.id, a.capabilities));
+    const adapter = new RemoteAdapter(hostId, a.id, a.capabilities);
+    registerFn?.(`${a.id}@${hostId}` as HarnessId, adapter);
+    /* fill the catalog right at hello (issue #123): the picker's probe ask
+       is deliberately gated behind a JSON content-type (CSRF hardening), so
+       waiting for it would leave a connected host model-less until someone
+       opens the dialog. Background, never in the hello's path; a pre-probe
+       agent just times out and stays at the bare default. */
+    void adapter.probeModels().then(
+      (changed) => {
+        if (changed) modelsSink?.(`${a.id}@${hostId}`);
+      },
+      () => undefined,
+    );
   }
 
   /* Reconcile (issue #100, item 7): a blip is no longer total session loss.
@@ -282,6 +390,15 @@ export function agentBye(hostId: string, socket?: AgentInfo["socket"]) {
     if (p.hostId !== hostId) continue;
     pendingMetrics.delete(reqId);
     p.res({ error: `node-agent ${hostId} disconnected` });
+  }
+  /* the probed catalog dies with the tunnel (issue #123): no stale offers
+     from a host that is gone. In-flight probes resolve empty instead of
+     waiting out their timeout. */
+  setHostModels(hostId, null);
+  for (const [reqId, p] of pendingModelProbes) {
+    if (p.hostId !== hostId) continue;
+    pendingModelProbes.delete(reqId);
+    p.res(null);
   }
   /* protocol-1 agents dispose every harness at close and hello with no
      session list — their sessions can never reattach, so waiting for the
@@ -351,6 +468,17 @@ export function agentFrame(hostId: string, msg: Record<string, unknown>) {
       }
       return;
     }
+    case "models.result": {
+      /* a probe answer (issue #123) — resolve the waiting probeModels; an
+         unknown reqId (late answer after timeout/bye) drops harmlessly */
+      const { reqId, models } = msg as { reqId: string; models?: ModelRow[] };
+      const pending = pendingModelProbes.get(reqId);
+      if (pending) {
+        pendingModelProbes.delete(reqId);
+        pending.res(Array.isArray(models) ? models : []);
+      }
+      return;
+    }
     default:
       return;
   }
@@ -383,5 +511,11 @@ export function listAgents() {
     adapters: a.adapters.map((x) => x.id),
     protocol: a.protocol,
     bundleHash: a.bundleHash,
+    /* directory discovery (issue #123): home as announced, and the ONE
+       suggestion the New Session dialog prefills — the first
+       projects-family dir when the agent found one, else home. Old agents
+       announce neither and simply carry no suggestion. */
+    home: a.home,
+    suggestedCwd: a.suggestedCwds?.find((d) => d !== a.home) ?? a.home,
   }));
 }

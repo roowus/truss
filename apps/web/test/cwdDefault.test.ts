@@ -102,3 +102,63 @@ test("hostDefaultFor: local harnesses and unknown hosts give no default", async 
   assert.equal(mod.hostDefaultFor("dsh@nowhere", prefs, hosts), "", "unknown host");
   assert.equal(mod.hostDefaultFor("dsh@box-1", {}, hosts), "", "host known but no pref stored");
 });
+
+/* issue #123: the host's OWN suggestion (hello-announced, e.g. ~/projects on
+   the remote) slots between the user-set host pref and the global default */
+
+interface CwdDefault117Module extends CwdDefaultModule {
+  resolveDefaultCwd(input: {
+    preset?: string;
+    hostDefault?: string;
+    hostSuggested?: string;
+    settingsDefault?: string;
+    recent?: string;
+  }): string;
+}
+
+test("precedence with the host's suggestion: preset > host pref > host suggestion > settings > recent", async () => {
+  const spec = "../src/lib/cwdDefault";
+  const mod = (await import(spec).catch(() => null)) as CwdDefault117Module | null;
+  assert.ok(mod, "cwdDefault module must exist (see module test)");
+  const all = { preset: "/p", hostDefault: "/h", hostSuggested: "/hs", settingsDefault: "/s", recent: "/r" };
+
+  assert.equal(mod.resolveDefaultCwd(all), "/p", "preset still wins everything");
+  assert.equal(mod.resolveDefaultCwd({ ...all, preset: undefined }), "/h", "the user-set host pref beats the suggestion");
+  assert.equal(mod.resolveDefaultCwd({ ...all, preset: undefined, hostDefault: undefined }), "/hs", "the remote's own suggestion beats this machine's defaults (the #117 complaint)");
+  assert.equal(mod.resolveDefaultCwd({ preset: undefined, hostDefault: undefined, hostSuggested: undefined, settingsDefault: "/s", recent: "/r" }), "/s", "no suggestion → the old chain intact");
+  assert.equal(
+    mod.resolveDefaultCwd({ hostSuggested: "   ", settingsDefault: "/s", recent: "/r" }),
+    "/s",
+    "a blank suggestion never wins",
+  );
+});
+
+/* issue #123, companion to the contract above: hostSuggestedFor resolves the
+   picked harness's @host suffix to the host record's agent.suggestedCwd —
+   the same registry walk hostDefaultFor uses */
+
+interface CwdSuggestedModule extends CwdDefaultModule {
+  hostSuggestedFor(harnessId: string, hosts?: { id: string; agent?: { hostname?: string; suggestedCwd?: string } }[]): string;
+}
+
+test("hostSuggestedFor: the host's announced suggestion resolves by id, hostname, or short hostname", async () => {
+  const spec = "../src/lib/cwdDefault";
+  const mod = (await import(spec).catch(() => null)) as CwdSuggestedModule | null;
+  assert.ok(mod, "cwdDefault module must exist (see module test)");
+  const hosts = [{ id: "box-1", agent: { hostname: "devbox.lan", suggestedCwd: "/home/dev/projects" } }];
+
+  assert.equal(mod.hostSuggestedFor("pi@box-1", hosts), "/home/dev/projects", "the real id shape (adapterId@hostId)");
+  assert.equal(mod.hostSuggestedFor("pi@devbox.lan", hosts), "/home/dev/projects", "full hostname suffix");
+  assert.equal(mod.hostSuggestedFor("pi@devbox", hosts), "/home/dev/projects", "short hostname suffix");
+});
+
+test("hostSuggestedFor: local harnesses, unknown hosts, and pre-discovery agents suggest nothing", async () => {
+  const spec = "../src/lib/cwdDefault";
+  const mod = (await import(spec).catch(() => null)) as CwdSuggestedModule | null;
+  assert.ok(mod, "cwdDefault module must exist (see module test)");
+  const oldAgent = [{ id: "box-2", agent: { hostname: "oldbox" } }];
+
+  assert.equal(mod.hostSuggestedFor("dsh", oldAgent), "", "no @host suffix — a local harness has no suggestion");
+  assert.equal(mod.hostSuggestedFor("dsh@nowhere", oldAgent), "", "unknown host");
+  assert.equal(mod.hostSuggestedFor("pi@box-2", oldAgent), "", "a pre-discovery agent carries no suggestion (graceful degradation)");
+});

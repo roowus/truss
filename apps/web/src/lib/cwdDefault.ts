@@ -6,19 +6,23 @@
  * panel) never won.
  *
  * Order: an explicit preset (task board, "new session here") beats
- * everything; then the picked host's own default; then the global Settings
+ * everything; then the picked host's own default; then the host's OWN
+ * suggestion (issue #123 — the remote announces its home + existing
+ * projects-family dirs at hello, so a remote pick prefills a directory that
+ * exists THERE, not this machine's idea of one); then the global Settings
  * default; then the most recent session's cwd; else blank. Blank or
  * whitespace-only candidates never win — they fall through.
  */
 export interface CwdDefaultInput {
   preset?: string;
   hostDefault?: string;
+  hostSuggested?: string;
   settingsDefault?: string;
   recent?: string;
 }
 
 export function resolveDefaultCwd(input: CwdDefaultInput): string {
-  for (const candidate of [input.preset, input.hostDefault, input.settingsDefault, input.recent]) {
+  for (const candidate of [input.preset, input.hostDefault, input.hostSuggested, input.settingsDefault, input.recent]) {
     if (typeof candidate === "string" && candidate.trim()) return candidate.trim();
   }
   return "";
@@ -32,7 +36,7 @@ export interface HostPrefLike {
 }
 export interface HostLike {
   id: string;
-  agent?: { hostname?: string };
+  agent?: { hostname?: string; suggestedCwd?: string };
 }
 
 /**
@@ -50,4 +54,20 @@ export function hostDefaultFor(harnessId: string, prefs: Record<string, HostPref
   if (direct) return direct;
   const host = hosts.find((h) => h.id === suffix || h.agent?.hostname === suffix || h.agent?.hostname?.split(".")[0] === suffix);
   return (host && prefs[host.id]?.defaultCwd) || "";
+}
+
+/**
+ * The picked host's OWN suggestion (issue #123): what the remote's agent
+ * announced at hello (a projects-family dir when one exists there, else its
+ * home). Same suffix resolution as hostDefaultFor; "" for local harnesses,
+ * unknown hosts, and pre-discovery agents (which carry no suggestion — the
+ * chain then falls through to this machine's defaults, today's behavior).
+ */
+export function hostSuggestedFor(harnessId: string, hosts: HostLike[] = []): string {
+  const at = harnessId.indexOf("@");
+  if (at < 0) return "";
+  const suffix = harnessId.slice(at + 1);
+  if (!suffix) return "";
+  const host = hosts.find((h) => h.id === suffix || h.agent?.hostname === suffix || h.agent?.hostname?.split(".")[0] === suffix);
+  return host?.agent?.suggestedCwd ?? "";
 }
