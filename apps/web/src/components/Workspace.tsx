@@ -323,7 +323,13 @@ const DesktopCanvas = memo(function DesktopCanvas({ id, visible }: { id: string;
   const contextMenu = useCallback(({ panel }: GetTabContextMenuItemsParams): (BuiltInContextMenuItem | ReactContextMenuItemConfig)[] => {
     const others = desktops.state.spaces.filter((s) => s.id !== id);
     return [
-      "close", "closeOthers", "separator",
+      "close",
+      /* the batch close goes through the undo stack as ONE entry, matching
+         the group-corner X (built-in closeOthers would record N singles) */
+      ...(panel.group
+        ? [{ label: "Close Others", action: () => desktops.closeGroup(id, panel.group.panels.filter((p) => p.id !== panel.id)) }]
+        : ["closeOthers" as const]),
+      "separator",
       ...others.map((space) => ({ label: `Copy to ${space.name}`, action: () => desktops.transferPanel(id, panel.id, space.id) })),
       ...(others.length ? ["separator" as const] : []),
       ...others.map((space) => ({ label: `Move to ${space.name}`, action: () => desktops.transferPanel(id, panel.id, space.id, true) })),

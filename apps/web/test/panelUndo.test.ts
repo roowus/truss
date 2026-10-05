@@ -5,9 +5,11 @@ import {
   freshPanels,
   isUndoablePanel,
   panelDescriptor,
+  panelsEntry,
   popClosed,
   pushClosed,
   restoreSpaceId,
+  suppressionKey,
   type ClosedEntry,
   type PanelDescriptor,
 } from "../src/lib/workspaceClose";
@@ -73,10 +75,11 @@ test("one mixed LIFO stack: tabs, groups, and workspaces interleave, most recent
   assert.equal(third?.snapshot.type, "workspace", "the workspace close sits under both tab closes");
   assert.equal(popClosed(third!.rest), null);
 
-  /* the cap bounds the mixed stack as a whole */
+  /* the cap bounds the mixed stack as a whole (25 — Chrome's neighborhood,
+     revisited when tab closes joined the stack) */
   let big: ClosedEntry[] = [];
-  for (let i = 0; i < 10; i++) big = pushClosed(big, { type: "panels", spaceId: "main", panels: [descriptor(`chat:s${i}`)], at: i });
-  assert.ok(big.length <= 5, `bounded (got ${big.length})`);
+  for (let i = 0; i < 30; i++) big = pushClosed(big, { type: "panels", spaceId: "main", panels: [descriptor(`chat:s${i}`)], at: i });
+  assert.ok(big.length <= 25, `bounded (got ${big.length})`);
 });
 
 test("describeClosed names the palette/chord target for each entry kind", () => {
@@ -107,4 +110,35 @@ test("freshPanels: tabs the user already re-opened by hand are skipped, order ke
   assert.deepEqual(freshPanels(panels, exists).map((p) => p.id), ["chat:s1", "tasks:s1"]);
   assert.deepEqual(freshPanels(panels, () => true), [], "all alive → nothing to re-add");
   assert.deepEqual(freshPanels([], () => false), []);
+});
+
+/* PR #128 audit round 1, B3: pin the extracted seam the DOM-coupled wiring
+   (desktops.recordPanelClose / closeGroup) is built on — the same pattern as
+   terminalIdsInLayout for teardown. */
+
+test("panelsEntry: a close gesture becomes ONE entry; machinery-only gestures vanish", () => {
+  const panel = (id: string, title = id) => ({
+    id,
+    title,
+    params: { sessionId: "s1" },
+    toJSON: () => ({ contentComponent: id.split(":")[0], tabComponent: "truss" }),
+  });
+
+  const single = panelsEntry("main", [panel("chat:s1", "Chat")], 42);
+  assert.equal(single?.type, "panels");
+  assert.equal(single?.spaceId, "main");
+  assert.equal(single?.at, 42);
+  assert.deepEqual(single?.panels.map((p) => p.id), ["chat:s1"]);
+
+  const group = panelsEntry("desk-2", [panel("chat:s1"), panel("welcome"), panel("git:s1")], 7);
+  assert.deepEqual(group?.panels.map((p) => p.id), ["chat:s1", "git:s1"], "welcome is filtered out of a group close");
+
+  assert.equal(panelsEntry("main", [panel("welcome")], 1), null, "a gesture that closes only machinery leaves NO phantom undo");
+  assert.equal(panelsEntry("main", [], 1), null);
+});
+
+test("suppressionKey: the workspace scopes the key (panel ids repeat across workspaces)", () => {
+  assert.notEqual(suppressionKey("main", "chat:s1"), suppressionKey("desk-2", "chat:s1"));
+  assert.equal(suppressionKey("main", "chat:s1"), suppressionKey("main", "chat:s1"));
+  assert.ok(suppressionKey("main", "terminal:abc").includes("terminal:abc"));
 });

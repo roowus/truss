@@ -72,6 +72,22 @@ export function isUndoablePanel(id: string): boolean {
   return id !== "welcome";
 }
 
+/** Key for the suppression set in desktops.ts — panel ids repeat across workspaces, so the workspace scopes the key. */
+export function suppressionKey(spaceId: string, panelId: string): string {
+  return `${spaceId}\n${panelId}`;
+}
+
+/**
+ * Build the undo entry for a close gesture (one tab's X, a group X, "close
+ * others"), or null when nothing in it is user-closable — a gesture that
+ * closes only machinery (welcome) leaves no phantom undo behind.
+ */
+export function panelsEntry(spaceId: string, panels: PanelLike[], at: number): ClosedPanels | null {
+  const undoable = panels.filter((p) => isUndoablePanel(p.id));
+  if (!undoable.length) return null;
+  return { type: "panels", spaceId, panels: undoable.map(panelDescriptor), at };
+}
+
 /** The palette/chord label for the entry reopenClosed() would restore. */
 export function describeClosed(entry: ClosedEntry): string {
   if (entry.type === "workspace") return `Reopen closed workspace: ${entry.name}`;
@@ -127,12 +143,15 @@ const chord = (e: ChordEvent, key: string) =>
 /** Cmd/Ctrl+Shift+W closes the active workspace. Plain Cmd+W stays the tab close. */
 export const isCloseWindowChord = (e: ChordEvent) => chord(e, "w");
 
-/** Cmd/Ctrl+Shift+T reopens the last closed workspace with its layout. */
+/** Cmd/Ctrl+Shift+T reopens whatever closed last — a tab, a tab group, or a workspace. */
 export const isReopenClosedChord = (e: ChordEvent) => chord(e, "t");
 
-export const CLOSED_STACK_CAP = 5;
+/* Sized for the mixed stack: tab closes vastly outnumber workspace closes,
+   and Chrome keeps ~25 — a 5-deep cap let six quick tab closes evict a
+   workspace close the user still expected to reach (PR #128 audit, B4). */
+export const CLOSED_STACK_CAP = 25;
 
-/** Push a closed workspace onto the undo stack; the oldest drop off past the cap. */
+/** Push a close gesture onto the undo stack; the oldest drop off past the cap. */
 export function pushClosed<T>(stack: T[], snapshot: T, cap = CLOSED_STACK_CAP): T[] {
   const next = [...stack, snapshot];
   return next.length > cap ? next.slice(next.length - cap) : next;

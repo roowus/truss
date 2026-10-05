@@ -4,12 +4,12 @@ import { normalizeLayoutSizes } from "./layoutSanitize";
 import {
   canClose,
   freshPanels,
-  isUndoablePanel,
   nextActiveAfterClose,
-  panelDescriptor,
+  panelsEntry,
   popClosed,
   pushClosed,
   restoreSpaceId,
+  suppressionKey,
   terminalIdsInLayout,
   type ClosedEntry,
 } from "./workspaceClose";
@@ -431,34 +431,22 @@ class DesktopManager {
    * and machinery tabs (welcome) are not closes.
    */
   private recordPanelClose(spaceId: string, panel: IDockviewPanel) {
-    if (this.suppressedPanels.delete(`${spaceId}\n${panel.id}`)) return;
-    if (!isUndoablePanel(panel.id)) return;
-    this.closedStack = pushClosed(this.closedStack, {
-      type: "panels",
-      spaceId,
-      panels: [panelDescriptor(panel)],
-      at: Date.now(),
-    });
+    if (this.suppressedPanels.delete(suppressionKey(spaceId, panel.id))) return;
+    const entry = panelsEntry(spaceId, [panel], Date.now());
+    if (entry) this.closedStack = pushClosed(this.closedStack, entry);
   }
 
   /** Mark a panel removal as machinery so the undo recorder ignores it (TTL: the event fires within the same task or never). */
   suppressPanelClose(spaceId: string | undefined, panelId: string) {
-    const key = `${spaceId ?? this.state.activeId}\n${panelId}`;
+    const key = suppressionKey(spaceId ?? this.state.activeId, panelId);
     this.suppressedPanels.add(key);
     window.setTimeout(() => this.suppressedPanels.delete(key), 1000);
   }
 
-  /** The group-corner X: close every tab in one gesture, remembered as ONE undo entry so the chord restores the group whole. */
+  /** A batch tab close (the group-corner X, "close others"): one gesture, ONE undo entry, so the chord restores the batch whole. */
   closeGroup(spaceId: string, panels: IDockviewPanel[]) {
-    const undoable = panels.filter((p) => isUndoablePanel(p.id));
-    if (undoable.length) {
-      this.closedStack = pushClosed(this.closedStack, {
-        type: "panels",
-        spaceId,
-        panels: undoable.map(panelDescriptor),
-        at: Date.now(),
-      });
-    }
+    const entry = panelsEntry(spaceId, panels, Date.now());
+    if (entry) this.closedStack = pushClosed(this.closedStack, entry);
     for (const p of panels) {
       this.suppressPanelClose(spaceId, p.id);
       p.api.close();

@@ -97,10 +97,12 @@ test("the undo stack: LIFO, capped, snapshots carry name + layout", async () => 
   assert.equal((popped?.snapshot as { layout: { panels: string[] } }).layout.panels[0], "feed:1", "the layout comes back whole");
   assert.equal(popped?.rest.length, 1);
 
-  /* the cap: old entries drop off, never unbounded */
+  /* the cap: old entries drop off, never unbounded (25 since #124 put hungry
+     tab closes on the same stack; Chrome keeps ~25) */
   let big: unknown[] = [];
-  for (let i = 0; i < 10; i++) big = mod.pushClosed(big, { name: `w${i}` });
-  assert.ok(big.length <= 5, `bounded (got ${big.length})`);
+  for (let i = 0; i < 30; i++) big = mod.pushClosed(big, { name: `w${i}` });
+  assert.ok(big.length <= 25, `bounded (got ${big.length})`);
+  assert.equal((mod.popClosed(big)?.snapshot as { name: string }).name, "w29", "still LIFO at the cap");
 
   assert.equal(mod.popClosed([]), null, "empty stack → nothing to reopen");
 });
