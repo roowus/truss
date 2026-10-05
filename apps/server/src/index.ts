@@ -469,13 +469,13 @@ app.post("/i/redeem", async (req, reply) => {
   /* rate-limited per client, same guard as GET /i/:code — the code keyspace
      is small by design, so guessing it must cost real time */
   if (!redeemRateOk(req.ip)) {
-    return reply.code(429).send({ error: "too many pairing-code tries — wait a minute, then retry" });
+    return reply.code(429).send({ error: "too many pairing-code tries. Wait a minute, then retry" });
   }
   const { code } = (req.body ?? {}) as { code?: string };
   /* hand-typed at a prompt: forgive case and surrounding whitespace */
   const entry = typeof code === "string" ? redeemPairing(code.trim().toLowerCase()) : undefined;
   if (!entry) {
-    return reply.code(410).send({ error: "that pairing code is used up, expired, or unknown — mint a fresh one from the Truss add-host wizard" });
+    return reply.code(410).send({ error: "that pairing code is used up, expired, or unknown. Mint a fresh one from the Truss add-host wizard" });
   }
   return { hostId: entry.hostId, token: entry.token, serverUrl: entry.serverUrl };
 });

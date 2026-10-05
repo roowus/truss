@@ -111,13 +111,13 @@ printf 'pairing code? ' >&2
 # when this script arrives via a curl pipe, stdin IS the script (already
 # consumed) — the answer must come from the terminal itself
 read -r CODE < /dev/tty || read -r CODE || {
-  echo "could not read the code — no terminal attached" >&2
+  echo "could not read the code: no terminal attached" >&2
   exit 1
 }
 # typed by hand: forgive case and stray whitespace, keep only code alphabet
 CODE=$(printf '%s' "$CODE" | tr 'A-Z' 'a-z' | tr -cd 'abcdefghjkmnpqrstuvwxyz23456789')
 if [ -z "$CODE" ]; then
-  echo "no code given — mint one in the Truss add-host wizard (Short command)" >&2
+  echo "no code given. Mint one in the Truss add-host wizard (Short command)" >&2
   exit 1
 fi
 
@@ -127,11 +127,11 @@ RESP=$(curl -fsSL -X POST -H 'content-type: application/json' \\
 # split the failure honestly (audit B3): curl 6/7/28 mean the SERVER is
 # unreachable — re-minting a code never fixes that; 22 is the HTTP answer
 if [ "$rc" -eq 6 ] || [ "$rc" -eq 7 ] || [ "$rc" -eq 28 ]; then
-  echo "cannot reach $SERVER — check the address (is tailscale up on both ends?), then retry" >&2
+  echo "cannot reach $SERVER. Check the address (is tailscale up on both ends?), then retry" >&2
   exit 1
 fi
 if [ "$rc" -ne 0 ]; then
-  echo "that code did not work — used up, expired, or mis-typed. Mint a fresh one in the wizard." >&2
+  echo "that code did not work: used up, expired, or mis-typed. Mint a fresh one in the wizard." >&2
   exit 1
 fi
 
@@ -139,7 +139,7 @@ TOKEN=$(printf '%s' "$RESP" | sed -n 's/.*"token":"\\([^"]*\\)".*/\\1/p')
 HOST_ID=$(printf '%s' "$RESP" | sed -n 's/.*"hostId":"\\([^"]*\\)".*/\\1/p')
 SURL=$(printf '%s' "$RESP" | sed -n 's/.*"serverUrl":"\\([^"]*\\)".*/\\1/p')
 if [ -z "$TOKEN" ] || [ -z "$HOST_ID" ] || [ -z "$SURL" ]; then
-  echo "unexpected answer from $SERVER — is this a Truss server?" >&2
+  echo "unexpected answer from $SERVER. Is this a Truss server?" >&2
   exit 1
 fi
 

@@ -372,11 +372,11 @@ export function AddHostWizard({ onClose }: { onClose: () => void }) {
                     code at the prompt — leads over the inline variant */}
                 <div>
                   <div className="font-mono text-[12px] text-[var(--t-fg)] break-all select-all">{pairCmd.interactiveCommand}</div>
-                  <div className="mt-0.5 text-[10px] text-[var(--t-dim)]">type it on the remote — when it asks for the pairing code, enter <span className="font-mono text-[var(--t-amber)]">{pairCmd.code}</span> · single-use · expires in {until(pairCmd.expiresAt)}</div>
+                  <div className="mt-0.5 text-[10px] text-[var(--t-dim)]">type it on the remote; when it asks for the pairing code, enter <span className="font-mono text-[var(--t-amber)]">{pairCmd.code}</span> · single-use · expires in {until(pairCmd.expiresAt)}</div>
                 </div>
                 <div>
                   <div className="font-mono text-[11px] text-[var(--t-fg2)] break-all select-all">{pairCmd.command}</div>
-                  <div className="mt-0.5 text-[10px] text-[var(--t-dim)]">same code, inline — no prompt, but more to type. After the code dies, mint another.</div>
+                  <div className="mt-0.5 text-[10px] text-[var(--t-dim)]">same code, inline: no prompt, but more to type. After the code dies, mint another.</div>
                 </div>
               </div>
             )}
