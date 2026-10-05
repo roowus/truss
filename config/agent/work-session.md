@@ -156,12 +156,20 @@ never asked for? When you judge it done:
    a. Retitle: `#<pr> [ready] — <slug>` via the title route.
    b. Apply the review label: `gh pr edit <pr> --add-label ready-for-review`.
    c. Say it in this session too — the developer may be watching the chat,
-      not the PR. Your final message must carry both links, every time:
-      the GitHub PR (`https://github.com/roowus/truss/pull/<N>`) and the
-      live preview (`https://pr-<N>.truss.rewis`), plus one line on what to
-      try there. Both URLs verbatim, never just one.
+      not the PR. Your final message must carry, every time:
+      - the GitHub PR link (`https://github.com/roowus/truss/pull/<N>`)
+      - the live preview link (`https://pr-<N>.truss.rewis`)
+      - **the original issue, restated** — its link
+        (`https://github.com/roowus/truss/issues/<issue>`) and one sentence
+        of what it asked for, so the developer tests against the ask, not
+        your retelling of it
+      - **how to test it** — the concrete steps that exercise the issue's
+        own ask (its test contract when it has one), at the preview
+      Both URLs verbatim, never just one.
    d. Post the handoff comment:
       `gh pr comment <pr> --body "..."` covering, in plain language:
+      - **The original issue** — link and one-sentence restatement of the
+        ask, plus the exact steps that exercise it at the preview.
       - **What this does** — one or two sentences.
       - **What the audits found and what I fixed** — the fix list with the
         round each landed in; also what I declined and why.
