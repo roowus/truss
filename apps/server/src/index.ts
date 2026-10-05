@@ -37,6 +37,7 @@ import {
   searchFiles,
   writeFile as writeWorkspaceFile,
 } from "./files.js";
+import { browseRoots, listDirs } from "./dirbrowse.js";
 import { saveUpload } from "./uploads.js";
 import { gitBranches, gitDiff, gitGraph, gitStatus, gitSwitch } from "./git.js";
 import { createTask, deleteTask, listTasks, runTask, updateTask, type TaskStatus } from "./tasks.js";
@@ -920,6 +921,18 @@ app.post("/api/git/switch", async (req, reply) => {
   try {
     if (!cwd || !branch) throw new Error("missing cwd/branch");
     return await gitSwitch(cwd, branch, !!create);
+  } catch (e: any) {
+    return reply.code(400).send({ error: e.message ?? String(e) });
+  }
+});
+
+/* ── directory browsing for the New Session cwd picker (issue #106):
+     directory names only, confined to browseRoots() server-side ── */
+app.get("/api/browse", async (req, reply) => {
+  const { path, hidden } = req.query as { path?: string; hidden?: string };
+  try {
+    if (!path) return { roots: browseRoots() };
+    return listDirs(path, { showHidden: hidden === "1" });
   } catch (e: any) {
     return reply.code(400).send({ error: e.message ?? String(e) });
   }

@@ -1,5 +1,6 @@
 import type {
   AgentInfo,
+  BrowseResp,
   CreateSessionBody,
   DeliveryOption,
   FeedItem,
@@ -86,6 +87,9 @@ export interface Backend {
   skills(cwd: string): Promise<{ skills: SkillInfo[] }>;
   /** Files panel: workspace browser, confined server-side to `root` */
   listFiles(root: string, path?: string, q?: string): Promise<{ entries: FileEntry[] }>;
+  /** New Session cwd picker (issue #106): no path → the browse roots;
+     with a path → that directory's subdirectories (names only) */
+  browse(path?: string, showHidden?: boolean): Promise<BrowseResp>;
   readFile(root: string, path: string): Promise<FileRead>;
   writeFile(root: string, path: string, content: string): Promise<FileRead>;
   createFile(root: string, path: string, kind: "file" | "dir"): Promise<FileEntry>;
@@ -233,6 +237,8 @@ export function createLiveBackend(): Backend {
     skills: (cwd) => req("GET", `/api/skills?cwd=${encodeURIComponent(cwd)}`),
     listFiles: (root, path, q) =>
       req("GET", `/api/files?root=${encodeURIComponent(root)}${path ? `&path=${encodeURIComponent(path)}` : ""}${q ? `&q=${encodeURIComponent(q)}` : ""}`),
+    browse: (path, showHidden) =>
+      req("GET", `/api/browse${path ? `?path=${encodeURIComponent(path)}${showHidden ? "&hidden=1" : ""}` : ""}`),
     readFile: (root, path) => req("GET", `/api/file?root=${encodeURIComponent(root)}&path=${encodeURIComponent(path)}`),
     writeFile: (root, path, content) => req("PUT", "/api/file", { root, path, content }),
     createFile: (root, path, kind) => req("POST", "/api/files/create", { root, path, kind }),

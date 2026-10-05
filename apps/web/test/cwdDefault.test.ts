@@ -1,0 +1,63 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+
+/* SPEC-TESTS for the default working directory —
+   https://github.com/roowus/truss/issues/106
+   ("…and have a default directory too"). These FAIL on purpose today.
+
+   A default EXISTS (UiSettings.defaultCwd, prefilled at
+   NewSessionDialog.tsx:28) — but the precedence is an inline `||` chain
+   with a subtle gap: a per-HOST default (HostPreference.defaultCwd, set
+   for remote boxes) never wins. The contract names the order ONCE, in a
+   pure src/lib/cwdDefault.ts —
+
+     resolveDefaultCwd({
+       preset?,             // explicit preset (task board, "new session here")
+       hostDefault?,        // the picked host's preference
+       settingsDefault?,    // the global Settings default
+       recent?              // most recent session cwd
+     }): string
+
+   precedence: preset > hostDefault > settingsDefault > recent > "".
+   Blank/whitespace candidates are skipped, never returned as-is. */
+
+interface CwdDefaultModule {
+  resolveDefaultCwd(input: {
+    preset?: string;
+    hostDefault?: string;
+    settingsDefault?: string;
+    recent?: string;
+  }): string;
+}
+
+async function load(): Promise<CwdDefaultModule | null> {
+  const spec = "../src/lib/cwdDefault"; // variable specifier: typechecks before the module exists
+  return import(spec).catch(() => null);
+}
+
+test("src/lib/cwdDefault.ts exists", async () => {
+  const mod = await load();
+  assert.ok(mod, "src/lib/cwdDefault.ts must export resolveDefaultCwd — see issue #106");
+});
+
+test("precedence: preset > host > settings > recent > empty", async () => {
+  const mod = await load();
+  assert.ok(mod, "cwdDefault module must exist (see module test)");
+  const all = { preset: "/p", hostDefault: "/h", settingsDefault: "/s", recent: "/r" };
+
+  assert.equal(mod.resolveDefaultCwd(all), "/p", "an explicit preset wins everything");
+  assert.equal(mod.resolveDefaultCwd({ ...all, preset: undefined }), "/h", "the picked host's default beats the global one");
+  assert.equal(mod.resolveDefaultCwd({ ...all, preset: undefined, hostDefault: undefined }), "/s", "then the Settings default");
+  assert.equal(mod.resolveDefaultCwd({ ...all, preset: undefined, hostDefault: undefined, settingsDefault: undefined }), "/r", "then the most recent");
+  assert.equal(mod.resolveDefaultCwd({}), "", "and nothing → empty (the picker opens at the roots)");
+});
+
+test("blank candidates never win", async () => {
+  const mod = await load();
+  assert.ok(mod, "cwdDefault module must exist (see module test)");
+  assert.equal(
+    mod.resolveDefaultCwd({ preset: "   ", hostDefault: "", settingsDefault: "/s", recent: "/r" }),
+    "/s",
+    "whitespace/empty candidates fall through",
+  );
+});

@@ -727,6 +727,19 @@ export function createDemoBackend(): Backend {
       const prefix = path && path !== "." ? `${path}/` : "";
       return { entries: all.filter((e) => e.path.startsWith(prefix) && !e.path.slice(prefix.length).includes("/")) };
     },
+    /* cwd picker demo: browse the virtual fs's directory set */
+    async browse(path, showHidden) {
+      await net(60);
+      if (!path) return { roots: [HOME] };
+      const prefix = path === "/" ? "/" : `${path}/`;
+      const entries = [...dirs]
+        .filter((d) => d.startsWith(prefix) && d !== path && !d.slice(prefix.length).includes("/"))
+        .map((d) => ({ name: d.slice(prefix.length), path: d }))
+        .filter((d) => showHidden || !d.name.startsWith("."))
+        .sort((a, b) => a.name.localeCompare(b.name));
+      const up = path.slice(0, path.lastIndexOf("/")) || "/";
+      return { dirs: entries, parent: path === HOME ? null : up };
+    },
     async readFile(_root, path) {
       await net(60);
       const name = path.split("/").pop() ?? path;
