@@ -1,4 +1,4 @@
-import { createContext, memo, useContext, useEffect, useLayoutEffect, useRef, useState, useMemo, type ReactNode } from "react";
+import { createContext, memo, useCallback, useContext, useEffect, useLayoutEffect, useRef, useState, useMemo, type ReactNode } from "react";
 import type { IDockviewPanelProps } from "dockview-react";
 import { store, useApp, useNow, capsOf, type Msg, type ToolRun, type Perm, type SessionView } from "@/lib/store";
 import { argSummary, fmtMs, harnessStyle, shortPath, baseHarness, deadSessionHint } from "@/lib/format";
@@ -9,10 +9,11 @@ import { CHAT_WIDTH_DEFAULT, commitChatWidth, dragDisplayWidth, readChatWidthPre
 import { filesFromTransfer, isFileDrag } from "@/lib/attach";
 import { formatSessionRef } from "@/lib/sessionRef";
 import { RAIL_INSET, activeRailIndex, railIndexAtOffset, railMarkTop, railNaturalHeight, turnRailItems } from "@/lib/turnRail";
-import { createBrowserVoiceInput, appendTranscript } from "@/lib/voice";
-import type { VoiceController, VoiceState } from "@/lib/voiceInput";
+import { createBrowserVoiceInput, appendTranscript, type BrowserVoiceController } from "@/lib/voice";
+import type { VoiceState } from "@/lib/voiceInput";
 import { openPanel, openAgentShell, renameSessionPanels } from "@/lib/workspace";
 import { Btn, Empty, HarnessMark, Icon, IconBtn, Select, Spinner, StateDot, STATE_META } from "@/components/ui";
+import { VoiceVisualizer } from "@/components/VoiceVisualizer";
 import { Markdown } from "./Markdown";
 import { cn } from "@/utils/cn";
 
@@ -525,7 +526,7 @@ function Composer({ id, active }: { id: string; active: boolean }) {
   /* voice dictation (issue #15): the controller lives across renders and its
      only output is the draft — sending stays the user's click */
   const [voiceState, setVoiceState] = useState<VoiceState>("idle");
-  const voiceRef = useRef<VoiceController | null>(null);
+  const voiceRef = useRef<BrowserVoiceController | null>(null);
   const voice = () =>
     (voiceRef.current ??= createBrowserVoiceInput({
       onText: (t) => {
@@ -535,6 +536,9 @@ function Composer({ id, active }: { id: string; active: boolean }) {
       onState: setVoiceState,
     }));
   useEffect(() => () => voiceRef.current?.cancel(), []); // drop a live take when the panel unmounts
+  /* stable getter for the visualizer (issue #112): the stream appears once
+     the mic grant lands, so the component polls rather than subscribes */
+  const voiceLevelStream = useCallback(() => voiceRef.current?.levelStream() ?? null, []);
 
   useEffect(() => {
     drafts.set(id, text);
@@ -630,10 +634,11 @@ function Composer({ id, active }: { id: string; active: boolean }) {
     tone = "amber";
     hint = <><Icon name="lock" size={12} /> {meta.harness} can't take input mid-run — draft is held, or <button className="underline" onClick={() => store.interrupt(id)}>interrupt</button>.</>;
   }
-  /* an active voice take owns the hint line while it lives */
+  /* an active voice take owns the hint line while it lives — with live mic
+     bars (issue #112) so the user can see the mic hears them */
   if (voiceState === "recording") {
     tone = "amber";
-    hint = <><Icon name="mic" size={12} /> Dictating… click the mic to finish, Esc to cancel.</>;
+    hint = <><Icon name="mic" size={12} /> <VoiceVisualizer levelStream={voiceLevelStream} /> Dictating… click the mic to finish, Esc to cancel.</>;
   } else if (voiceState === "error") {
     tone = "red";
     hint = <><Icon name="alert" size={12} /> Dictation failed: {voiceRef.current?.error() ?? "unknown error"}</>;

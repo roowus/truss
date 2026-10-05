@@ -115,10 +115,19 @@ export interface MediaRecorderLike {
   stop(): void;
 }
 
+/* the MediaRecorder take also lends the granted stream to a visualizer
+   (issue #112): levelStream() is null before start and after stop/cancel,
+   the live stream while the take runs. The generation guard covers it too —
+   a take cancelled mid-permission-prompt never assigns `stream`, so a stale
+   take exposes nothing. */
+export interface LevelStreamingRecorder extends VoiceRecorder {
+  levelStream(): MediaStreamLike | null;
+}
+
 export function mediaRecorderCapture(deps: {
   getUserMedia: () => Promise<MediaStreamLike>;
   createRecorder: (stream: MediaStreamLike) => MediaRecorderLike;
-}): VoiceRecorder {
+}): LevelStreamingRecorder {
   let stream: MediaStreamLike | null = null;
   let rec: MediaRecorderLike | null = null;
   let chunks: Blob[] = [];
@@ -136,6 +145,7 @@ export function mediaRecorderCapture(deps: {
     rec = null;
   };
   return {
+    levelStream: () => stream,
     async start() {
       const my = ++gen;
       const s = await deps.getUserMedia();
@@ -227,16 +237,24 @@ export function appendTranscript(draft: string, transcript: string): string {
   return d ? `${d} ${t}` : t;
 }
 
+/** the browser controller with the stream seam typed: the MediaRecorder
+    path lends its live mic stream to the dictation visualizer (issue #112);
+    the SpeechRecognition path owns no stream, so it reads null. */
+export interface BrowserVoiceController extends VoiceController {
+  levelStream(): MediaStreamLike | null;
+}
+
 /** build the composer controller: recognition where the browser has it,
     server transcription everywhere else. Never auto-sends — onText only
     touches the draft. */
-export function createBrowserVoiceInput(deps: { onText: (text: string) => void; onState?: (s: VoiceState) => void }): VoiceController {
+export function createBrowserVoiceInput(deps: { onText: (text: string) => void; onState?: (s: VoiceState) => void }): BrowserVoiceController {
   const SR = typeof window !== "undefined" ? speechRecognitionCtor() : null;
-  return createVoiceInput({
+  const c = createVoiceInput({
     maxDurationMs: 60_000,
     onText: deps.onText,
     ...(deps.onState ? { onState: deps.onState } : {}),
     recorder: SR ? recognitionRecorder(SR) : mediaRecorder(),
     transcribe: transcribeAudio,
   });
+  return { ...c, levelStream: () => (c.levelStream() ?? null) as MediaStreamLike | null };
 }
