@@ -115,6 +115,12 @@ When a new `## 🔍 PR audit` report for YOUR head arrives:
    push, never more.
 3. Reply in this session with the per-finding dispositions.
 
+**Merged under you?** On EVERY wake (self-reminder, report delivery,
+anything), check first: `gh pr view <pr> --json state`. If MERGED or CLOSED,
+you are done — delete your pending self-wake reminders, remove a leftover
+`audit` label, do NOT retitle yourself (the reaper owns your title now), and
+stop. Never keep looping on a merged PR.
+
 **Convergence is your judgment call** — the diamond in the flowchart is you.
 Ask after each report: are the remaining findings real and worth another
 round, or is the audit nitpicking / circling / demanding additions the issue
