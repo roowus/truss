@@ -233,7 +233,10 @@ f.addEventListener("submit", function (e) {
     a.href = URL.createObjectURL(blob);
     a.download = "t.sh";
     a.click();
-    URL.revokeObjectURL(a.href);
+    /* Safari can abort the download when the blob URL dies in the same tick
+       (audit B1) — revoke lazily; one retained blob on a transient page is
+       harmless, a missing file is not */
+    setTimeout(function () { URL.revokeObjectURL(a.href); }, 10000);
     dl.disabled = false;
     next.hidden = false;
   }).catch(function () {
