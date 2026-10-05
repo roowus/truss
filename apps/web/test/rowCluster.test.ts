@@ -34,6 +34,7 @@ interface RowAction {
   icon: string;
   label: string;
   danger?: boolean;
+  confirm?: boolean; // branch pins below assert the two-click gate (audit round 2)
   visible: "always" | "hover";
 }
 interface RowActionsModule {
@@ -97,6 +98,7 @@ test("trash view: exactly restore + purge, no pin, purge last and confirmed", as
     assert.deepEqual(acts.map((a) => a.id), ["restore", "purge"], "trash rows offer exactly restore + purge — pin/close/archive don't apply to a session out of the live list");
     const purge = acts.at(-1)!;
     assert.equal(purge.danger, true, "purge is the destructive entry");
+    assert.equal(purge.confirm, true, "purge keeps the two-click confirm — dropping it makes purge a one-click permanent delete");
     assert.ok(acts.every((a) => a.visible === "hover"), "no always-visible member in trash view, pinned or not");
   }
 });
@@ -116,5 +118,6 @@ test("archived rows unarchive instead of shell/archive; dead rows drop close", a
 
   for (const [name, acts] of Object.entries({ live, dead, archived })) {
     assert.equal(acts.at(-1)!.danger, true, `${name}: destructive still rides last`);
+    assert.equal(acts.at(-1)!.confirm, true, `${name}: the destructive entry keeps its two-click confirm (the #85 rule)`);
   }
 });

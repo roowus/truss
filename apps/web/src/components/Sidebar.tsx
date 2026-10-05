@@ -263,8 +263,10 @@ function SessionRow({ s, now, archived, trashView }: { s: SessionMeta; now: numb
       </span>
       {/* one container, one gap: the pin's visibility is its per-member rule
           (opacity, so it keeps its slot and stays tabbable), the rest reveal
-          on hover as before */}
-      <span className="flex items-center shrink-0" onClick={(e) => e.stopPropagation()}>
+          on hover as before. In trash view there is no always-slotted member,
+          so the container itself hides until hover (as the pre-#110 wrapper
+          did) — otherwise its empty box would eat a row gap (audit B2). */}
+      <span className={cn("items-center shrink-0", trashView ? "hidden group-hover:flex" : "flex")} onClick={(e) => e.stopPropagation()}>
         {actions.map((a) => (
           <IconBtn
             key={a.id}
