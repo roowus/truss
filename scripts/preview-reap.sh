@@ -90,9 +90,11 @@ try:
     entries = json.load(open(p))
 except Exception:
     sys.exit(0)
+from datetime import datetime, timezone
 for e in entries:
     if str(e.get("pr")) == n:
         e["state"] = "merged"
+        e["mergedAt"] = datetime.now(timezone.utc).isoformat()
 json.dump(entries, open(p, "w"), indent=1)
 EOF
 done < <(python3 -c "
@@ -105,6 +107,44 @@ try:
             seen.add(pr); print(pr)
 except Exception: pass
 ")
+
+# 4. archive merged worker sessions idle over a week — the sidebar is a
+#    workbench, not a museum; archive (not delete) keeps history recoverable.
+#    The archive route REFUSES sessions with running work, so an active one
+#    is safe by construction.
+python3 - "$LEDGER" <<'EOF'
+import json, sys, urllib.request
+from datetime import datetime, timezone, timedelta
+try:
+    entries = json.load(open(sys.argv[1]))
+except Exception:
+    sys.exit(0)
+cutoff = datetime.now(timezone.utc) - timedelta(days=7)
+for e in entries:
+    if e.get("state") != "merged" or e.get("archived"):
+        continue
+    stamp = e.get("mergedAt") or e.get("since")
+    try:
+        when = datetime.fromisoformat(str(stamp).replace("Z", "+00:00"))
+    except Exception:
+        continue
+    if when > cutoff:
+        continue
+    req = urllib.request.Request(
+        "http://127.0.0.1:3080/plugins/dsh-spawn/archive",
+        data=json.dumps({"sessionId": e["session"]}).encode(),
+        headers={"content-type": "application/json"}, method="POST")
+    try:
+        urllib.request.urlopen(req, timeout=8)
+        e["archived"] = True
+        print(f"archived {e['session'][:24]} (merged {stamp})", flush=True)
+    except urllib.error.HTTPError as err:
+        if err.code != 409:  # 409 = still active; try again next week
+            print(f"archive failed for {e['session'][:24]}: {err.code}", flush=True)
+    except Exception:
+        pass
+json.dump(entries, open(sys.argv[1], "w"), indent=1)
+EOF
 
 [ "$reaped" -gt 0 ] && echo "$(date -Is) reaped $reaped"
 exit 0
