@@ -152,7 +152,7 @@ class DesktopManager {
   private closedStack: ClosedEntry[] = [];
   /** Panel removals that are machinery, not user closes (moves, kills, batch-close replays) — never undoable. */
   private suppressedPanels = new Set<string>();
-  /** Workspaces mid-teardown: their unmount-time panel removals are the workspace entry's business, never tab closes. */
+  /** Workspaces mid-teardown: any panel removals attributed to them are the workspace entry's business, never tab closes. */
   private closingSpaces = new Set<string>();
 
   subscribe = (listener: () => void) => {
@@ -238,10 +238,8 @@ class DesktopManager {
       layoutChanged.dispose();
       removed.dispose();
       active.dispose();
-      /* Teardown over: any unmount-time removal events arrived before this
-         cleanup ran, and after it `removed` is disposed — the flag's job is
-         done (audit round 2, N2: a flag, not a TTL, so a slow unmount can
-         never leak phantom tab entries onto the undo stack). */
+      /* Lift the teardown flag: the canvas is gone and the removal listener
+         disposed, so nothing more can arrive for this space. */
       this.closingSpaces.delete(id);
       if (this.apis.get(id) === api) {
         this.apis.delete(id);
@@ -365,10 +363,10 @@ class DesktopManager {
     const space = this.state.spaces[index];
     const layout = api ? api.toJSON() : space.layout;
     this.closedStack = pushClosed(this.closedStack, { type: "workspace", name: space.name, layout, at: Date.now() });
-    /* Unmounting the canvas fires onDidRemovePanel for every tab — those are
-       this workspace entry's business, not separate undoable tab closes. A
-       flag, not a TTL: the removals arrive on React's asynchronous unmount,
-       whenever that lands; register's cleanup lifts it (audit round 2, N2). */
+    /* dockview's dispose() does NOT fire onDidRemovePanel (verified in its
+       source, round-3 audit) — the flag is pure defense in case a future
+       dockview starts emitting removal events during unmount. A flag, not a
+       TTL: register's cleanup lifts it whenever the teardown lands. */
     this.closingSpaces.add(id);
     const terminals = api
       ? api.panels.filter((p) => p.id.startsWith("terminal:")).map((p) => p.id.slice(9))
@@ -455,9 +453,9 @@ class DesktopManager {
     if (entry) this.closedStack = pushClosed(this.closedStack, entry);
   }
 
-  /** Mark a panel removal as machinery so the undo recorder ignores it. Callers close synchronously, so the event lands in the same task; the TTL only reaps a key whose close never came. */
-  suppressPanelClose(spaceId: string | undefined, panelId: string) {
-    const key = suppressionKey(spaceId ?? this.state.activeId, panelId);
+  /** Mark a panel removal as machinery so the undo recorder ignores it. Callers close synchronously, so the event lands in the same task; the TTL only reaps a key whose close never came. The workspace id is mandatory — keying off whatever happens to be active is how the wrong workspace gets suppressed (round 1, B1). */
+  suppressPanelClose(spaceId: string, panelId: string) {
+    const key = suppressionKey(spaceId, panelId);
     this.suppressedPanels.add(key);
     window.setTimeout(() => this.suppressedPanels.delete(key), 1000);
   }
