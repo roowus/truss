@@ -1,6 +1,7 @@
 import { useCallback, useRef, useSyncExternalStore } from "react";
 import type { DockviewApi, IDockviewPanel, SerializedDockview } from "dockview-react";
 import { normalizeLayoutSizes } from "./layoutSanitize";
+import { canClose, nextActiveAfterClose, popClosed, pushClosed, type ClosedSnapshot } from "./workspaceClose";
 import type { Backend } from "./backend";
 import { store } from "./store";
 
@@ -136,6 +137,8 @@ class DesktopManager {
   private revision = 0;
   private writing = false;
   private suppressedTerminals = new Set<string>();
+  /** Undo stack for "reopen what I closed" (Chrome's Cmd+Shift+T); session-only, capped. */
+  private closedStack: ClosedSnapshot[] = [];
 
   subscribe = (listener: () => void) => {
     this.subscribers.add(listener);
@@ -333,19 +336,32 @@ class DesktopManager {
   }
 
   remove(id: string) {
-    if (this.state.spaces.length < 2) return;
     const index = this.state.spaces.findIndex((s) => s.id === id);
     if (index < 0) return;
+    const live = this.state.spaces.filter((s) => !s.archived);
+    if (!canClose(live, id)) return; // the last visible workspace always stands
     const api = this.apis.get(id);
+    const space = this.state.spaces[index];
+    const layout = api ? api.toJSON() : space.layout;
+    this.closedStack = pushClosed(this.closedStack, { name: space.name, layout, at: Date.now() });
     const terminals = api
       ? api.panels.filter((p) => p.id.startsWith("terminal:")).map((p) => p.id.slice(9))
-      : Object.keys(this.state.spaces[index].layout?.panels ?? {}).filter((p) => p.startsWith("terminal:")).map((p) => p.slice(9));
+      : Object.keys(space.layout?.panels ?? {}).filter((p) => p.startsWith("terminal:")).map((p) => p.slice(9));
     const spaces = this.state.spaces.filter((s) => s.id !== id);
-    const activeId = id === this.state.activeId ? spaces[Math.max(0, index - 1)].id : this.state.activeId;
+    const activeId = nextActiveAfterClose(live, id, this.state.activeId);
     this.set({ spaces, activeId });
     store.focus(this.apis.get(activeId)?.activePanel?.params?.sessionId as string | undefined);
     for (const tid of terminals) this.cleanupTerminalLater(tid);
     this.queueSave();
+    store.toast("info", `Closed workspace "${space.name}"`, "Ctrl+Shift+T (Cmd+Shift+T on Mac) brings it back.");
+  }
+
+  /** Chrome's Cmd+Shift+T: the last closed workspace returns with its name and layout. */
+  reopenClosed() {
+    const popped = popClosed(this.closedStack);
+    if (!popped) return null;
+    this.closedStack = popped.rest;
+    return this.create(popped.snapshot.name, (popped.snapshot.layout as SerializedDockview | null) ?? null);
   }
 
   updateSettings(patch: Partial<UiSettings>) {

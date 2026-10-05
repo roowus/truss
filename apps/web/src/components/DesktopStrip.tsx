@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { desktops, useDesktops } from "@/lib/desktops";
+import { canClose } from "@/lib/workspaceClose";
 import { openPanel } from "@/lib/workspace";
 import { Icon, IconBtn } from "./ui";
 import { TabPicker } from "./TabPicker";
@@ -32,6 +33,7 @@ export function DesktopStrip() {
     setEditing(null);
   };
   const showPicker = useCallback(() => setPicker(true), []);
+  const live = spaces.filter((sp) => !sp.archived);
 
   useEffect(() => setPicker(false), [activeId]);
 
@@ -47,7 +49,7 @@ export function DesktopStrip() {
         <Icon name="desktop" size={14} />
       </div>
       <div role="tablist" aria-label="Workspaces" className="flex items-center gap-0.5 min-w-0 overflow-x-auto t-scroll-x h-full">
-        {spaces.filter((sp) => !sp.archived).map((space, index) => (
+        {live.map((space, index) => (
           <div key={space.id} className={cn("group relative shrink-0 flex items-center h-[30px] rounded-md", space.id === activeId ? "bg-[var(--t-bg2)]" : "hover:bg-white/[0.03]")}>
             {space.id === activeId && <span className="absolute left-2 right-2 -bottom-[5px] h-[2px] bg-[var(--t-amber)] rounded-full" />}
             {editing === space.id ? (
@@ -72,6 +74,16 @@ export function DesktopStrip() {
               >
                 <span className="text-[10px] tabular-nums text-[var(--t-dim)]">{String(index + 1).padStart(2, "0")}</span>
                 <span className="truncate">{space.name}</span>
+              </button>
+            )}
+            {canClose(live, space.id) && (
+              <button
+                aria-label={`Close workspace ${space.name}`}
+                title={`Close workspace ${space.name} and its tabs (Ctrl+Shift+W closes the active one; Ctrl+Shift+T reopens)`}
+                className="w-[21px] h-6 grid place-items-center rounded hover:bg-white/[0.07] text-[var(--t-dim)] hover:text-[var(--t-red)] opacity-0 group-hover:opacity-100 focus:opacity-100"
+                onClick={(e) => { e.stopPropagation(); desktops.remove(space.id); }}
+              >
+                <Icon name="x" size={11} />
               </button>
             )}
             <button
@@ -110,7 +122,7 @@ export function DesktopStrip() {
             <MenuItem icon="copy" onClick={() => { desktops.duplicate(menu); setMenu(null); }}>Duplicate layout</MenuItem>
             <MenuItem icon="archive" onClick={() => { desktops.archive(menu, true); setMenu(null); }}>Archive workspace</MenuItem>
             <div className="my-1 border-t border-[var(--t-line)]" />
-            <MenuItem icon="trash" dangerous disabled={spaces.length < 2} onClick={() => {
+            <MenuItem icon="trash" dangerous disabled={live.length < 2} onClick={() => {
               if (!deleteConfirm) { setDeleteConfirm(true); return; }
               desktops.remove(menu);
               setMenu(null);
