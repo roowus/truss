@@ -756,7 +756,7 @@ function Composer({ id, active }: { id: string; active: boolean }) {
             stop away. The bars appear once the mic grant lands; if no
             stream can be had, the clock alone shows the take is alive. */}
         {voiceState === "recording" && (
-          <div className="pointer-events-none absolute inset-0 flex items-center gap-2 px-1.5 rounded-sm bg-[var(--t-bg0)] text-[var(--t-amber)]">
+          <div className="pointer-events-none absolute inset-0 flex items-center gap-2 px-1.5 rounded-sm bg-[var(--t-bg0)] text-[var(--t-amber)] overflow-hidden">
             <span className="shrink-0 text-[11.5px] tabular-nums">{fmtTakeTime(voiceNow - (voiceStart ?? voiceNow))}</span>
             <VoiceVisualizer levelStream={voiceLevelStream} className="flex min-w-0 flex-1 items-center gap-[2px] h-5" />
           </div>
