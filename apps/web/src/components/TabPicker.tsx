@@ -122,7 +122,7 @@ export function TabPicker({ anchor, spaceId, groupId, onClose }: Props) {
             <>
               <Section>Remote hosts</Section>
               {agents.filter((a) => match(`${a.hostname} ${hostPrefs[a.hostId]?.alias ?? ""} host`)).map((a) => (
-                <Row key={a.hostId} icon="host" label={hostPrefs[a.hostId]?.alias || a.hostname} hint={a.adapters.join(", ")} onClick={() => run(() => openPanel("host", { hostId: a.hostId, title: hostPrefs[a.hostId]?.alias || a.hostname, spaceId, groupId: targetGroupId }))} />
+                <Row key={a.hostId} icon="host" label={hostPrefs[a.hostId]?.alias || a.hostname} hint={a.adapters.map((x) => harnessDisplay(x, hosts, hostAliases(hostPrefs))).join(", ")} onClick={() => run(() => openPanel("host", { hostId: a.hostId, title: hostPrefs[a.hostId]?.alias || a.hostname, spaceId, groupId: targetGroupId }))} />
               ))}
             </>
           )}

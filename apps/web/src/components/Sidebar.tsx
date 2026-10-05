@@ -396,6 +396,8 @@ function ShellRow({ t }: { t: TerminalInfo }) {
 
 function HostRow({ h, alias }: { h: HostInfo; alias?: string }) {
   const [confirm, confirmClick] = useTwoClickConfirm();
+  const hosts = useApp((st) => st.hosts);
+  const hostPrefs = useDesktops((st) => st.hosts);
 
   const actions = hostRowActions(h);
   const del = actions.find((a) => a.dangerous);
@@ -420,7 +422,7 @@ function HostRow({ h, alias }: { h: HostInfo; alias?: string }) {
         }
       }}
       className="group w-full flex items-center gap-2 mx-0.5 px-2 h-7 text-[12px] text-[var(--t-mute)] hover:text-[var(--t-fg)] hover:bg-white/[0.03] rounded-md text-left cursor-pointer"
-      title={`${h.label} · ${h.online ? `online · ${h.agent?.adapters.join(", ")}` : "offline"} · open host details`}
+      title={`${h.label} · ${h.online ? `online · ${h.agent?.adapters.map((x) => harnessDisplay(x, hosts, hostAliases(hostPrefs))).join(", ")}` : "offline"} · open host details`}
     >
       <span className={cn("w-1.5 h-1.5 rounded-full shrink-0", h.online ? "bg-[var(--t-teal)]" : "bg-[var(--t-line2)]")} />
       <Icon name="host" size={12} className={h.online ? "text-[var(--t-sky)]" : "text-[var(--t-dim)]"} />
