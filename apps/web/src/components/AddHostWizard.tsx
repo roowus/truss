@@ -347,7 +347,7 @@ export function AddHostWizard({ onClose }: { onClose: () => void }) {
                   be?.pairHost(created.id, created.token, serverAddr).then(
                     (r) => {
                       setPairCmd({ command: r.command, interactiveCommand: r.interactiveCommand, code: r.code, expiresAt: r.expiresAt });
-                      QRCode.toDataURL(`${serverAddr}/p`, { width: 144, margin: 1 }).then(setPairQr, () => setPairQr(null));
+                      QRCode.toDataURL(`${serverAddr}/p#${r.code}`, { width: 144, margin: 1 }).then(setPairQr, () => setPairQr(null));
                     },
                     (e) => store.toast("error", "Couldn't mint a pairing code", e?.message ?? String(e)),
                   ).finally(() => setPairBusy(false));
@@ -375,23 +375,26 @@ export function AddHostWizard({ onClose }: { onClose: () => void }) {
             )}
             {pairCmd && (
               <div className="rounded-lg border border-[var(--t-line)] bg-[var(--t-bg0)] px-3 py-2 space-y-2">
-                {/* the browser path leads (issue #111 review): download the
-                    installer from /p, run it, type the code at its prompt.
-                    The link opens in a new tab with one click */}
+                {/* minimum work (issue #111 review): the /p link carries the
+                    code in its fragment, so the remote is open link →
+                    Download → run the saved file. One click opens a new tab. */}
                 <div className="flex items-start gap-3">
                   <div className="min-w-0 flex-1">
-                    <a href={`${serverAddr}/p`} target="_blank" rel="noreferrer" className="font-mono text-[12px] text-[var(--t-sky)] underline decoration-dotted underline-offset-2 break-all hover:brightness-125">{serverAddr}/p</a>
-                    <div className="mt-0.5 text-[10px] text-[var(--t-dim)]">open on the remote (one click), download the installer, run <span className="font-mono text-[var(--t-fg2)]">sh ~/Downloads/t.sh</span>, and type <span className="font-mono text-[var(--t-amber)]">{pairCmd.code}</span> when it asks · single-use · expires in {until(pairCmd.expiresAt)}</div>
+                    <a href={`${serverAddr}/p#${pairCmd.code}`} target="_blank" rel="noreferrer" className="font-mono text-[12px] text-[var(--t-sky)] underline decoration-dotted underline-offset-2 break-all hover:brightness-125">{serverAddr}/p</a>
+                    <div className="mt-0.5 text-[10px] text-[var(--t-dim)]">open on the remote, click Download, run the saved file. The code rides in the link (code <span className="font-mono text-[var(--t-amber)]">{pairCmd.code}</span>, single-use, expires in {until(pairCmd.expiresAt)})</div>
                   </div>
-                  {pairQr && <img src={pairQr} width={72} height={72} className="shrink-0 rounded border border-[var(--t-line2)]" alt={`QR code for ${serverAddr}/p`} title={`${serverAddr}/p`} />}
+                  {pairQr && <img src={pairQr} width={72} height={72} className="shrink-0 rounded border border-[var(--t-line2)]" alt={`QR code for ${serverAddr}/p with the code`} title={`${serverAddr}/p#${pairCmd.code}`} />}
+                </div>
+                <div>
+                  <div className="flex items-center gap-1.5">
+                    <div className="font-mono text-[11px] text-[var(--t-fg2)] break-all select-all flex-1">{pairCmd.command}</div>
+                    <Btn size="xs" variant="outline" icon="copy" onClick={() => { void navigator.clipboard.writeText(pairCmd.command); store.toast("ok", "Copied", "paste it in the remote's terminal"); }}>Copy</Btn>
+                  </div>
+                  <div className="mt-0.5 text-[10px] text-[var(--t-dim)]">or paste this one line in the remote's terminal. No prompts.</div>
                 </div>
                 <div>
                   <div className="font-mono text-[11px] text-[var(--t-fg2)] break-all select-all">{pairCmd.interactiveCommand}</div>
-                  <div className="mt-0.5 text-[10px] text-[var(--t-dim)]">no browser on the remote: type this; when it asks for the pairing code, enter <span className="font-mono text-[var(--t-amber)]">{pairCmd.code}</span></div>
-                </div>
-                <div>
-                  <div className="font-mono text-[11px] text-[var(--t-fg2)] break-all select-all">{pairCmd.command}</div>
-                  <div className="mt-0.5 text-[10px] text-[var(--t-dim)]">same code, inline: no prompt, but more to type. After the code dies, mint another.</div>
+                  <div className="mt-0.5 text-[10px] text-[var(--t-dim)]">typing only, no browser: this one asks for the code (<span className="font-mono text-[var(--t-amber)]">{pairCmd.code}</span>). After the code dies, mint another.</div>
                 </div>
               </div>
             )}

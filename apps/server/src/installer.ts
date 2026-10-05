@@ -154,20 +154,21 @@ sh "$SCRIPT" "$TOKEN"
 
 /**
  * The browser pairing page (issue #111 review rounds), served at GET /p.
- * A URL alone can never install anything (a browser cannot spawn a daemon),
- * so the floor is split across the two surfaces the remote has, download
- * FIRST like every familiar CLI installer:
+ * Minimum-work flow: the wizard's link carries the code in the URL fragment
+ * (`/p#hbyn` — fragments never leave the browser, so the code never touches
+ * access logs), the page pre-fills its box from it, and ONE click on
+ * Download turns the code into a same-origin GET /i/<code> — the EXISTING
+ * burn-once route — so the saved file is the token-embedded installer and
+ * the terminal runs it with nothing else to type:
  *
- *   open <server>/p → Download (the generic, token-free /i script, a
- *   couple of KB) → `sh ~/Downloads/t.sh` → the script asks for the
- *   4-char code → paired.
+ *   open link / scan QR → Download → `sh ~/Downloads/t.sh` → done.
  *
- * The page embeds nothing at all (a fully static string: no interpolation,
- * no injection surface). The code is never typed into the browser: it is
- * typed at the installer's own prompt, which redeems it at POST /i/redeem.
- * Styled to the app's "graphite & signal" tokens (bg0/bg1, line2, amber,
- * teal) with system font stacks, self-contained so a tailnet-only remote
- * needs no internet to render it.
+ * Error answers stay on the page (410/429 get their own lines; a wrong code
+ * burns nothing, since redeemPairing only burns codes that exist). The page
+ * embeds nothing itself (a fully static string: no interpolation, no
+ * injection surface). Styled to the app's "graphite & signal" tokens with
+ * system font stacks, self-contained so a tailnet-only remote needs no
+ * internet to render it.
  */
 export function pairingPage(): string {
   return `<!doctype html>
@@ -191,9 +192,16 @@ export function pairingPage(): string {
        display: grid; place-items: center; font-size: 11px; font-weight: 600; margin-top: 1px; }
   .step p { margin: 0 0 10px; color: #d0cabe; }
   .hint { color: #66635d; font-size: 11.5px; margin: 8px 0 0; }
-  .dl { display: inline-flex; align-items: center; gap: 8px; background: #f0b35a; color: #1a1a1a; font-weight: 600;
-        padding: 10px 18px; border-radius: 9px; text-decoration: none; }
+  form { display: flex; gap: 8px; }
+  input { flex: 1; min-width: 0; font: 500 16px/1 "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+          letter-spacing: 0.25em; padding: 9px 12px; border-radius: 9px; border: 1px solid #353941;
+          background: #0b0c0e; color: #f0b35a; }
+  input:focus { outline: none; border-color: #f0b35a; }
+  #err { color: #ef6b5b; font-size: 11.5px; margin: 8px 0 0; }
+  .dl { display: inline-flex; align-items: center; gap: 8px; background: #f0b35a; color: #1a1a1a; font: 600 13px/1 inherit;
+        padding: 10px 18px; border-radius: 9px; border: 0; cursor: pointer; text-decoration: none; }
   .dl:hover { filter: brightness(1.08); }
+  .dl:disabled { opacity: 0.55; cursor: default; }
   .cmd { display: flex; align-items: center; gap: 8px; background: #0b0c0e; border: 1px solid #23262c; border-radius: 8px; padding: 9px 12px; }
   .cmd code { flex: 1; font: 13px "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace; color: #5fc9c0; user-select: all; }
   .copy { flex: none; font: inherit; font-size: 11.5px; color: #9b968c; background: none; border: 1px solid #353941;
@@ -210,17 +218,21 @@ export function pairingPage(): string {
     </svg>
     <h1>Pair this device with Truss</h1>
   </div>
-  <p class="sub">Three short steps. Nothing runs until you run it.</p>
+  <p class="sub">Download, run, done. The installer never asks you anything.</p>
 
   <section class="step">
     <span class="n">1</span>
-    <div>
+    <div style="flex:1">
       <p>Download the installer.</p>
-      <a class="dl" href="/i" download="t.sh">
-        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3 v12"/><path d="M6 11 l6 6 6-6"/><path d="M4 21 h16"/></svg>
-        Download installer
-      </a>
-      <p class="hint">A couple of KB. It carries no credentials, so a stale copy is harmless.</p>
+      <form id="f">
+        <input id="code" autocomplete="off" autocapitalize="none" spellcheck="false" maxlength="8" placeholder="code" aria-label="pairing code">
+        <button class="dl" type="submit" id="dl">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3 v12"/><path d="M6 11 l6 6 6-6"/><path d="M4 21 h16"/></svg>
+          Download
+        </button>
+      </form>
+      <p class="hint" id="codehint">The 4-character code from the add-host wizard. It bakes into the downloaded file, so the install runs with zero questions.</p>
+      <p id="err" role="alert" hidden></p>
     </div>
   </section>
 
@@ -232,27 +244,65 @@ export function pairingPage(): string {
         <code>sh ~/Downloads/t.sh</code>
         <button class="copy" id="copy" type="button">Copy</button>
       </div>
+      <p class="hint">That is the whole install. The agent dials out over your tailnet; no inbound ports, nothing listens.</p>
     </div>
   </section>
-
-  <section class="step">
-    <span class="n">3</span>
-    <div>
-      <p>Type the 4-character code when it asks.</p>
-      <p class="hint">The code is in the Truss add-host wizard. Single-use, lives for 10 minutes; if it dies, mint another and run the same file again.</p>
-    </div>
-  </section>
-
-  <p class="foot">Once it is up, the agent dials out over your tailnet. No inbound ports, nothing listens on this device.</p>
 </main>
 <script>
-var btn = document.getElementById("copy");
-btn.addEventListener("click", function () {
-  var done = function () { btn.textContent = "Copied"; setTimeout(function () { btn.textContent = "Copy"; }, 1500); };
+var f = document.getElementById("f"), c = document.getElementById("code"),
+    dl = document.getElementById("dl"), err = document.getElementById("err"),
+    hint = document.getElementById("codehint"),
+    copyBtn = document.getElementById("copy");
+
+/* the wizard's link carries the code in the fragment (/p#hbyn): fragments
+   never leave the browser, so the code skips logs and pre-fills the box */
+var fromLink = location.hash.replace(/^#/, "").toLowerCase().replace(/[^a-z0-9]/g, "");
+if (fromLink) {
+  c.value = fromLink;
+  hint.textContent = "Pre-filled from your link. Just hit Download.";
+}
+
+f.addEventListener("submit", function (e) {
+  e.preventDefault();
+  var code = c.value.trim().toLowerCase();
+  if (!code) { c.focus(); return; }
+  err.hidden = true;
+  dl.disabled = true;
+  fetch("/i/" + encodeURIComponent(code)).then(function (r) {
+    if (!r.ok) {
+      err.textContent = r.status === 429
+        ? "Too many tries. Wait a minute, then retry."
+        : "That code is used up, expired, or mis-typed. Mint a fresh one in the wizard.";
+      err.hidden = false;
+      dl.disabled = false;
+      return null;
+    }
+    return r.blob();
+  }).then(function (blob) {
+    if (!blob) return;
+    var a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "t.sh";
+    a.click();
+    /* Safari can abort the download when the blob URL dies in the same tick
+       (audit B1) — revoke lazily; one retained blob on a transient page is
+       harmless, a missing file is not */
+    setTimeout(function () { URL.revokeObjectURL(a.href); }, 10000);
+    dl.disabled = false;
+    hint.textContent = "Saved to Downloads. One step left.";
+  }).catch(function () {
+    err.textContent = "Could not reach the server. Check the address, then retry.";
+    err.hidden = false;
+    dl.disabled = false;
+  });
+});
+
+copyBtn.addEventListener("click", function () {
+  var done = function () { copyBtn.textContent = "Copied"; setTimeout(function () { copyBtn.textContent = "Copy"; }, 1500); };
   if (navigator.clipboard && navigator.clipboard.writeText) {
-    navigator.clipboard.writeText("sh ~/Downloads/t.sh").then(done, function () { btn.textContent = "Select it above"; });
+    navigator.clipboard.writeText("sh ~/Downloads/t.sh").then(done, function () { copyBtn.textContent = "Select it above"; });
   } else {
-    btn.textContent = "Select it above";
+    copyBtn.textContent = "Select it above";
   }
 });
 </script>
