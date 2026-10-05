@@ -50,7 +50,7 @@ import { startDoubletakePoll } from "./integrations/doubletake.js";
 import { composePractices, getGlobalPractices, saveGlobalPractices } from "./practices.js";
 import { createHost, deleteHost, getHost, isHostTombstoned, listHosts, renameHost, rotateHostToken, setHostPinned, setHostRevoked, verifyAgentToken } from "./hosts.js";
 import { assertDialableServerUrl, netInfo, taildropToPeer, tailscalePeers, tailscaleServe, tailscaleSshOk, tailscaleSshRun } from "./net.js";
-import { deliveryOptions, installerDropName } from "./installer.js";
+import { deliveryOptions, installerDropName, interactiveInstallScript } from "./installer.js";
 import { mintPairing, redeemPairing, redeemRateOk } from "./pairing.js";
 import { agentBundleError, agentBundleHash, assertSafeServerUrl, ensureAgentBundle, standaloneInstallScript, installScript } from "./agentbundle.js";
 import { registerMcpPerms } from "./mcp-perms.js";
@@ -352,7 +352,15 @@ app.post("/api/hosts/:id/pair", async (req, reply) => {
     return reply.code(400).send({ error: e.message });
   }
   const { code, expiresAt } = mintPairing({ hostId: id, token, serverUrl });
-  return { code, expiresAt, url: `${serverUrl}/i/${code}`, command: `curl -fsSL ${serverUrl}/i/${code} | sh` };
+  return {
+    code,
+    expiresAt,
+    url: `${serverUrl}/i/${code}`,
+    command: `curl -fsSL ${serverUrl}/i/${code} | sh`,
+    /* issue #111: the same code works at the interactive installer's prompt —
+       the command stays short and carries nothing secret */
+    interactiveCommand: `curl -fsSL ${serverUrl}/i | sh`,
+  };
 });
 
 app.post("/api/hosts/:id/taildrop", async (req, reply) => {
@@ -437,6 +445,39 @@ app.post("/api/hosts/:id/ssh-install", async (req, reply) => {
   } catch (err) {
     return reply.code(502).send({ error: String(err instanceof Error ? err.message : err) });
   }
+});
+
+/* ── interactive pairing (issue #111): `curl -fsSL <host>/i | sh` is the
+   typing floor — the script prompts for the short code, so nothing secret
+   is ever baked into the command or the served file. The code is redeemed
+   at POST /i/redeem for the real credentials, one-shot, same rate limit and
+   oracle-free answers as the inline variant below. ── */
+app.get("/i", async (req, reply) => {
+  /* the only embedded value is the address the client just used to reach us
+     (Host header + proxy proto) — client-controlled, so it goes through the
+     same shell-safe choke point as every other script embed */
+  const proto = req.headers["x-forwarded-proto"] === "https" ? "https" : "http";
+  const serverUrl = `${proto}://${req.headers.host ?? `127.0.0.1:${PORT}`}`;
+  try {
+    return reply.header("Content-Type", "text/x-shellscript; charset=utf-8").send(interactiveInstallScript(serverUrl));
+  } catch (e: any) {
+    return reply.code(400).type("text/plain").send(`error: ${e.message ?? e}\n`);
+  }
+});
+
+app.post("/i/redeem", async (req, reply) => {
+  /* rate-limited per client, same guard as GET /i/:code — the code keyspace
+     is small by design, so guessing it must cost real time */
+  if (!redeemRateOk(req.ip)) {
+    return reply.code(429).send({ error: "too many pairing-code tries — wait a minute, then retry" });
+  }
+  const { code } = (req.body ?? {}) as { code?: string };
+  /* hand-typed at a prompt: forgive case and surrounding whitespace */
+  const entry = typeof code === "string" ? redeemPairing(code.trim().toLowerCase()) : undefined;
+  if (!entry) {
+    return reply.code(410).send({ error: "that pairing code is used up, expired, or unknown — mint a fresh one from the Truss add-host wizard" });
+  }
+  return { hostId: entry.hostId, token: entry.token, serverUrl: entry.serverUrl };
 });
 
 /* the pairing-code endpoint: redeem once, get the standalone script */

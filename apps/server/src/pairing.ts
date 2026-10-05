@@ -20,7 +20,12 @@ export interface Pairing {
 }
 
 const ALPHABET = "abcdefghjkmnpqrstuvwxyz23456789"; // no 0/o, 1/i/l
-const CODE_LEN = 6;
+/* 4 chars (issue #111): the code is now typed at a prompt, not embedded in a
+   long command, so length drops to the typing floor. The keyspace (~923k)
+   stays safe because redeeming is rate-limited per client (below) and every
+   code dies after PAIRING_TTL_MS — a full sweep at the rate cap takes months
+   while a code lives ten minutes. */
+export const PAIRING_CODE_LEN = 4;
 export const PAIRING_TTL_MS = 10 * 60 * 1000; // type it promptly, then it dies
 
 const live = new Map<string, { entry: PairingEntry; expiresAt: number }>();
@@ -31,7 +36,7 @@ export function mintPairing(entry: PairingEntry, ttlMs = PAIRING_TTL_MS): Pairin
   for (const [c, p] of live) if (p.expiresAt <= now) live.delete(c);
 
   let code = "";
-  for (let i = 0; i < CODE_LEN; i++) code += ALPHABET[randomInt(ALPHABET.length)];
+  for (let i = 0; i < PAIRING_CODE_LEN; i++) code += ALPHABET[randomInt(ALPHABET.length)];
   if (live.has(code)) return mintPairing(entry, ttlMs); // collision: remint
   const expiresAt = now + ttlMs;
   live.set(code, { entry, expiresAt });
@@ -49,7 +54,7 @@ export function redeemPairing(code: string, now = Date.now()): PairingEntry | un
 
 /* ── redeem rate limiting (issue #1: "the redeem endpoint must be
    rate-limited; short codes have a small keyspace by design") — a per-client
-   attempt budget, so brute-forcing the ~887M keyspace costs real time ── */
+   attempt budget, so brute-forcing the keyspace costs real time ── */
 export const REDEEM_RATE_WINDOW_MS = 60_000;
 export const REDEEM_RATE_MAX = 10; // attempts per window per client
 

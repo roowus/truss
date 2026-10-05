@@ -786,11 +786,13 @@ export function createDemoBackend(): Backend {
       h.label = next;
       return { ok: true };
     },
-    pairHost: async (_id, _t, serverUrl) => ({ code: "k3xm7q", expiresAt: Date.now() + 600_000, url: `${serverUrl}/i/k3xm7q`, command: `curl -fsSL ${serverUrl}/i/k3xm7q | sh` }),
+    pairHost: async (_id, _t, serverUrl) => ({ code: "k3xm", expiresAt: Date.now() + 600_000, url: `${serverUrl}/i/k3xm`, command: `curl -fsSL ${serverUrl}/i/k3xm | sh`, interactiveCommand: `curl -fsSL ${serverUrl}/i | sh` }),
     taildropHost: async (id) => {
       const file = demoDropName(id);
       return { ok: true, file, command: `sh ~/Downloads/${file}`, typedChars: `sh ~/Downloads/${file}`.length };
     },
+    /* mirrors src/installer.ts deliveryOptions — the demo and the server must
+       never disagree (interactive counts its prompt-typed code, issue #111) */
     deliveryOptions: async (id, peer, _t, serverUrl) => ({
       options: [
         ...(peer
@@ -799,7 +801,8 @@ export function createDemoBackend(): Backend {
               return [{ kind: "taildrop" as const, label: "Send the installer to the device, then run it", command, typedChars: command.length }];
             })()
           : []),
-        { kind: "pairing" as const, label: "Type a short command with a one-time code", command: `curl -fsSL ${serverUrl}/i/xxxxxx | sh`, typedChars: `curl -fsSL ${serverUrl}/i/xxxxxx | sh`.length },
+        { kind: "interactive" as const, label: "Type a short command, then the one-time code it asks for", command: `curl -fsSL ${serverUrl}/i | sh`, typedChars: `curl -fsSL ${serverUrl}/i | sh`.length + 4 },
+        { kind: "pairing" as const, label: "Type a short command with a one-time code", command: `curl -fsSL ${serverUrl}/i/xxxx | sh`, typedChars: `curl -fsSL ${serverUrl}/i/xxxx | sh`.length },
       ].sort((a, b) => a.typedChars - b.typedChars),
     }),
     sshInstall: async () => ({ ok: true }),

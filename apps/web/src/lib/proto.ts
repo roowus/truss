@@ -230,9 +230,11 @@ export interface NetInfo {
 }
 
 /** installer last mile (issue #91): one way to get the agent onto the
-   remote, ordered by what the user must type there (ssh = 0 leads) */
+   remote, ordered by what the user must type there (ssh = 0 leads).
+   "interactive" (issue #111) is the pairing variant whose script prompts
+   for the code instead of embedding it in the command. */
 export interface DeliveryOption {
-  kind: "ssh" | "taildrop" | "pairing";
+  kind: "ssh" | "taildrop" | "interactive" | "pairing";
   label: string;
   command: string;
   typedChars: number;

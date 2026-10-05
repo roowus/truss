@@ -17,6 +17,9 @@
  *     the pairing code is the universal floor that is always offered.
  */
 
+import { PAIRING_CODE_LEN } from "./pairing.js";
+import { assertSafeServerUrl } from "./agentbundle.js";
+
 export interface DeliveryCaps {
   taildropOk: boolean; // a tailnet device is picked and tailscale is here
   sshOk: boolean; // the dry probe says `tailscale ssh <peer>` works
@@ -26,7 +29,7 @@ export interface DeliveryCaps {
 }
 
 export interface DeliveryOption {
-  kind: "ssh" | "taildrop" | "pairing";
+  kind: "ssh" | "taildrop" | "interactive" | "pairing";
   label: string;
   command: string;
   typedChars: number; // what the user must type on the remote — honest count
@@ -43,17 +46,21 @@ export function installerDropName(hostId: string): string {
 }
 
 /**
- * The wizard's delivery options, sorted ascending by typedChars. Pairing is
- * always present: it needs no tailscale on either end, so it is the floor
- * every other option merely beats.
+ * The wizard's delivery options, sorted ascending by typedChars. The pairing
+ * options are always present: they need no tailscale on either end, so they
+ * are the floor every other option merely beats.
  *
- * The pairing command carries a placeholder code (`xxxxxx`, the real code's
- * exact length, so typedChars stays honest) — the wizard mints a fresh
- * single-use code the moment the user picks this option and swaps it in.
+ * The pairing commands carry a placeholder code (the real code's exact
+ * length, so typedChars stays honest) — the wizard mints a fresh single-use
+ * code the moment the user picks one of these options and swaps it in. The
+ * interactive variant (issue #111) types the code at a prompt instead of
+ * inline, so its command is shorter and carries nothing secret; its honest
+ * count includes the code the user types when asked.
  */
 export function deliveryOptions(caps: DeliveryCaps): DeliveryOption[] {
   const opts: DeliveryOption[] = [];
   const drop = installerDropName(caps.hostId ?? "");
+  const placeholder = "x".repeat(PAIRING_CODE_LEN);
 
   if (caps.sshOk) {
     /* zero typing: THIS server runs the installer on the peer, piping the
@@ -67,8 +74,73 @@ export function deliveryOptions(caps: DeliveryCaps): DeliveryOption[] {
     opts.push({ kind: "taildrop", label: "Send the installer to the device, then run it", command, typedChars: command.length });
   }
 
-  const pair = `curl -fsSL ${caps.serverUrl}/i/xxxxxx | sh`;
+  const interactive = `curl -fsSL ${caps.serverUrl}/i | sh`;
+  opts.push({
+    kind: "interactive",
+    label: "Type a short command, then the one-time code it asks for",
+    command: interactive,
+    typedChars: interactive.length + PAIRING_CODE_LEN, // the code is typed at the prompt
+  });
+
+  const pair = `curl -fsSL ${caps.serverUrl}/i/${placeholder} | sh`;
   opts.push({ kind: "pairing", label: "Type a short command with a one-time code", command: pair, typedChars: pair.length });
 
   return opts.sort((a, b) => a.typedChars - b.typedChars);
+}
+
+/**
+ * The interactive installer (issue #111), served at GET /i and safe to
+ * taildrop as-is: it carries NO token and no code, so the file is generic
+ * and can sit in a Downloads folder without holding a credential. It prompts
+ * for the short pairing code, redeems it once at POST /i/redeem for the real
+ * credentials, then runs the regular installer with them. The only embedded
+ * value is the URL the client just used to reach this server (validated
+ * against the same shell-safe rule as every other script embed point).
+ */
+export function interactiveInstallScript(serverUrl: string): string {
+  assertSafeServerUrl(serverUrl);
+  return `#!/bin/sh
+# Truss interactive installer — pairs this machine with ${serverUrl}
+# The add-host wizard shows a short one-time code; this script asks for it,
+# trades it once for the real credentials, and installs the agent.
+set -eu
+
+SERVER='${serverUrl}'
+
+printf 'pairing code? ' >&2
+# when this script arrives via a curl pipe, stdin IS the script (already
+# consumed) — the answer must come from the terminal itself
+read -r CODE < /dev/tty || read -r CODE || {
+  echo "could not read the code — no terminal attached" >&2
+  exit 1
+}
+# typed by hand: forgive case and stray whitespace, keep only code alphabet
+CODE=$(printf '%s' "$CODE" | tr 'A-Z' 'a-z' | tr -cd 'abcdefghjkmnpqrstuvwxyz23456789')
+if [ -z "$CODE" ]; then
+  echo "no code given — mint one in the Truss add-host wizard (Short command)" >&2
+  exit 1
+fi
+
+RESP=$(curl -fsSL -X POST -H 'content-type: application/json' \\
+  -d "{\\"code\\":\\"$CODE\\"}" \\
+  "$SERVER/i/redeem") || {
+  echo "that code did not work — used up, expired, or mis-typed. Mint a fresh one in the wizard." >&2
+  exit 1
+}
+
+TOKEN=$(printf '%s' "$RESP" | sed -n 's/.*"token":"\\([^"]*\\)".*/\\1/p')
+HOST_ID=$(printf '%s' "$RESP" | sed -n 's/.*"hostId":"\\([^"]*\\)".*/\\1/p')
+SURL=$(printf '%s' "$RESP" | sed -n 's/.*"serverUrl":"\\([^"]*\\)".*/\\1/p')
+if [ -z "$TOKEN" ] || [ -z "$HOST_ID" ] || [ -z "$SURL" ]; then
+  echo "unexpected answer from $SERVER — is this a Truss server?" >&2
+  exit 1
+fi
+
+# download first, then run: a failed download must not exit 0 with the agent
+# half-announced (a bare curl | sh pipeline hides the curl status)
+SCRIPT=$(mktemp "\${TMPDIR:-/tmp}/truss-install.XXXXXX")
+trap 'rm -f "$SCRIPT"' EXIT
+curl -fsSL "$SURL/agent/install.sh?host=$HOST_ID" -o "$SCRIPT"
+sh "$SCRIPT" "$TOKEN"
+`;
 }

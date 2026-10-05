@@ -30,7 +30,7 @@ export function AddHostWizard({ onClose }: { onClose: () => void }) {
   const [busy, setBusy] = useState(false);
   /* installer delivery (issue #1): taildrop to the picked device, or mint a
      short typeable pairing command */
-  const [pairCmd, setPairCmd] = useState<{ command: string; code: string; expiresAt: number } | null>(null);
+  const [pairCmd, setPairCmd] = useState<{ command: string; interactiveCommand: string; code: string; expiresAt: number } | null>(null);
   const [pairBusy, setPairBusy] = useState(false);
   const [dropState, setDropState] = useState<"idle" | "sending" | "sent" | "failed">("idle");
   const [dropErr, setDropErr] = useState<string | null>(null);
@@ -341,7 +341,7 @@ export function AddHostWizard({ onClose }: { onClose: () => void }) {
                   if (!created) return;
                   setPairBusy(true);
                   be?.pairHost(created.id, created.token, serverAddr).then(
-                    (r) => setPairCmd({ command: r.command, code: r.code, expiresAt: r.expiresAt }),
+                    (r) => setPairCmd({ command: r.command, interactiveCommand: r.interactiveCommand, code: r.code, expiresAt: r.expiresAt }),
                     (e) => store.toast("error", "Couldn't mint a pairing code", e?.message ?? String(e)),
                   ).finally(() => setPairBusy(false));
                 }}
@@ -367,9 +367,17 @@ export function AddHostWizard({ onClose }: { onClose: () => void }) {
               </div>
             )}
             {pairCmd && (
-              <div className="rounded-lg border border-[var(--t-line)] bg-[var(--t-bg0)] px-3 py-2">
-                <div className="font-mono text-[12px] text-[var(--t-fg)] break-all select-all">{pairCmd.command}</div>
-                <div className="mt-0.5 text-[10px] text-[var(--t-dim)]">code <span className="font-mono text-[var(--t-amber)]">{pairCmd.code}</span> · single-use · expires in {until(pairCmd.expiresAt)} — after that the code is dead, mint another</div>
+              <div className="rounded-lg border border-[var(--t-line)] bg-[var(--t-bg0)] px-3 py-2 space-y-2">
+                {/* the typing floor (issue #111): a short command, then the
+                    code at the prompt — leads over the inline variant */}
+                <div>
+                  <div className="font-mono text-[12px] text-[var(--t-fg)] break-all select-all">{pairCmd.interactiveCommand}</div>
+                  <div className="mt-0.5 text-[10px] text-[var(--t-dim)]">type it on the remote — when it asks for the pairing code, enter <span className="font-mono text-[var(--t-amber)]">{pairCmd.code}</span> · single-use · expires in {until(pairCmd.expiresAt)}</div>
+                </div>
+                <div>
+                  <div className="font-mono text-[11px] text-[var(--t-fg2)] break-all select-all">{pairCmd.command}</div>
+                  <div className="mt-0.5 text-[10px] text-[var(--t-dim)]">same code, inline — no prompt, but more to type. After the code dies, mint another.</div>
+                </div>
               </div>
             )}
             <div className="flex justify-end gap-2 pt-1">

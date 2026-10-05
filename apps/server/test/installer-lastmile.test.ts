@@ -17,15 +17,17 @@ import { freshServer } from "./helpers.js";
        re-drops to the SAME name (overwrite = refresh, not inbox clutter).
 
      deliveryOptions(caps: { taildropOk: boolean; sshOk: boolean; serverUrl: string }):
-       { kind: "ssh" | "taildrop" | "pairing"; label: string; command: string; typedChars: number }[]
+       { kind: "ssh" | "taildrop" | "interactive" | "pairing"; label: string; command: string; typedChars: number }[]
        The wizard's option list, ordered by effort: what the user must type.
        - tailscale-ssh available → a zero-typing option leads;
        - taildrop → its command is exactly `sh ~/Downloads/<dropname>`;
-       - the pairing `curl …/i/<code> | sh` is ALWAYS present (the floor);
+       - the pairing options are ALWAYS present (the floor): the interactive
+         `curl …/i | sh` prompt variant (issue #111) ahead of the inline
+         `curl …/i/<code> | sh`;
        - sorted ascending by typedChars (ssh = 0). */
 
 interface DeliveryOption {
-  kind: "ssh" | "taildrop" | "pairing";
+  kind: "ssh" | "taildrop" | "interactive" | "pairing";
   label: string;
   command: string;
   typedChars: number;
@@ -84,6 +86,15 @@ test("deliveryOptions: the least-typing option leads; the taildrop command is th
     assert.match(drop.command, /^sh ~\/Downloads\/[a-z0-9.-]+\.sh$/, "the remote side types one short path");
     assert.ok(drop.typedChars <= 24, "short enough to actually type");
 
+    /* interactive pairing (issue #111): the script prompts for the code, so
+       the command is shorter than the inline variant and its honest count
+       includes the code typed at the prompt */
+    const interactive = opts.find((o) => o.kind === "interactive")!;
+    assert.ok(interactive, "the interactive /i command is always there");
+    assert.match(interactive.command, /curl .*\/i \| sh$/, "the bare /i url form — no code inline");
+    assert.ok(interactive.typedChars > interactive.command.length, "honest: the prompt-typed code counts");
+    assert.ok(interactive.typedChars < (opts.find((o) => o.kind === "pairing")?.typedChars ?? 0), "beats typing the code inline");
+
     const pair = opts.find((o) => o.kind === "pairing")!;
     assert.ok(pair, "the pairing code is always there");
     assert.match(pair.command, /curl .*\/i\/[a-z0-9]+/i, "the short /i/ url form");
@@ -93,7 +104,7 @@ test("deliveryOptions: the least-typing option leads; the taildrop command is th
   }
 });
 
-test("tailscale-ssh available → a zero-typing option leads; nothing available → pairing alone", async () => {
+test("tailscale-ssh available → a zero-typing option leads; nothing available → the pairing floor remains", async () => {
   const { cleanup } = await freshServer("lastmile-ssh");
   try {
     const mod = await load();
@@ -104,8 +115,10 @@ test("tailscale-ssh available → a zero-typing option leads; nothing available 
     assert.equal(withSsh[0].typedChars, 0, "the user types nothing — the server runs it via tailscale ssh");
     assert.match(withSsh[0].command, /tailscale ssh/, "the command the SERVER would run is shown for transparency");
 
+    /* issue #111: the floor is the pairing PAIR — the prompt variant first
+       (less to type), the inline variant behind it */
     const none = mod.deliveryOptions({ taildropOk: false, sshOk: false, serverUrl: CAPS.serverUrl });
-    assert.deepEqual(none.map((o) => o.kind), ["pairing"], "the pairing code is the universal floor");
+    assert.deepEqual(none.map((o) => o.kind), ["interactive", "pairing"], "the pairing options are the universal floor");
   } finally {
     cleanup();
   }
