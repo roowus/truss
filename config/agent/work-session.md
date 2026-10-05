@@ -37,11 +37,13 @@ When you are handed a PR you did not make (the developer commented
    — you will publish it with the PR in phase 2. Your session TITLE carries a
    live status bracket; set it now and at every transition (the developer
    reads the sidebar at a glance):
-   `curl -sS -X POST http://127.0.0.1:3080/plugins/dsh-spawn/title -H 'content-type: application/json' -d '{"sessionId": "'"$DSH_SESSION_ID"'", "title": "work: #<n> — <slug> [working]"}'`
-   Brackets: `[working]` while implementing or fixing, `[needs-answer]` while
-   blocked on the developer (see the question lane), `[ready]` once handed
-   off for review. The `[merged]` bracket is set by the reaper when your PR
-   merges — you never set it yourself. The cron that started you records the mapping in
+   `curl -sS -X POST http://127.0.0.1:3080/plugins/dsh-spawn/title -H 'content-type: application/json' -d '{"sessionId": "'"$DSH_SESSION_ID"'", "title": "#<n> — <slug> [working]"}'`
+   No prefix — the number is the handle: the issue number until your PR
+   exists, then retitle to the PR number (`#<pr> — <slug> [working]`) when
+   you open it in phase 2. Brackets: `[working]` while implementing or
+   fixing, `[needs-answer]` while blocked on the developer (see the question
+   lane), `[ready]` once handed off for review. The `[merged]` bracket is
+   set by the reaper when your PR merges — you never set it yourself. The cron that started you records the mapping in
    `~/.local/state/truss-sessions.json`; if it didn't, append your own entry:
    `{"pr": <n>, "session": "<id>", "since": "<iso>", "state": "working"}`.
 1. Read the issue fully, including its suggested tests.
@@ -124,7 +126,7 @@ never asked for? When you judge it done:
    (`gh pr view --json labels`) and the latest audit's verdict on the FINAL
    head is clean/approved. `ready-for-review` and `audit` must never coexist
    — the label says "done", the loop says "not done".
-   a. Retitle: `work: #<n> — <slug> [ready]` via the title route.
+   a. Retitle: `#<pr> — <slug> [ready]` via the title route.
    b. Apply the review label: `gh pr edit <pr> --add-label ready-for-review`.
    b. Post the handoff comment:
       `gh pr comment <pr> --body "..."` covering, in plain language:
@@ -154,7 +156,7 @@ worth ten stalled guesses, and ten noise questions is worse than guessing.
    PR (or the issue, if no PR exists yet): the decision in one sentence, the
    options you see with your recommendation, and why you can't call it.
 2. Mark it for them: `gh pr edit <pr> --add-label needs-answer` (or the issue).
-3. Retitle with the status bracket: `… "title": "work: #<n> — <slug>
+3. Retitle with the status bracket: `… "title": "#<n> — <slug>
    [needs-answer]"` via the /plugins/dsh-spawn/title route. Badge your
    session so the GUI sidebar shows the dot:
    `curl -sS -X POST http://127.0.0.1:3080/plugins/dsh-unread/mark -H 'content-type: application/json' -d "{\"sessionId\": \"$DSH_SESSION_ID\", \"unread\": true}"`

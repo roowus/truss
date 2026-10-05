@@ -31,7 +31,7 @@ except Exception: pass
 import json
 for e in json.load(open('$HOME/.local/state/truss-sessions.json')):
     if str(e.get('pr')) == '$n':
-        print('work: #%s [merged]' % e.get('issue')); break
+        print('#%s [merged]' % e.get('pr', e.get('issue'))); break
 ")
         curl -sS -m 5 -X POST http://127.0.0.1:3080/plugins/dsh-spawn/title           -H 'content-type: application/json'           -d "{"sessionId": "$SID", "title": "$TITLE"}" >/dev/null 2>&1 &&           echo "$(date -Is) retitled $SID -> $TITLE"
       fi
