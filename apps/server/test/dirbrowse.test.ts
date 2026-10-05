@@ -125,3 +125,20 @@ test("clean errors: a file path or a missing dir never returns garbage", async (
     cleanup();
   }
 });
+
+/* audit round 1 (PR #107, finding B3): a symlink whose target leaves the
+   roots is not OFFERED as a row — offering it would only 400 on click */
+test("listings skip symlink rows whose targets escape the roots", async () => {
+  const { cleanup } = await freshServer("browse-deadlinks");
+  try {
+    const mod = await load();
+    assert.ok(mod, "dirbrowse module must exist (see roots test)");
+    const dead = join(WS, "dead-link");
+    symlinkSync("/etc", dead);
+    const r = mod.listDirs(WS);
+    assert.ok(!r.dirs.some((d) => d.name === "dead-link"), "an escaping link is not a navigable row");
+    assert.ok(r.dirs.some((d) => d.name === "alpha-link"), "an inside-the-roots link still follows");
+  } finally {
+    cleanup();
+  }
+});

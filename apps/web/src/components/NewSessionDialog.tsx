@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { store, useApp } from "@/lib/store";
 import { useDesktops } from "@/lib/desktops";
 import { harnessStyle, hostOf, shortPath } from "@/lib/format";
-import { resolveDefaultCwd } from "@/lib/cwdDefault";
+import { resolveDefaultCwd, hostDefaultFor } from "@/lib/cwdDefault";
 import type { BrowseDir } from "@/lib/proto";
 import { openPanel, openSession } from "@/lib/workspace";
 import { Btn, HarnessMark, Icon, Kbd, Select, Spinner } from "./ui";
@@ -33,31 +33,32 @@ export function NewSessionDialog({ onClose, preset }: { onClose: () => void; pre
   const [pickerOpen, setPickerOpen] = useState(false);
   const [project, setProject] = useState(preset?.project ?? sessions[order[0]]?.project ?? "");
 
-  /* the harness id's "@host" suffix keys the per-host preference; it can be
-     the host id or its hostname, so fall back through the hosts registry */
-  const hostDefaultFor = (harnessId: string): string => {
-    const suffix = hostOf(harnessId);
-    if (!suffix) return "";
-    const direct = hostPrefs[suffix]?.defaultCwd;
-    if (direct) return direct;
-    const host = hosts.find((h) => h.id === suffix || h.agent?.hostname === suffix || h.agent?.hostname?.split(".")[0] === suffix);
-    return (host && hostPrefs[host.id]?.defaultCwd) || "";
-  };
-
   /* The default working directory follows the named precedence
      (preset > picked host > Settings > most recent) and re-resolves as the
      harness pick, host prefs, and settings load — until the user types or
-     picks a directory themselves, which marks the field as theirs. */
+     picks a directory themselves, which marks the field as theirs.
+
+     Recency is SNAPSHOT on open (first non-empty read): the store bumps a
+     live session to order[0] on every session.state event, so a live
+     `recentCwds` dep would flip the field under the user's eyes whenever
+     background sessions change state (audit round 1, B1). */
   const cwdTouched = useRef(false);
+  const recentSnapshot = useRef<string | undefined>(undefined);
+  if (recentSnapshot.current === undefined && recentCwds[0]) recentSnapshot.current = recentCwds[0];
   const setCwd = (v: string) => {
     cwdTouched.current = true;
     setCwdState(v);
   };
   useEffect(() => {
     if (cwdTouched.current) return;
-    const next = resolveDefaultCwd({ preset: preset?.cwd, hostDefault: hostDefaultFor(harness), settingsDefault: defaultCwd, recent: recentCwds[0] });
+    const next = resolveDefaultCwd({
+      preset: preset?.cwd,
+      hostDefault: hostDefaultFor(harness, hostPrefs, hosts),
+      settingsDefault: defaultCwd,
+      recent: recentSnapshot.current,
+    });
     setCwdState((cur) => (cur === next ? cur : next));
-  }, [harness, preset?.cwd, defaultCwd, recentCwds, hostPrefs, hosts]);
+  }, [harness, preset?.cwd, defaultCwd, hostPrefs, hosts]);
 
   /* browsing runs on THIS truss server; a remote host's fs is unreachable
      here, so the picker stays local-only and the host default prefill does

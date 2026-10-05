@@ -61,3 +61,44 @@ test("blank candidates never win", async () => {
     "whitespace/empty candidates fall through",
   );
 });
+
+/* audit round 1 (PR #107, finding B2): pin the host-default LOOKUP, not
+   just the precedence — real harness ids are `${adapterId}@${hostId}`, so
+   the direct host-pref hit must win, with the registry walk (hostname,
+   short hostname) covering hand-keyed suffixes */
+
+interface HostLookupModule extends CwdDefaultModule {
+  hostDefaultFor(harnessId: string, prefs: Record<string, { defaultCwd?: string }>, hosts?: { id: string; agent?: { hostname?: string } }[]): string;
+}
+
+async function loadLookup(): Promise<HostLookupModule | null> {
+  const spec = "../src/lib/cwdDefault";
+  return import(spec).catch(() => null);
+}
+
+test("hostDefaultFor: the host id suffix hits the host pref directly", async () => {
+  const mod = await loadLookup();
+  assert.ok(mod, "cwdDefault module must exist (see module test)");
+  const prefs = { "box-1": { defaultCwd: "/srv/code" } };
+  assert.equal(mod.hostDefaultFor("dsh@box-1", prefs), "/srv/code", "the real id shape resolves without the registry");
+  assert.equal(mod.hostDefaultFor("dsh@box-1", prefs, []), "/srv/code", "registry optional for the direct hit");
+});
+
+test("hostDefaultFor: hostname and short-hostname suffixes resolve through the registry", async () => {
+  const mod = await loadLookup();
+  assert.ok(mod, "cwdDefault module must exist (see module test)");
+  const prefs = { "box-1": { defaultCwd: "/srv/code" } };
+  const hosts = [{ id: "box-1", agent: { hostname: "devbox.lan" } }];
+  assert.equal(mod.hostDefaultFor("pi@devbox.lan", prefs, hosts), "/srv/code", "full hostname suffix");
+  assert.equal(mod.hostDefaultFor("pi@devbox", prefs, hosts), "/srv/code", "short hostname suffix");
+});
+
+test("hostDefaultFor: local harnesses and unknown hosts give no default", async () => {
+  const mod = await loadLookup();
+  assert.ok(mod, "cwdDefault module must exist (see module test)");
+  const prefs = { "box-1": { defaultCwd: "/srv/code" } };
+  const hosts = [{ id: "box-1", agent: { hostname: "devbox.lan" } }];
+  assert.equal(mod.hostDefaultFor("dsh", prefs, hosts), "", "no @host suffix — a local harness has no host default");
+  assert.equal(mod.hostDefaultFor("dsh@nowhere", prefs, hosts), "", "unknown host");
+  assert.equal(mod.hostDefaultFor("dsh@box-1", {}, hosts), "", "host known but no pref stored");
+});

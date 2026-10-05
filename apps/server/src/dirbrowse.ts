@@ -82,6 +82,7 @@ function confine(input: string): string {
 export function listDirs(absPath: string, opts?: { showHidden?: boolean }): DirListing {
   const dir = confine(absPath);
   const dirs: BrowseDir[] = [];
+  let rroots: string[] | null = null; // resolved lazily, only when a symlinked dir shows up
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     if (entry.name === "." || entry.name === "..") continue;
     if (!opts?.showHidden && entry.name.startsWith(".")) continue;
@@ -89,11 +90,21 @@ export function listDirs(absPath: string, opts?: { showHidden?: boolean }): DirL
     let isDir = entry.isDirectory();
     if (!isDir && entry.isSymbolicLink()) {
       /* a link to a dir follows (browsing into it is still confined on the
-         next call); a broken link is skipped */
+         next call); a broken link is skipped, and a link whose target
+         leaves the roots is not offered at all — it would only 400 on
+         click */
       try {
         isDir = statSync(abs).isDirectory();
       } catch {
         continue;
+      }
+      if (isDir) {
+        rroots ??= realRoots();
+        try {
+          if (!within(realpathSync(abs), rroots)) continue;
+        } catch {
+          continue;
+        }
       }
     }
     if (!isDir) continue;
