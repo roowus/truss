@@ -5,7 +5,7 @@ import { argSummary, fmtMs, harnessStyle, shortPath, baseHarness, deadSessionHin
 import { deviceLabel } from "@/lib/device";
 import { buildModelOptions, modelValue, splitModelValue } from "@/lib/models";
 import { planHeaderFit, HEADER_CLUSTER, HEADER_GAP } from "@/lib/headerFit";
-import { CHAT_WIDTH_DEFAULT, commitChatWidth, dragDisplayWidth, readChatWidthPref, resolveChatWidth, writeChatWidthPref } from "@/lib/chatWidth";
+import { CHAT_WIDTH_DEFAULT, chatHandleGeometry, commitChatWidth, dragDisplayWidth, readChatWidthPref, resolveChatWidth, writeChatWidthPref } from "@/lib/chatWidth";
 import { filesFromTransfer, isFileDrag } from "@/lib/attach";
 import { formatSessionRef } from "@/lib/sessionRef";
 import { RAIL_INSET, activeRailIndex, railIndexAtOffset, railMarkTop, railNaturalHeight, turnRailItems } from "@/lib/turnRail";
@@ -757,7 +757,7 @@ function Composer({ id, active }: { id: string; active: boolean }) {
 /* ---------------- draggable chat column width (issue #6) ---------------- */
 
 /* one width state shared by the timeline and the composer (same axis), with
-   hover-revealed drag handles at the panel's side edges */
+   hover-revealed drag handles riding the chat column's edges */
 function ChatWidthProvider({ timeline, composer, perms }: { timeline: ReactNode; composer: ReactNode; perms: ReactNode }) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const [columnW, setColumnW] = useState(0);
@@ -827,15 +827,20 @@ function ChatWidthProvider({ timeline, composer, perms }: { timeline: ReactNode;
     window.addEventListener("pointercancel", cancel);
   };
 
-  const handleCls = (side: "left" | "right") =>
-    cn(
-      "absolute top-0 bottom-0 w-2 z-20 cursor-col-resize group/edge",
-      side === "left" ? "left-0" : "right-0",
-    );
+  /* the handles ride the chat column's edges and move with it (issue #116) —
+     pinned to the panel's edges they float ever further from the column as
+     the panel widens; hidden entirely when the margin has no room */
+  const geo = chatHandleGeometry(columnW, width);
+  const handleCls = "absolute top-0 bottom-0 z-20 cursor-col-resize group/edge";
+  const handleStyle = (side: "left" | "right"): React.CSSProperties =>
+    side === "left"
+      ? { left: `calc(50% - ${geo.offset + geo.width}px)`, width: geo.width }
+      : { left: `calc(50% + ${geo.offset}px)`, width: geo.width };
   const gripCls = cn(
     "absolute top-1/2 -translate-y-1/2 w-[3px] h-10 rounded-full transition-colors",
+    "opacity-0 group-hover/edge:opacity-100",
     "bg-[var(--t-line2)] group-hover/edge:bg-[var(--t-amber)]",
-    dragging && "bg-[var(--t-amber)]",
+    dragging && "bg-[var(--t-amber)] opacity-100",
   );
 
   return (
@@ -844,10 +849,10 @@ function ChatWidthProvider({ timeline, composer, perms }: { timeline: ReactNode;
       <div className="flex-1 min-h-0 flex flex-col" style={{ ["--t-chatw" as never]: `${width}px` }}>
         <ChatColumnCtx.Provider value={width}>{timeline}{perms}{composer}</ChatColumnCtx.Provider>
       </div>
-      {/* edge drag handles */}
-      {(["left", "right"] as const).map((side) => (
-        <div key={side} className={handleCls(side)} style={{ touchAction: "none" /* touch: drag resizes instead of scrolling */ }} onPointerDown={onPointerDown(side)} title="Drag to resize the chat column" aria-label={`Resize chat column (${side} edge)`} role="separator" aria-orientation="vertical">
-          <span className={cn(gripCls, side === "left" ? "left-0.5" : "right-0.5")} />
+      {/* edge drag handles — placed from the geometry, hover-only grip */}
+      {geo.visible && (["left", "right"] as const).map((side) => (
+        <div key={side} className={handleCls} style={{ ...handleStyle(side), touchAction: "none" /* touch: drag resizes instead of scrolling */ }} onPointerDown={onPointerDown(side)} title="Drag to resize the chat column" aria-label={`Resize chat column (${side} edge)`} role="separator" aria-orientation="vertical">
+          <span className={cn(gripCls, side === "left" ? "right-0.5" : "left-0.5")} />
         </div>
       ))}
     </div>
