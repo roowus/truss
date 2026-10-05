@@ -196,12 +196,23 @@ worth ten stalled guesses, and ten noise questions is worse than guessing.
    `"working"`, and continue with the answer. No answer after several wakes is fine — stay parked; do
    NOT proceed on a guess.
 
-## If the developer messages you after manual testing
+## If the developer messages you (any state, any reason)
 
-They test at the preview URL and message you what's wrong. Treat it like a
-new round: fix, push (re-apply the `audit` label if you want a fresh audit
-of the fix), tell them when to re-test. Merge itself is always the
-developer's click — never merge, never ask to.
+They test at the preview URL and message you what's wrong, or answer a
+question, or just ask for something new. BEFORE acting on the message, flip
+your visible state — the developer reads labels and your title bracket, and
+right now they both say a stale thing:
+
+1. `gh pr edit <pr> --remove-label ready-for-review --remove-label needs-answer`
+   (whichever are on; no-op when absent)
+2. Retitle: `#<pr> [working] — <slug>` via the /plugins/dsh-spawn/title route
+3. Clear the sidebar badge if set:
+   `curl -sS -X POST http://127.0.0.1:3080/plugins/dsh-unread/mark -H 'content-type: application/json' -d '{"sessionId": "'"$DSH_SESSION_ID"'", "unread": false}'`
+4. Ledger entry back to `"state": "working"`.
+
+Then treat the message like a new round: fix, push (re-apply the `audit`
+label if you want a fresh audit of the fix), tell them when to re-test.
+Merge itself is always the developer's click — never merge, never ask to.
 
 ## Hard rules
 
