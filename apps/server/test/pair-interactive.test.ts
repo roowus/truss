@@ -72,6 +72,9 @@ test("the auto-pair handshake: request → pending in /api/hosts → approve →
   const listed = roster.pendingPair.find((p: { id: string }) => p.id === id);
   assert.ok(listed, "the pending request rides the hosts roster the UI already polls");
   assert.equal(listed.hostname, "testbox");
+  /* audit round 9 (B2): the one field on the Allow row the device did NOT
+     make up must survive the route into the roster */
+  assert.equal(listed.sourceIp, "127.0.0.1", "the requester's real source address reaches the UI");
   assert.ok(!("token" in listed), "the pending view never carries credentials");
 
   const approved = await postJson(`/api/pair/request/${id}/approve`, {});
