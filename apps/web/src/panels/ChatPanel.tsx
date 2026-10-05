@@ -757,7 +757,7 @@ function Composer({ id, active }: { id: string; active: boolean }) {
         {voiceState === "recording" && (
           <div className="pointer-events-none absolute inset-0 flex items-center gap-2 px-1.5 rounded-sm bg-[var(--t-bg0)] text-[var(--t-amber)] overflow-hidden">
             <span className="shrink-0 text-[11.5px] tabular-nums">{fmtTakeTime(voiceNow - (voiceStart ?? voiceNow))}</span>
-            <VoiceVisualizer levelStream={voiceLevelStream} className="flex min-w-0 flex-1 items-center gap-[2px] h-5" />
+            <VoiceVisualizer levelStream={voiceLevelStream} className="flex min-w-0 flex-1 items-center gap-[2px] h-5 overflow-hidden" />
             {/* the Esc affordance lives in the bar itself — no hint line
                 below, so the composer never shifts when a take starts */}
             <span className="shrink-0 text-[10px] text-[var(--t-dim)]">Esc to cancel</span>
