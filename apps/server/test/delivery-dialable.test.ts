@@ -3,11 +3,11 @@ import assert from "node:assert/strict";
 import { bootServer, type TestServer } from "./server-harness.js";
 
 /* Route-level pins for the dialability guard on the OTHER two delivery
-   routes (audit round on 03846ba): /pair's refusal is pinned by the issue's
-   own spec (return-address.test.ts); /taildrop and /ssh-install only had
-   their #91 syntax guards pinned. Deleting either assertDialableServerUrl
-   call site must fail CI — otherwise that path mints a doomed install
-   again, which is the incident #100 exists to prevent. */
+   routes (audit round at the merge head cf20ce1): /pair's refusal is pinned
+   by the issue's own spec (return-address.test.ts); /taildrop and
+   /ssh-install only had their #91 syntax guards pinned. Deleting either
+   assertDialableServerUrl call site must fail CI — otherwise that path mints
+   a doomed install again, which is the incident #100 exists to prevent. */
 
 let srv: TestServer;
 
