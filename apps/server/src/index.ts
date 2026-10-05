@@ -153,6 +153,8 @@ const AGENT_PROTOCOL = 2;
 wireRemoteRegistry({
   register: registerAdapter,
   unregister: unregisterAdapter,
+  /* an agent hello'd/dropped — open clients refetch hosts + harnesses */
+  registryChanged: () => broadcastRaw({ type: "agents.changed", sessionId: "" }),
   sessionGone: (sessionId, detail) => {
     if (store.getSession(sessionId)) store.setSessionState(sessionId, "error");
     /* the live entry must die with it (audit B1): otherwise sendPrompt's

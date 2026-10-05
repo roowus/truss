@@ -260,6 +260,9 @@ export type ProtoEvent =
   | (Base & { type: "session.deleted" })
   | (Base & { type: "todo.upsert"; todo: TodoItem })
   | (Base & { type: "feed.upsert"; item: FeedItem })
+  /* the remote-host registry flipped (agent hello/bye) — refetch hosts +
+     harnesses (issue #100 manual test) */
+  | (Base & { type: "agents.changed" })
   | (Base & { type: "msg.start"; messageId: string; role: "user" | "assistant" | "system"; at: At; attachments?: PromptAttachment[] })
   | (Base & { type: "msg.chunk"; messageId: string; text: string; channel?: string })
   | (Base & { type: "msg.done"; messageId: string; stopReason?: string })

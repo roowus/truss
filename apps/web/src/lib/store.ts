@@ -448,6 +448,15 @@ class Store {
       }
       return;
     }
+    /* an agent hello'd or went away: the hosts/harnesses rosters are stale
+       the moment it happens (issue #100 manual test — the host panel read a
+       pre-connect harness list and reported every adapter "not exposed") */
+    if (ev.type === "agents.changed") {
+      void this.refreshHosts();
+      void this.refreshAgents();
+      void this.refreshHarnesses();
+      return;
+    }
     const id = ev.sessionId;
     /* deleted on any device → gone here too, instantly (row + cached view) */
     if (ev.type === "session.deleted") {

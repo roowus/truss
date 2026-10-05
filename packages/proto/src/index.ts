@@ -110,6 +110,14 @@ export interface FeedUpsert {
   item: FeedItem;
 }
 
+/* the remote-host registry flipped (an agent hello'd or went away) — clients
+   refetch hosts + harnesses instead of rendering a stale tunnel roster
+   (issue #100, manual test: the host panel read a pre-connect harness list) */
+export interface AgentsChanged {
+  type: "agents.changed";
+  sessionId: string; // always "" — carried for the frame shape only
+}
+
 /* ── message stream ── */
 /** a file attached to a user prompt (lands in the workspace .truss-uploads/) */
 export interface PromptAttachment {
@@ -246,6 +254,7 @@ export type ProtoEvent =
   | SessionDeleted
   | TodoUpsert
   | FeedUpsert
+  | AgentsChanged
   | MsgStart
   | MsgChunk
   | MsgDone

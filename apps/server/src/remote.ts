@@ -46,15 +46,20 @@ type RegisterFn = (id: HarnessId, adapter: HarnessAdapter) => void;
 let registerFn: RegisterFn | null = null;
 let unregisterFn: ((id: HarnessId) => void) | null = null;
 let stateSink: ((sessionId: string, detail: string) => void) | null = null;
+/* fired once per hello/bye/drop — open clients refetch the tunnel roster
+   instead of rendering a stale one (issue #100 manual test) */
+let registrySink: (() => void) | null = null;
 
 export function wireRemoteRegistry(fns: {
   register: RegisterFn;
   unregister: (id: HarnessId) => void;
   sessionGone: (sessionId: string, detail: string) => void;
+  registryChanged?: () => void;
 }) {
   registerFn = fns.register;
   unregisterFn = fns.unregister;
   stateSink = fns.sessionGone;
+  registrySink = fns.registryChanged ?? null;
 }
 
 class AsyncQueue<T> {
@@ -236,6 +241,7 @@ export function agentHello(
     }
   }
   console.log(`[remote] agent ${hostId} (${hostname}) hosting: ${adapterList.map((a) => a.id).join(", ")}`);
+  registrySink?.();
 }
 
 /** error + close one host session's event stream (the reverse of reattach) */
@@ -288,9 +294,11 @@ export function agentBye(hostId: string, socket?: AgentInfo["socket"]) {
       reapSession(sessionId, q, `node-agent ${hostId} disconnected`);
     }
     console.log(`[remote] agent ${hostId} gone (protocol 1 — its sessions were disposed at close)`);
+    registrySink?.();
     return;
   }
   console.log(`[remote] agent ${hostId} away (sessions stay resumable across the blip)`);
+  registrySink?.();
 }
 
 /** host deleted (or revoked/rotated — issue #100 item 11) — drop the live

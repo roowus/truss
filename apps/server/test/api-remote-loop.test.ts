@@ -431,3 +431,19 @@ test("protocol-2 auth: the token rides the Authorization header, not the query (
   });
   assert.equal(code, 4403, "bad bearer refused");
 });
+
+test("agent hello and bye broadcast agents.changed (issue #100 manual test: open clients were rendering a stale roster)", async () => {
+  const bus = new WebSocket(`${srv.wsBase}/events`);
+  const frames: Record<string, unknown>[] = [];
+  bus.onmessage = (e) => frames.push(JSON.parse(String(e.data)));
+  await new Promise<void>((r) => (bus.onopen = () => r()));
+
+  const c = await api("/api/hosts", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ label: "announce rig" }) });
+  const agent = await connectAgent(c.body.host.id, c.body.token);
+  await waitFor(() => frames.some((f) => (f.ev as Record<string, unknown>)?.type === "agents.changed") || null, "hello announced on the bus");
+
+  const afterHello = frames.length;
+  agent.close();
+  await waitFor(() => frames.slice(afterHello).some((f) => (f.ev as Record<string, unknown>)?.type === "agents.changed") || null, "bye announced on the bus");
+  bus.close();
+});
