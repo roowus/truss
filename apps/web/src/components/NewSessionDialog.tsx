@@ -2,6 +2,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { store, useApp } from "@/lib/store";
 import { useDesktops } from "@/lib/desktops";
 import { harnessStyle, hostOf, shortPath } from "@/lib/format";
+import { resolveDefaultCwd, hostDefaultFor } from "@/lib/cwdDefault";
+import type { BrowseDir } from "@/lib/proto";
 import { openPanel, openSession } from "@/lib/workspace";
 import { Btn, HarnessMark, Icon, Kbd, Select, Spinner } from "./ui";
 import { cn } from "@/utils/cn";
@@ -19,14 +21,49 @@ export function NewSessionDialog({ onClose, preset }: { onClose: () => void; pre
   const models = useApp((s) => s.models);
   const order = useApp((s) => s.order);
   const sessions = useApp((s) => s.sessions);
+  const hosts = useApp((s) => s.hosts);
   const defaultCwd = useDesktops((s) => s.settings.defaultCwd);
+  const hostPrefs = useDesktops((s) => s.hosts);
   const recentCwds = useMemo(() => [...new Set(order.map((i) => sessions[i]?.cwd).filter(Boolean))].slice(0, 8), [order, sessions]);
   const projects = useMemo(() => [...new Set(order.map((i) => sessions[i]?.project).filter(Boolean) as string[])], [order, sessions]);
 
   const [harness, setHarness] = useState<string>(preset?.harness ?? harnesses[0]?.id ?? "");
   const [model, setModel] = useState("");
-  const [cwd, setCwd] = useState(preset?.cwd || defaultCwd || recentCwds[0] || "");
+  const [cwd, setCwdState] = useState("");
+  const [pickerOpen, setPickerOpen] = useState(false);
   const [project, setProject] = useState(preset?.project ?? sessions[order[0]]?.project ?? "");
+
+  /* The default working directory follows the named precedence
+     (preset > picked host > Settings > most recent) and re-resolves as the
+     harness pick, host prefs, and settings load — until the user types or
+     picks a directory themselves, which marks the field as theirs.
+
+     Recency is SNAPSHOT on open (first non-empty read): the store bumps a
+     live session to order[0] on every session.state event, so a live
+     `recentCwds` dep would flip the field under the user's eyes whenever
+     background sessions change state (audit round 1, B1). */
+  const cwdTouched = useRef(false);
+  const recentSnapshot = useRef<string | undefined>(undefined);
+  if (recentSnapshot.current === undefined && recentCwds[0]) recentSnapshot.current = recentCwds[0];
+  const setCwd = (v: string) => {
+    cwdTouched.current = true;
+    setCwdState(v);
+  };
+  useEffect(() => {
+    if (cwdTouched.current) return;
+    const next = resolveDefaultCwd({
+      preset: preset?.cwd,
+      hostDefault: hostDefaultFor(harness, hostPrefs, hosts),
+      settingsDefault: defaultCwd,
+      recent: recentSnapshot.current,
+    });
+    setCwdState((cur) => (cur === next ? cur : next));
+  }, [harness, preset?.cwd, defaultCwd, hostPrefs, hosts]);
+
+  /* browsing runs on THIS truss server; a remote host's fs is unreachable
+     here, so the picker stays local-only and the host default prefill does
+     the work for remote picks (issue #106, stretch deferred) */
+  const remoteHost = hostOf(harness);
   const [title, setTitle] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -80,7 +117,11 @@ export function NewSessionDialog({ onClose, preset }: { onClose: () => void; pre
 
   useEffect(() => {
     const k = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+      if (e.key === "Escape") {
+        if (pickerOpen) setPickerOpen(false);
+        else onClose();
+        return;
+      }
       if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) void create();
     };
     window.addEventListener("keydown", k);
@@ -159,12 +200,44 @@ export function NewSessionDialog({ onClose, preset }: { onClose: () => void; pre
 
           <div className="grid grid-cols-[1fr_180px] gap-3">
             <Field label="working directory" error={cwdErr}>
-              <input value={cwd} onChange={(e) => setCwd(e.target.value)} placeholder="/home/you/code/project" className="t-input font-mono" autoFocus />
+              <div className="relative">
+                <div className="flex gap-1.5">
+                  <input value={cwd} onChange={(e) => setCwd(e.target.value)} placeholder="/home/you/code/project" className="t-input font-mono flex-1" autoFocus />
+                  <button
+                    type="button"
+                    onClick={() => setPickerOpen((o) => !o)}
+                    disabled={!!remoteHost}
+                    title={remoteHost ? "Browsing runs on this server; a remote host's default directory is prefilled instead" : "Browse directories"}
+                    aria-label="Browse directories"
+                    className={cn(
+                      "shrink-0 w-8 rounded-md border grid place-items-center transition-colors",
+                      pickerOpen ? "border-[var(--t-amber)]/60 text-[var(--t-amber)] bg-[color-mix(in_oklab,var(--t-amber)_10%,transparent)]" : "border-[var(--t-line)] text-[var(--t-dim)] hover:text-[var(--t-fg)] hover:border-[var(--t-line2)]",
+                      remoteHost && "opacity-40 cursor-not-allowed",
+                    )}
+                  >
+                    <Icon name="folder" size={14} />
+                  </button>
+                </div>
+                {pickerOpen && !remoteHost && (
+                  <DirPicker
+                    onPick={(p) => {
+                      setCwd(p);
+                      setPickerOpen(false);
+                    }}
+                    onClose={() => setPickerOpen(false)}
+                  />
+                )}
+              </div>
             </Field>
             <Field label="project (optional)">
               <input value={project} onChange={(e) => setProject(e.target.value)} placeholder="none" className="t-input" />
             </Field>
           </div>
+          {remoteHost && (
+            <div className="-mt-3 text-[11px] text-[var(--t-dim)] flex items-center gap-1.5">
+              <Icon name="host" size={11} /> Directory browsing runs on this server. For @{remoteHost}, the host default from the Hosts panel is prefilled above.
+            </div>
+          )}
           {recentCwds.length > 0 && (
             <div className="-mt-3 flex flex-wrap gap-1">
               {recentCwds.slice(0, 5).map((c) => (
@@ -225,5 +298,133 @@ function Cap({ on, children }: { on: boolean; children: React.ReactNode }) {
     <span className={cn("font-mono text-[9.5px] px-1.5 h-4 inline-flex items-center rounded", on ? "text-[var(--t-teal)] bg-[color-mix(in_oklab,var(--t-teal)_12%,transparent)]" : "text-[var(--t-dim)] line-through decoration-[var(--t-line2)]")}>
       {children}
     </span>
+  );
+}
+
+/** The cwd picker's directory browser (issue #106): click to navigate, a
+   breadcrumb and up-button to climb, a hidden-dirs toggle, and "choose this
+   folder" to take the current directory. The server lists directory NAMES
+   only, confined to its browse roots. `path` null means the roots view. */
+function DirPicker({ onPick, onClose }: { onPick: (path: string) => void; onClose: () => void }) {
+  const [path, setPath] = useState<string | null>(null);
+  const [roots, setRoots] = useState<string[]>([]);
+  const [dirs, setDirs] = useState<BrowseDir[]>([]);
+  const [parent, setParent] = useState<string | null>(null);
+  const [hidden, setHidden] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    setBusy(true);
+    setErr(null);
+    store.be
+      .browse(path ?? undefined, hidden)
+      .then((r) => {
+        if (!alive) return;
+        if (r.roots) setRoots(r.roots);
+        setDirs(r.dirs ?? []);
+        setParent(r.parent ?? null);
+      })
+      .catch((e: any) => {
+        if (alive) setErr(e?.message ?? String(e));
+      })
+      .finally(() => {
+        if (alive) setBusy(false);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [path, hidden]);
+
+  /* the listing is either the root list or the current path's subdirs */
+  const rows: BrowseDir[] = path === null ? roots.map((r) => ({ name: r, path: r })) : dirs;
+
+  const crumbs = useMemo(() => {
+    if (path === null) return [];
+    const root = [...roots].filter((r) => path === r || path.startsWith(r + "/")).sort((a, b) => b.length - a.length)[0];
+    const home = roots[0];
+    const out: { label: string; path: string }[] = [];
+    let cur = root ?? "";
+    if (root) out.push({ label: root === home ? "~" : root, path: root });
+    for (const seg of path.slice(cur.length).split("/").filter(Boolean)) {
+      cur += "/" + seg;
+      out.push({ label: seg, path: cur });
+    }
+    return out;
+  }, [path, roots]);
+
+  return (
+    <div className="absolute left-0 right-0 top-full mt-1 z-20 rounded-lg border border-[var(--t-line2)] bg-[var(--t-bg1)] shadow-xl t-pop">
+      <div className="flex items-center gap-1 px-2 h-9 border-b border-[var(--t-line)]">
+        <button
+          type="button"
+          onClick={() => setPath(parent)}
+          disabled={parent === null}
+          title="Up"
+          aria-label="Up one directory"
+          className="w-6 h-6 grid place-items-center rounded text-[var(--t-dim)] hover:text-[var(--t-fg)] disabled:opacity-30 disabled:hover:text-[var(--t-dim)]"
+        >
+          <Icon name="chev" size={12} className="-rotate-90" />
+        </button>
+        <div className="flex-1 flex items-center gap-0.5 overflow-x-auto t-scroll whitespace-nowrap font-mono text-[11px] text-[var(--t-dim)]">
+          <button type="button" onClick={() => setPath(null)} className={cn("hover:text-[var(--t-fg)]", path === null && "text-[var(--t-fg)]")}>
+            roots
+          </button>
+          {crumbs.map((c, i) => (
+            <span key={c.path} className="flex items-center gap-0.5">
+              <Icon name="chev" size={9} className="opacity-50" />
+              <button type="button" onClick={() => setPath(c.path)} className={cn("hover:text-[var(--t-fg)]", i === crumbs.length - 1 && "text-[var(--t-fg)]")}>
+                {c.label}
+              </button>
+            </span>
+          ))}
+        </div>
+        <button
+          type="button"
+          onClick={() => setHidden((h) => !h)}
+          title="Show hidden directories"
+          className={cn("font-mono text-[10px] px-1.5 h-5 rounded border shrink-0", hidden ? "border-[var(--t-line2)] text-[var(--t-fg)] bg-[var(--t-bg2)]" : "border-[var(--t-line)] text-[var(--t-dim)] hover:text-[var(--t-mute)]")}
+        >
+          .*
+        </button>
+        <button type="button" onClick={onClose} aria-label="Close browser" className="w-6 h-6 grid place-items-center rounded text-[var(--t-dim)] hover:text-[var(--t-fg)] shrink-0">
+          <Icon name="x" size={12} />
+        </button>
+      </div>
+
+      <div className="max-h-56 overflow-auto t-scroll py-1">
+        {busy ? (
+          <div className="flex items-center gap-2 px-3 py-2 text-[11.5px] text-[var(--t-dim)]">
+            <Spinner size={11} /> Listing…
+          </div>
+        ) : err ? (
+          <div className="flex items-center gap-2 px-3 py-2 text-[11.5px] text-[var(--t-red)]">
+            <Icon name="alert" size={12} /> {err}
+          </div>
+        ) : rows.length === 0 ? (
+          <div className="px-3 py-2 text-[11.5px] text-[var(--t-dim)]">No subdirectories here.</div>
+        ) : (
+          rows.map((d) => (
+            <button
+              key={d.path}
+              type="button"
+              onClick={() => setPath(d.path)}
+              className="w-full flex items-center gap-2 px-3 h-7 text-left font-mono text-[11.5px] text-[var(--t-fg)] hover:bg-[var(--t-bg2)]"
+            >
+              <Icon name="folder" size={12} className="text-[var(--t-dim)]" />
+              <span className="truncate">{d.name}</span>
+            </button>
+          ))
+        )}
+      </div>
+
+      <div className="flex items-center gap-2 px-2 h-10 border-t border-[var(--t-line)]">
+        <span className="flex-1 font-mono text-[10.5px] text-[var(--t-dim)] truncate">{path ?? "pick a folder, then choose it"}</span>
+        <Btn variant="amber" size="sm" disabled={path === null} onClick={() => path !== null && onPick(path)}>
+          Choose this folder
+        </Btn>
+      </div>
+    </div>
   );
 }

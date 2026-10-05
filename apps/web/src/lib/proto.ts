@@ -102,6 +102,19 @@ export interface FileRead {
   dataUrl?: string;
 }
 
+/* ── directory browsing (New Session cwd picker, issue #106): directory
+     names only, confined to the server's browse roots ── */
+export interface BrowseDir {
+  name: string;
+  path: string; // absolute
+}
+/** `roots` when no path was asked for; `dirs` + `parent` for a listing. */
+export interface BrowseResp {
+  roots?: string[];
+  dirs?: BrowseDir[];
+  parent?: string | null;
+}
+
 /* ── todos + feed ── */
 export type TodoPriority = "low" | "normal" | "high" | "urgent";
 export type TodoStatus = "open" | "done" | "dropped";
