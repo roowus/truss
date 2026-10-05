@@ -150,8 +150,10 @@ class DesktopManager {
   private suppressedTerminals = new Set<string>();
   /** Undo stack for "reopen what I closed" (Chrome's Cmd+Shift+T); session-only, capped. Mixed: workspaces AND tabs. */
   private closedStack: ClosedEntry[] = [];
-  /** Panel removals that are machinery, not user closes (moves, kills, workspace teardown) — never undoable. */
+  /** Panel removals that are machinery, not user closes (moves, kills, batch-close replays) — never undoable. */
   private suppressedPanels = new Set<string>();
+  /** Workspaces mid-teardown: their unmount-time panel removals are the workspace entry's business, never tab closes. */
+  private closingSpaces = new Set<string>();
 
   subscribe = (listener: () => void) => {
     this.subscribers.add(listener);
@@ -236,6 +238,11 @@ class DesktopManager {
       layoutChanged.dispose();
       removed.dispose();
       active.dispose();
+      /* Teardown over: any unmount-time removal events arrived before this
+         cleanup ran, and after it `removed` is disposed — the flag's job is
+         done (audit round 2, N2: a flag, not a TTL, so a slow unmount can
+         never leak phantom tab entries onto the undo stack). */
+      this.closingSpaces.delete(id);
       if (this.apis.get(id) === api) {
         this.apis.delete(id);
         this.ready.delete(id);
@@ -359,8 +366,10 @@ class DesktopManager {
     const layout = api ? api.toJSON() : space.layout;
     this.closedStack = pushClosed(this.closedStack, { type: "workspace", name: space.name, layout, at: Date.now() });
     /* Unmounting the canvas fires onDidRemovePanel for every tab — those are
-       this workspace entry's business, not separate undoable tab closes. */
-    if (api) for (const p of api.panels) this.suppressPanelClose(id, p.id);
+       this workspace entry's business, not separate undoable tab closes. A
+       flag, not a TTL: the removals arrive on React's asynchronous unmount,
+       whenever that lands; register's cleanup lifts it (audit round 2, N2). */
+    this.closingSpaces.add(id);
     const terminals = api
       ? api.panels.filter((p) => p.id.startsWith("terminal:")).map((p) => p.id.slice(9))
       : terminalIdsInLayout(space.layout);
@@ -380,7 +389,7 @@ class DesktopManager {
   }
 
   /**
-   * Chrome's Cmd+Shift+T on ONE mixed stack: the last thing you closed comes
+   * Chrome's reopen gesture on ONE mixed stack: the last thing you closed comes
    * back, whatever it was — a workspace returns with its name and layout; a
    * tab (or a whole group closed in one gesture) re-adds to the workspace it
    * left, or the active one when that workspace is gone. Restored terminals
@@ -402,41 +411,51 @@ class DesktopManager {
       store.toast("info", "Workspace is still opening", "Try reopening the tab again in a moment.");
       return null;
     }
-    this.closedStack = popped.rest;
-    const fresh = freshPanels(entry.panels, (pid) => !!api.getPanel(pid));
-    let first: IDockviewPanel | undefined;
-    for (const d of fresh) {
-      const panel = api.addPanel({
-        id: d.id,
-        component: d.component,
-        tabComponent: d.tabComponent,
-        title: d.title,
-        params: d.params,
-        /* a group close rebuilds its tabs INSIDE one group; a lone tab lands
-           in the active group (Chrome reopens at the strip's end, not the
-           old slot) */
-        position: first ? { referencePanel: first.id, direction: "within" as const } : undefined,
-      });
-      first ??= panel;
+    try {
+      const fresh = freshPanels(entry.panels, (pid) => !!api.getPanel(pid));
+      let first: IDockviewPanel | undefined;
+      for (const d of fresh) {
+        const panel = api.addPanel({
+          id: d.id,
+          component: d.component,
+          tabComponent: d.tabComponent,
+          title: d.title,
+          params: d.params,
+          /* a group close rebuilds its tabs INSIDE one group; a lone tab lands
+             in the active group (Chrome reopens at the strip's end, not the
+             old slot) */
+          position: first ? { referencePanel: first.id, direction: "within" as const } : undefined,
+        });
+        first ??= panel;
+      }
+      /* popped only once the restore succeeded: a throw mid-group keeps the
+         entry on the stack for the next chord instead of losing the tabs
+         silently (audit round 2, N1) */
+      this.closedStack = popped.rest;
+      const shown = first ?? (entry.panels.length ? api.getPanel(entry.panels[0].id) : undefined);
+      shown?.api.setActive();
+      if (spaceId !== this.state.activeId) this.switchTo(spaceId);
+      return shown ?? null;
+    } catch (e: any) {
+      store.toast("error", "Could not restore the closed tab", e?.message ?? String(e));
+      return null;
     }
-    const shown = first ?? (entry.panels.length ? api.getPanel(entry.panels[0].id) : undefined);
-    shown?.api.setActive();
-    if (spaceId !== this.state.activeId) this.switchTo(spaceId);
-    return shown ?? null;
   }
 
   /**
    * A user closed a tab (its X, middle-click, the context menu): remember it
-   * on the undo stack. Suppressed removals (moves, kills, workspace teardown)
-   * and machinery tabs (welcome) are not closes.
+   * on the undo stack. Machinery removals are not closes: workspace teardown
+   * (flagged in closingSpaces), suppressed moves/kills/batch replays, and
+   * the welcome tab's auto-close.
    */
   private recordPanelClose(spaceId: string, panel: IDockviewPanel) {
+    if (this.closingSpaces.has(spaceId)) return;
     if (this.suppressedPanels.delete(suppressionKey(spaceId, panel.id))) return;
     const entry = panelsEntry(spaceId, [panel], Date.now());
     if (entry) this.closedStack = pushClosed(this.closedStack, entry);
   }
 
-  /** Mark a panel removal as machinery so the undo recorder ignores it (TTL: the event fires within the same task or never). */
+  /** Mark a panel removal as machinery so the undo recorder ignores it. Callers close synchronously, so the event lands in the same task; the TTL only reaps a key whose close never came. */
   suppressPanelClose(spaceId: string | undefined, panelId: string) {
     const key = suppressionKey(spaceId ?? this.state.activeId, panelId);
     this.suppressedPanels.add(key);
