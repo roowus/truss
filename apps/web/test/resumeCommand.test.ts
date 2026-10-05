@@ -66,3 +66,20 @@ test("never fabricate: unknown harnesses and missing refs give no command", asyn
   const q = mod.resumeCommand("pi", "ab'; rm -rf ~; echo '");
   assert.ok(q === null || /^pi --session '[^']*'$/.test(q), "hostile refs are quoted or refused, never raw");
 });
+
+test("quoting branch is pinned: unsafe chars wrap, quotes and leading dashes refuse", async () => {
+  const mod = await load();
+  assert.ok(mod, "resumeCommand module must exist (see module test)");
+
+  /* audit round 1 (B1): the quote-wrapping path needs its own pin — the
+     contract test's only hostile input carries a quote and exercises refuse */
+  assert.equal(mod.resumeCommand("pi", "ab;cd"), "pi --session 'ab;cd'", "semicolon ref is single-quoted");
+  assert.equal(mod.resumeCommand("pi", "a$b"), "pi --session 'a$b'", "dollar ref is single-quoted");
+  assert.equal(mod.resumeCommand("pi", "a b"), "pi --session 'a b'", "space ref is single-quoted");
+  assert.equal(mod.resumeCommand("dsh", "x$(id)"), "dsh tui --resume 'x$(id)'", "substitution chars stay inert inside single quotes");
+
+  /* audit round 1 (B2): a leading dash is shell-safe but parses back as a
+     CLI flag — refuse it, don't quote it */
+  assert.equal(mod.resumeCommand("pi", "-mode"), null, "leading-dash ref refused");
+  assert.equal(mod.resumeCommand("dsh", "--session"), null, "bare-flag ref refused");
+});
