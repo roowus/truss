@@ -119,7 +119,10 @@ When a new `## 🔍 PR audit` report for YOUR head arrives:
 anything), check first: `gh pr view <pr> --json state`. If MERGED or CLOSED,
 you are done — delete your pending self-wake reminders, remove a leftover
 `audit` label, do NOT retitle yourself (the reaper owns your title now), and
-stop. Never keep looping on a merged PR.
+stop. Never keep looping on a merged PR. ONE exception: if the merge stranded
+fixes you had already made (unpushed commits answering the latest audit),
+open exactly one follow-up PR with just those fixes, hand it off like any
+other, and then stand down.
 
 **The minors tail converges without another audit round.** When the latest
 report has zero Critical and zero Important findings: fix or disposition the
