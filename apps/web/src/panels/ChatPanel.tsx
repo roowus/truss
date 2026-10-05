@@ -644,7 +644,7 @@ function Composer({ id, active }: { id: string; active: boolean }) {
      bars (issue #112) so the user can see the mic hears them */
   if (voiceState === "recording") {
     tone = "amber";
-    hint = <><Icon name="mic" size={12} /> <VoiceVisualizer levelStream={voiceLevelStream} /> Dictating {fmtTakeTime(voiceNow - (voiceStart ?? voiceNow))} — click the mic to finish, Esc to cancel.</>;
+    hint = <><Icon name="mic" size={12} /> <VoiceVisualizer levelStream={voiceLevelStream} /> Dictating {fmtTakeTime(voiceNow - (voiceStart ?? voiceNow))} · click the mic to finish, Esc to cancel.</>;
   } else if (voiceState === "error") {
     tone = "red";
     hint = <><Icon name="alert" size={12} /> Dictation failed: {voiceRef.current?.error() ?? "unknown error"}</>;
