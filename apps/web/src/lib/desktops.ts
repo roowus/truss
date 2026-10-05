@@ -148,7 +148,7 @@ class DesktopManager {
   private revision = 0;
   private writing = false;
   private suppressedTerminals = new Set<string>();
-  /** Undo stack for "reopen what I closed" (Chrome's Cmd+Shift+T); session-only, capped. Mixed: workspaces AND tabs. */
+  /** Undo stack for "reopen what I closed" (Chrome's gesture; the chord here is Cmd/Ctrl+Shift+Z — browsers reserve Shift+T). Session-only, capped. Mixed: workspaces AND tabs. */
   private closedStack: ClosedEntry[] = [];
   /** Panel removals that are machinery, not user closes (moves, kills, batch-close replays) — never undoable. */
   private suppressedPanels = new Set<string>();
