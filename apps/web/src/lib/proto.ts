@@ -34,6 +34,12 @@ export interface AgentInfo {
   hostId: string;
   hostname: string;
   adapters: string[];
+  /** version handshake (issue #100): protocol level + the agent's bundle
+     hash; bundleCurrent compares it against the server's current build
+     (undefined when either side predates the handshake) */
+  protocol?: number;
+  bundleHash?: string;
+  bundleCurrent?: boolean;
 }
 
 export interface SessionMeta {
@@ -207,7 +213,11 @@ export interface TailscalePeer {
 
 export interface NetInfo {
   port: number;
-  tailscale: { installed: boolean; ip4?: string; dnsName?: string; serveOn?: boolean; serveUrl?: string };
+  /** the server's bind address (issue #33): the wizard's reachability filter reads this */
+  bind?: string;
+  /** operator-declared front door (TRUSS_PUBLIC_URL) — a proxy/DNS name that forwards to the server (audit B2) */
+  publicUrl?: string;
+  tailscale: { installed: boolean; ip4?: string; dnsName?: string; serveOn?: boolean; serveUrl?: string; canServe?: boolean };
   lan: string[];
 }
 
@@ -266,6 +276,9 @@ export type ProtoEvent =
   | (Base & { type: "session.deleted" })
   | (Base & { type: "todo.upsert"; todo: TodoItem })
   | (Base & { type: "feed.upsert"; item: FeedItem })
+  /* the remote-host registry flipped (agent hello/bye) — refetch hosts +
+     harnesses (issue #100 manual test) */
+  | (Base & { type: "agents.changed" })
   | (Base & { type: "models.updated"; harness: HarnessId })
   | (Base & { type: "msg.start"; messageId: string; role: "user" | "assistant" | "system"; at: At; attachments?: PromptAttachment[] })
   | (Base & { type: "msg.chunk"; messageId: string; text: string; channel?: string })

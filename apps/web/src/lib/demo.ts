@@ -827,7 +827,7 @@ export function createDemoBackend(): Backend {
       };
       return { local: mk("devbox", 9), agents: { atlas: mk("atlas", 34) } };
     },
-    netInfo: async () => ({ port: 4040, tailscale: { installed: true, ip4: "100.64.0.1", dnsName: "devbox.example.ts.net", serveOn: false }, lan: ["192.168.1.20"] }),
+    netInfo: async () => ({ port: 4040, bind: "0.0.0.0", tailscale: { installed: true, ip4: "100.64.0.1", dnsName: "devbox.example.ts.net", serveOn: false }, lan: ["192.168.1.20"] }),
     tailscalePeers: async () => ({
       self: { hostName: "devbox", dnsName: "devbox.example.ts.net", ip4: "100.64.0.1", os: "linux", online: true, exitNode: false, exitNodeOption: false, tagged: false },
       peers: [

@@ -19,12 +19,17 @@ import { cwdFallbackNote, resolveCwd } from "./types.js";
  * placeholder token — the proxy injects the real key, the harness never holds it.
  */
 
-const ANTHROPIC_BASE_URL =
+/* read LAZILY (issue #100, audit item 16): on a remote host the node-agent
+   derives TRUSS_MCP_BASE/TRUSS_CLAUDE_BASE_URL from its --server flag at
+   startup, but ESM hoisting evaluates module scope before that code runs —
+   module-scope reads would freeze the loopback defaults and point the perms
+   MCP at the agent's own dead loopback. */
+const anthropicBaseUrl = () =>
   process.env.TRUSS_CLAUDE_BASE_URL ?? "http://127.0.0.1:45821/api/anthropic";
-const DEFAULT_MODEL = process.env.TRUSS_CLAUDE_MODEL ?? "glm-4.7";
+const defaultModel = () => process.env.TRUSS_CLAUDE_MODEL ?? "glm-4.7";
 /** tests/ops can point at a different claude binary (issue #97) */
 const CLAUDE_BIN = process.env.TRUSS_CLAUDE_BIN ?? "claude";
-const MCP_BASE = process.env.TRUSS_MCP_BASE ?? "http://127.0.0.1:4040";
+const mcpBase = () => process.env.TRUSS_MCP_BASE ?? "http://127.0.0.1:4040";
 
 export const CLAUDE_MODELS = [
   { provider: "zai-local", model: "glm-4.7", label: "GLM 4.7 (z.ai via key-proxy)" },
@@ -164,12 +169,12 @@ export const claudeAdapter: HarnessAdapter = {
   },
 
   async spawn(opts: SessionOpts): Promise<ClaudeHandle> {
-    const model = opts.model ?? DEFAULT_MODEL;
+    const model = opts.model ?? defaultModel();
     const mcpConfig = JSON.stringify({
       mcpServers: {
-        truss_perms: { type: "http", url: `${MCP_BASE}/mcp/perm/${opts.sessionId}` },
+        truss_perms: { type: "http", url: `${mcpBase()}/mcp/perm/${opts.sessionId}` },
         /* agents can run the app itself: rename/archive/spawn/prompt/layout */
-        truss: { type: "http", url: `${MCP_BASE}/mcp/truss/${opts.sessionId}` },
+        truss: { type: "http", url: `${mcpBase()}/mcp/truss/${opts.sessionId}` },
       },
     });
 
@@ -196,7 +201,7 @@ export const claudeAdapter: HarnessAdapter = {
         stdio: ["pipe", "pipe", "inherit"],
         env: {
           ...process.env,
-          ANTHROPIC_BASE_URL,
+          ANTHROPIC_BASE_URL: anthropicBaseUrl(),
           ANTHROPIC_AUTH_TOKEN: "truss-key-proxy",
           ANTHROPIC_MODEL: model,
         },

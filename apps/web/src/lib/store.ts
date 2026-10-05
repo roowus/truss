@@ -467,6 +467,15 @@ class Store {
       }
       return;
     }
+    /* an agent hello'd or went away: the hosts/harnesses rosters are stale
+       the moment it happens (issue #100 manual test — the host panel read a
+       pre-connect harness list and reported every adapter "not exposed") */
+    if (ev.type === "agents.changed") {
+      void this.refreshHosts();
+      void this.refreshAgents();
+      void this.refreshHarnesses();
+      return;
+    }
     if (ev.type === "models.updated") {
       /* a lazy harness catalog (hermes/dsh) just filled in on the server
          (first-boot probe, issue #101) — refetch so an open New Session

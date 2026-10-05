@@ -137,3 +137,123 @@ test("requestMetrics rejects for unknown hosts; agentFrame ignores stray frames"
     cleanup();
   }
 });
+
+test("a spawn waiter is rejected fast when its agent drops mid-spawn (no 30s lie)", async () => {
+  const { cleanup } = await freshServer("rem-spawn-drop");
+  try {
+    const remote = await import("../src/remote.js");
+    let adapter: any = null;
+    remote.wireRemoteRegistry({
+      register: (id, a) => {
+        adapter = a;
+      },
+      unregister: () => {},
+      sessionGone: () => {},
+    });
+    const socket = fakeSocket([]);
+    remote.agentHello("h-drop", "drop-host", [{ id: "pi", capabilities: CAPS }], socket);
+    /* the spawn frame goes out; the agent dies before acking */
+    const outcome = adapter
+      .spawn({ sessionId: "s-drop", cwd: "/tmp" })
+      .then(() => "resolved", (e: Error) => e.message);
+    remote.agentBye("h-drop", socket);
+    assert.match(await outcome, /disconnected/, "the waiter hears the truth immediately (issue #100, item 10)");
+  } finally {
+    cleanup();
+  }
+});
+
+test("a replaced connection's stale close cannot reap the new registration", async () => {
+  const { cleanup } = await freshServer("rem-stale-close");
+  try {
+    const remote = await import("../src/remote.js");
+    remote.wireRemoteRegistry({ register: () => {}, unregister: () => {}, sessionGone: () => {} });
+    const oldSock = fakeSocket([]);
+    const newSock = fakeSocket([]);
+    remote.agentHello("h-race", "race-host", [{ id: "pi", capabilities: CAPS }], oldSock);
+    /* the agent reconnects; the OLD socket's close event lands after */
+    remote.agentHello("h-race", "race-host", [{ id: "pi", capabilities: CAPS }], newSock);
+    remote.agentBye("h-race", oldSock);
+    assert.ok(remote.listAgents().some((x) => x.hostId === "h-race"), "the live registration survives the stale close");
+    remote.agentBye("h-race", newSock);
+    assert.ok(!remote.listAgents().some((x) => x.hostId === "h-race"), "the real close still reaps");
+  } finally {
+    cleanup();
+  }
+});
+
+test("protocol-1 agents reap their sessions at disconnect; protocol-2 sessions wait for reattach (audit B5)", async () => {
+  const { cleanup } = await freshServer("rem-proto-reap");
+  try {
+    const remote = await import("../src/remote.js");
+    let adapter: any = null;
+    const gone: string[] = [];
+    remote.wireRemoteRegistry({
+      register: (id, a) => {
+        adapter = a;
+      },
+      unregister: () => {},
+      sessionGone: (id) => void gone.push(id),
+    });
+
+    const spawnOn = async (host: string, socket: ReturnType<typeof fakeSocket>, sid: string, meta?: { protocol: number }) => {
+      const sent = (socket as any).__sent ?? [];
+      remote.agentHello(host, `${host}-host`, [{ id: "pi", capabilities: CAPS }], socket, meta as never);
+      const p = adapter.spawn({ sessionId: sid, cwd: "/tmp" });
+      const frame = JSON.parse(sent[sent.length - 1]) as { reqId: string };
+      remote.agentFrame(host, { type: "spawned", reqId: frame.reqId, ok: true });
+      await p;
+    };
+
+    /* protocol 1 (hello carried no version handshake): its sessions died with
+       the tunnel — reap at the blip, the pre-#100 behavior */
+    const s1sent: string[] = [];
+    const s1 = fakeSocket(s1sent);
+    (s1 as any).__sent = s1sent;
+    await spawnOn("h-p1", s1, "s-p1");
+    remote.agentBye("h-p1", s1);
+    assert.deepEqual(gone, ["s-p1"], "protocol-1 session reaped at the blip");
+
+    /* protocol 2: the agent kept the harness alive — nothing reaps until the
+       next hello's reconcile */
+    const s2sent: string[] = [];
+    const s2 = fakeSocket(s2sent);
+    (s2 as any).__sent = s2sent;
+    await spawnOn("h-p2", s2, "s-p2", { protocol: 2 });
+    remote.agentBye("h-p2", s2);
+    assert.deepEqual(gone, ["s-p1"], "protocol-2 session survives the blip");
+  } finally {
+    cleanup();
+  }
+});
+
+test("spawn through a half-open socket fails fast, not after a 30s ack-timeout lie (audit round 5)", async () => {
+  const { cleanup } = await freshServer("rem-halfopen-spawn");
+  try {
+    const remote = await import("../src/remote.js");
+    let adapter: any = null;
+    remote.wireRemoteRegistry({
+      register: (id, a) => {
+        adapter = a;
+      },
+      unregister: () => {},
+      sessionGone: () => {},
+    });
+    /* registered agent whose socket is already CLOSED (readyState 3) — the
+       heartbeat hasn't reaped it yet; the spawn frame would vanish and the
+       caller would wait out the full ack timeout */
+    remote.agentHello("h-half", "half-host", [{ id: "pi", capabilities: CAPS }], { send: () => {}, close: () => {}, readyState: 3 });
+    await assert.rejects(() => adapter.spawn({ sessionId: "s-half", cwd: "/tmp" }), /offline|not delivered/i);
+
+    /* the guard's positive branch: an OPEN socket spawns fine */
+    const openSent: string[] = [];
+    remote.agentHello("h-half", "half-host", [{ id: "pi", capabilities: CAPS }], { send: (s: string) => void openSent.push(s), close: () => {}, readyState: 1 });
+    const p = adapter.spawn({ sessionId: "s-half2", cwd: "/tmp" });
+    const frame = JSON.parse(openSent[openSent.length - 1]) as { reqId: string };
+    remote.agentFrame("h-half", { type: "spawned", reqId: frame.reqId, ok: true });
+    await p;
+    remote.agentBye("h-half");
+  } finally {
+    cleanup();
+  }
+});

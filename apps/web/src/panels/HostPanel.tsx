@@ -4,6 +4,7 @@ import { store, useApp, useNow } from "@/lib/store";
 import { desktops, useDesktops, type HostPreference } from "@/lib/desktops";
 import { ago, harnessStyle, hostOf, shortPath } from "@/lib/format";
 import { openPanel, renameHostPanels } from "@/lib/workspace";
+import { agentRunCommand } from "@/lib/installCommand";
 import { Btn, HarnessMark, Icon, Select, StateDot } from "@/components/ui";
 import { cn } from "@/utils/cn";
 
@@ -97,9 +98,12 @@ export function HostPanel({ params }: IDockviewPanelProps<{ hostId: string }>) {
           </div>
         )}
         {host && !host.online && !error && (
+          /* issue #100: re-running the frozen env recirculates a dead address
+             forever, undetected — the banner now names that failure mode */
           <div className="mt-5 rounded-lg border border-[var(--t-line2)] bg-[var(--t-bg0)] px-3 py-2.5 text-[12px] text-[var(--t-mute)] leading-relaxed">
-            Offline. On the host: <span className="font-mono text-[var(--t-fg2)]">set -a; . ~/.truss/agent-{hostId}.env; set +a; node ~/.truss/node-agent.mjs</span>
+            Offline. On the host: <span className="font-mono text-[var(--t-fg2)]">{agentRunCommand(hostId)}</span>
             {host.revoked && <span className="text-[var(--t-red)]"> — its token is revoked; rotate it below to allow reconnection.</span>}
+            {" If the agent's log loops connection refused, the env file's frozen address is one this server can't answer — re-copy a fresh install command from the add-host wizard instead of re-running the old env."}
           </div>
         )}
         {!host && !error && <div className="mt-5 text-[12px] text-[var(--t-amber)]">This host is not registered. Add it from the sidebar's remote hosts section.</div>}
@@ -178,6 +182,17 @@ export function HostPanel({ params }: IDockviewPanelProps<{ hostId: string }>) {
               <div className="font-mono text-[11px] text-[var(--t-fg)] break-all select-all">{newToken}</div>
               <Btn size="xs" variant="ghost" className="mt-2" onClick={() => setNewToken(null)}>I've saved it</Btn>
             </div>
+          )}
+          {/* version handshake (issue #100): installed agents never
+              auto-update — the skew must at least be visible */}
+          {agent?.bundleHash && (
+            <p className="mt-3 text-[11px] leading-relaxed text-[var(--t-dim)]">
+              agent bundle <span className="font-mono">{agent.bundleHash}</span>
+              {agent.protocol ? ` · protocol ${agent.protocol}` : ""}
+              {agent.bundleCurrent === false && (
+                <span className="text-[var(--t-amber)]"> — older than this server's build; re-run the installer from the add-host wizard to upgrade</span>
+              )}
+            </p>
           )}
         </section>
 

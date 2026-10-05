@@ -63,6 +63,7 @@ pnpm -C apps/server start   # serves the app + REST + WS on 127.0.0.1:4040
 |---|---|---|
 | `TRUSS_PORT` | `4040` | server port |
 | `TRUSS_HOST` | `0.0.0.0` | bind address |
+| `TRUSS_PUBLIC_URL` | unset | the operator-declared front door when a reverse proxy or public DNS name forwards to this server — remote-host installs refuse any return address the bind can't answer, and this is the escape hatch that whitelists yours |
 | `TRUSS_DATA_DIR` | `apps/server/data` | where the SQLite store lives (sessions, transcripts, todos, feed, layout) |
 | `TRUSS_AGENT_TOKEN` | `truss-dev` | shared secret for remote node agents |
 | `TRUSS_WEB_DIST` | `apps/web/dist` | override the served web build |

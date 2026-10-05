@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { store, useApp } from "@/lib/store";
 import { ago, until } from "@/lib/format";
-import { defaultTailscaleReturn, peerAlreadyAdded } from "@/lib/device";
+import { peerAlreadyAdded } from "@/lib/device";
 import { dropInstructionLabel } from "@/lib/installInstruction";
-import type { DeliveryOption, TailscalePeer } from "@/lib/proto";
+import { buildInstallCommand, agentRunCommand } from "@/lib/installCommand";
+import { reachableAddresses, reachableTailscaleReturn } from "@/lib/reachability";
+import type { DeliveryOption, NetInfo, TailscalePeer } from "@/lib/proto";
 import { Btn, Icon, Select, Spinner } from "./ui";
 import { cn } from "@/utils/cn";
 
@@ -18,7 +20,7 @@ export function AddHostWizard({ onClose }: { onClose: () => void }) {
   const [step, setStep] = useState(1);
   const [label, setLabel] = useState("");
   const [method, setMethod] = useState<"tailscale" | "direct">("tailscale");
-  const [net, setNet] = useState<{ port: number; tailscale: { installed: boolean; ip4?: string; dnsName?: string; serveOn?: boolean; serveUrl?: string }; lan: string[] } | null>(null);
+  const [net, setNet] = useState<NetInfo | null>(null);
   const [peers, setPeers] = useState<{ self?: TailscalePeer; peers: TailscalePeer[] } | null>(null);
   const [pickedPeer, setPickedPeer] = useState<string | null>(null); // dnsName
   const labelTouched = useRef(false);
@@ -52,22 +54,19 @@ export function AddHostWizard({ onClose }: { onClose: () => void }) {
     if (!labelTouched.current) setLabel(p.hostName);
   };
 
-  /* address the remote will use to reach this server */
+  /* addresses the remote will use to reach this server — filtered to what
+     the server can actually ANSWER (issue #33): a loopback bind makes the
+     raw tailnet/LAN URLs dead on arrival (curl: (7) connect refused) */
+  const reachable = useMemo(() => (net ? reachableAddresses(net) : []), [net]);
   const addresses = useMemo(() => {
     if (!net) return [];
-    const out: { value: string; label: string }[] = [];
-    if (method === "tailscale") {
-      if (net.tailscale.serveOn && net.tailscale.serveUrl) out.push({ value: net.tailscale.serveUrl, label: `${net.tailscale.serveUrl} (tailscale serve, https)` });
-      if (net.tailscale.dnsName) out.push({ value: `http://${net.tailscale.dnsName}:${net.port}`, label: `${net.tailscale.dnsName} (tailnet name)` });
-      if (net.tailscale.ip4) out.push({ value: `http://${net.tailscale.ip4}:${net.port}`, label: `${net.tailscale.ip4} (tailnet ip)` });
-    }
-    for (const ip of net.lan) {
-      if (ip === net.tailscale.ip4) continue; // already offered as the tailnet address
-      out.push({ value: `http://${ip}:${net.port}`, label: `${ip} (lan/overlay)` });
-    }
-    out.push({ value: "custom", label: "custom address…" });
-    return out;
-  }, [net, method]);
+    return [...reachable, { value: "custom", label: "custom address…" }];
+  }, [net, reachable]);
+
+  /* nothing reachable at all (loopback bind, serve off) → the wizard says so
+     and steers: serve toggle inline, or TRUSS_HOST=0.0.0.0 on restart */
+  const unreachable = !!net && reachable.length === 0;
+  const [serveBusy, setServeBusy] = useState(false);
 
   const [addr, setAddr] = useState("");
   const [addrOverride, setAddrOverride] = useState(false);
@@ -75,8 +74,12 @@ export function AddHostWizard({ onClose }: { onClose: () => void }) {
   useEffect(() => setAddrOverride(false), [method]); // switching methods resets the override
   /* tailscale: both ends are on the tailnet by construction, so the return
      address is this server's own tailnet identity — no second selection.
-     The dropdown only appears as an explicit override (or for Direct). */
-  const impliedReturn = method === "tailscale" ? defaultTailscaleReturn(net) : null;
+     The dropdown only appears as an explicit override (or for Direct).
+     Never imply a dead address (issue #100, the #33 hole): a non-empty
+     reachable list is not enough — a specific non-loopback bind (say the
+     LAN ip) still leaves the tailnet URL dead, so the implied return must
+     itself be one of the reachable addresses. */
+  const impliedReturn = method === "tailscale" ? reachableTailscaleReturn(net) : null;
   const serverAddr = addrOverride || !impliedReturn ? (addr === "custom" ? customAddr.trim() : addr) : impliedReturn;
 
   const create = async () => {
@@ -119,9 +122,9 @@ export function AddHostWizard({ onClose }: { onClose: () => void }) {
 
   const pickedPeerLabel = pickedPeer ? peers?.peers.find((p) => p.dnsName === pickedPeer)?.hostName ?? null : null;
 
-  const command = created && serverAddr
-    ? `curl -fsSL ${serverAddr}/agent/install.sh?host=${created.id} | sh -s -- ${created.token}`
-    : "";
+  /* shell-quoted (issue #22): a bare ? in the URL trips zsh's glob
+     expansion ("no matches found") — the macOS default shell */
+  const command = created && serverAddr ? buildInstallCommand(serverAddr, created.id, created.token) : "";
 
   /* the file taildrop delivered — the authoritative name comes back in the
      taildropHost response (the demo backend names it differently) */
@@ -216,6 +219,37 @@ export function AddHostWizard({ onClose }: { onClose: () => void }) {
                     <div className="px-2.5 py-2 text-[11px] text-[var(--t-dim)]">No other devices on the tailnet yet — add one with <span className="font-mono text-[var(--t-mute)]">sudo tailscale up</span> on the remote.</div>
                   )}
                 </div>
+              </div>
+            )}
+            {unreachable && (
+              <div className="rounded-lg border border-[var(--t-amber)]/40 bg-[var(--t-amber)]/6 px-3 py-2 text-[11.5px] leading-relaxed text-[var(--t-amber)]">
+                This server only listens on loopback (<span className="font-mono">{net?.bind}</span>) — nothing off-host can connect, so there's no address to offer.{" "}
+                {net?.tailscale.installed ? (
+                  <>
+                    Turn on tailscale serve (https on the tailnet → loopback) or restart with <span className="font-mono">TRUSS_HOST=0.0.0.0</span>.{" "}
+                    {net.tailscale.canServe !== false && (
+                      <button
+                        type="button"
+                        disabled={serveBusy}
+                        className="underline decoration-dotted hover:brightness-125"
+                        onClick={() => {
+                          setServeBusy(true);
+                          be?.tailscaleServe(true)
+                            .then(() => be.netInfo())
+                            .then((n) => { setNet(n); setServeBusy(false); })
+                            .catch(() => setServeBusy(false));
+                        }}
+                      >
+                        turn on tailscale serve now
+                      </button>
+                    )}
+                    {net.tailscale.canServe === false && (
+                      <span className="font-mono">(serve needs: sudo tailscale set --operator=$USER)</span>
+                    )}
+                  </>
+                ) : (
+                  <>Restart with <span className="font-mono">TRUSS_HOST=0.0.0.0</span> to listen on the network.</>
+                )}
               </div>
             )}
             {method === "tailscale" && impliedReturn && !addrOverride ? (
@@ -361,6 +395,17 @@ export function AddHostWizard({ onClose }: { onClose: () => void }) {
                 <Spinner size={20} />
                 <h3 className="mt-3 text-[14px] font-medium text-[var(--t-fg)]">Waiting for {label}…</h3>
                 <p className="mt-1 text-[11.5px] text-[var(--t-dim)]">The agent dials out to this server, so no inbound ports or firewall holes are needed. This page flips the moment it connects.</p>
+                {/* no systemd on the remote (macOS): the installer only laid
+                    the files down — the run command must be HERE, not just in
+                    the installer's stdout (issue #100, found in manual test) */}
+                <div className="mt-4 rounded-lg border border-[var(--t-line)] bg-[var(--t-bg0)] p-3 text-left">
+                  <p className="text-[11.5px] text-[var(--t-mute)] leading-relaxed">No systemd on the remote (macOS)? The installer doesn't start anything there — run the agent yourself:</p>
+                  <div className="mt-2 font-mono text-[11px] leading-relaxed text-[var(--t-fg2)] break-all select-all">{agentRunCommand(created.id)}</div>
+                  <div className="mt-2 flex justify-end">
+                    <Btn size="xs" variant="outline" icon="copy" onClick={() => { void navigator.clipboard.writeText(agentRunCommand(created.id)); store.toast("ok", "Copied", "run it on the remote host"); }}>Copy</Btn>
+                  </div>
+                  <p className="mt-1 text-[10.5px] text-[var(--t-dim)] leading-relaxed">It stays in the foreground on purpose — it <i>is</i> the service. Give it its own terminal tab (or append <span className="font-mono">&amp;</span> to background it); Ctrl+C stops it.</p>
+                </div>
                 <div className="mt-4 flex justify-center gap-2">
                   <Btn variant="ghost" onClick={() => setStep(2)}>Back to the command</Btn>
                   <Btn variant="outline" onClick={onClose}>Finish later</Btn>

@@ -11,6 +11,7 @@ import {
   closeSession,
   createSession,
   deleteSession,
+  forgetLive,
   setProjectArchived,
   setSessionArchived,
   setSessionPinned,
@@ -47,10 +48,10 @@ import { startFeedAutopost } from "./feed-autopost.js";
 import { startDoubletakePoll } from "./integrations/doubletake.js";
 import { composePractices, getGlobalPractices, saveGlobalPractices } from "./practices.js";
 import { createHost, deleteHost, getHost, isHostTombstoned, listHosts, rotateHostToken, setHostPinned, setHostRevoked, verifyAgentToken } from "./hosts.js";
-import { netInfo, taildropToPeer, tailscalePeers, tailscaleServe, tailscaleSshOk, tailscaleSshRun } from "./net.js";
+import { assertDialableServerUrl, netInfo, taildropToPeer, tailscalePeers, tailscaleServe, tailscaleSshOk, tailscaleSshRun } from "./net.js";
 import { deliveryOptions, installerDropName } from "./installer.js";
 import { mintPairing, redeemPairing, redeemRateOk } from "./pairing.js";
-import { agentBundleError, assertSafeServerUrl, ensureAgentBundle, standaloneInstallScript, installScript } from "./agentbundle.js";
+import { agentBundleError, agentBundleHash, assertSafeServerUrl, ensureAgentBundle, standaloneInstallScript, installScript } from "./agentbundle.js";
 import { registerMcpPerms } from "./mcp-perms.js";
 import { importDshSessions } from "./import-dsh.js";
 import { registerMcpTruss } from "./mcp-truss.js";
@@ -154,18 +155,33 @@ heartbeat.unref();
 
 /* ── node-agent channel (remote hosts dial OUT to here) ── */
 const AGENT_TOKEN = process.env.TRUSS_AGENT_TOKEN ?? "truss-dev";
+/* tunnel protocol level: 1 = pre-handshake agents (hello had no sessions
+   list, versions, or header auth); 2 = the issue #100 handshake */
+const AGENT_PROTOCOL = 2;
 
 wireRemoteRegistry({
   register: registerAdapter,
   unregister: unregisterAdapter,
+  /* an agent hello'd/dropped — open clients refetch hosts + harnesses */
+  registryChanged: () => broadcastRaw({ type: "agents.changed", sessionId: "" }),
   sessionGone: (sessionId, detail) => {
     if (store.getSession(sessionId)) store.setSessionState(sessionId, "error");
+    /* the live entry must die with it (audit B1): otherwise sendPrompt's
+       live.get() hit skips the error→resume gate and the next prompt
+       vanishes into an agent that no longer knows the session */
+    forgetLive(sessionId);
     app.log.warn(`remote session ${sessionId} lost: ${detail}`);
   },
 });
 
 app.get("/agent/connect", { websocket: true }, (socket, req) => {
-  const { host, token } = req.query as { host?: string; token?: string };
+  const q = req.query as { host?: string; token?: string };
+  /* the token rides the Authorization header on protocol-2 agents — in the
+     query string it lands in every access log (issue #100, item 13). The
+     query param stays as the legacy path for pre-handshake agents. */
+  const bearer = req.headers.authorization?.startsWith("Bearer ") ? req.headers.authorization.slice(7) : undefined;
+  const host = q.host;
+  const token = bearer ?? q.token;
   /* per-host tokens (hosts table) first; the shared env token is a dev
      fallback that auto-registers the host into the same registry */
   if (!host || !token || !verifyAgentToken(host, token, AGENT_TOKEN)) {
@@ -222,21 +238,55 @@ app.get("/agent/connect", { websocket: true }, (socket, req) => {
         String(msg.hostname ?? host),
         (msg.adapters ?? []) as { id: string; capabilities: never }[],
         socket,
+        /* the reattach + version handshake (issue #100): which sessions
+           survived on the agent, its protocol level, its bundle hash */
+        {
+          sessions: Array.isArray(msg.sessions) ? (msg.sessions as unknown[]).map(String) : undefined,
+          protocol: typeof msg.protocol === "number" ? msg.protocol : undefined,
+          bundleHash: typeof msg.bundleHash === "string" ? msg.bundleHash : undefined,
+        },
       );
+      /* welcome: the server's half of the handshake — the agent warns its
+         operator when its bundle differs from the one the server builds */
+      socket.send(JSON.stringify({ type: "welcome", protocol: AGENT_PROTOCOL, bundleHash: agentBundleHash() ?? undefined }));
       return;
     }
     agentFrame(host, msg);
   });
   socket.on("close", () => {
     clearInterval(heartbeat);
-    if (helloed) agentBye(host);
+    /* the socket arg guards the reconnect race: a replaced connection's
+       stale close must not reap the new registration (issue #100) */
+    if (helloed) agentBye(host, socket);
   });
 });
 
-app.get("/api/agents", async () => ({ agents: listAgents() }));
+/* installed agents never auto-update (issue #100 item 18) — but the skew is
+   now VISIBLE: each agent's self-reported bundle hash against the one this
+   server builds right now */
+function decoratedAgents() {
+  const current = agentBundleHash();
+  return listAgents().map((a) => ({
+    ...a,
+    bundleCurrent: !current || !a.bundleHash ? undefined : a.bundleHash === current,
+  }));
+}
+
+app.get("/api/agents", async () => ({ agents: decoratedAgents() }));
 
 /* ── network reachability + the agent installer ── */
 app.get("/api/net", async () => netInfo(PORT));
+
+/* the delivery routes mint installs embedding a return address — validate
+   against the server's ACTUAL bound socket (ephemeral in tests), never the
+   configured port alone (issue #100): a syntax-valid address this server
+   doesn't answer must be refused with guidance, not minted into a doomed
+   install */
+async function currentNet() {
+  const addr = app.server.address();
+  const port = typeof addr === "object" && addr ? addr.port : PORT;
+  return netInfo(port, process.env.TRUSS_HOST ?? "0.0.0.0");
+}
 app.get("/api/net/tailscale/peers", async () => tailscalePeers());
 app.post("/api/net/tailscale-serve", async (req, reply) => {
   const { on } = (req.body ?? {}) as { on?: boolean };
@@ -253,6 +303,10 @@ app.get("/agent/install.sh", async (req, reply) => {
     if (!host) throw new Error("missing host");
     const proto = req.headers["x-forwarded-proto"] === "https" ? "https" : "http";
     const serverUrl = server ?? `${proto}://${req.headers.host ?? `127.0.0.1:${PORT}`}`;
+    /* the URL lands frozen into the host's env file — refuse one this server
+       can't answer (issue #100). The fallback derives from the Host header,
+       which a proxy can rewrite; dialability rejects the poisoned form too. */
+    assertDialableServerUrl(serverUrl, await currentNet());
     await ensureAgentBundle().catch(() => {});
     const script = installScript(host, serverUrl);
     return reply.header("Content-Type", "text/x-shellscript; charset=utf-8").send(script);
@@ -272,9 +326,13 @@ app.post("/api/hosts/:id/pair", async (req, reply) => {
      before minting a code that stands for it */
   if (!verifyAgentToken(id, token, "")) return reply.code(403).send({ error: "token doesn't match this host" });
   /* the URL is embedded in the redeem-time script — reject shell syntax at
-     mint, not after the user already typed the command (issue #91 audit) */
+     mint, not after the user already typed the command (issue #91 audit).
+     And it must be an address THIS server answers (issue #100): a
+     syntax-valid dead address mints a doomed install whose agent loops
+     ECONNREFUSED forever — that was the user's Mac. */
   try {
     assertSafeServerUrl(serverUrl);
+    assertDialableServerUrl(serverUrl, await currentNet());
   } catch (e: any) {
     return reply.code(400).send({ error: e.message });
   }
@@ -289,6 +347,7 @@ app.post("/api/hosts/:id/taildrop", async (req, reply) => {
   if (!verifyAgentToken(id, token, "")) return reply.code(403).send({ error: "token doesn't match this host" });
   try {
     assertSafeServerUrl(serverUrl); // the URL lands inside the dropped script
+    assertDialableServerUrl(serverUrl, await currentNet()); // and it must answer (issue #100)
   } catch (e: any) {
     return reply.code(400).send({ error: e.message });
   }
@@ -341,9 +400,11 @@ app.post("/api/hosts/:id/ssh-install", async (req, reply) => {
   if (!verifyAgentToken(id, token, "")) return reply.code(403).send({ error: "token doesn't match this host" });
   /* CRITICAL gate (issue #91 audit): this route executes the script on the
      peer with no human reading it — the URL embedded in that script must be
-     a plain URL, rejected before the CLI is ever invoked */
+     a plain URL, rejected before the CLI is ever invoked. It must also be
+     dialable (issue #100): ssh-install freezes it into the peer's env file. */
   try {
     assertSafeServerUrl(serverUrl);
+    assertDialableServerUrl(serverUrl, await currentNet());
   } catch (e: any) {
     return reply.code(400).send({ error: e.message });
   }
@@ -422,12 +483,13 @@ app.get("/api/metrics", async () => {
 
 /* ── registered remote hosts (registry + per-host tokens) ── */
 app.get("/api/hosts", async () => {
-  const live = new Set(listAgents().map((a) => a.hostId));
+  const agentsNow = decoratedAgents();
+  const live = new Set(agentsNow.map((a) => a.hostId));
   return {
     hosts: listHosts().map((h) => ({
       ...h,
       online: live.has(h.id),
-      agent: listAgents().find((a) => a.hostId === h.id),
+      agent: agentsNow.find((a) => a.hostId === h.id),
     })),
   };
 });
@@ -445,7 +507,12 @@ app.post("/api/hosts", async (req, reply) => {
 app.post("/api/hosts/:id/token", async (req, reply) => {
   const { id } = req.params as { id: string };
   try {
-    return rotateHostToken(id);
+    const out = rotateHostToken(id);
+    /* the old token is dead from this moment — drop the live channel too
+       (issue #100 item 11): it would otherwise keep hosting sessions until
+       the agent happened to disconnect */
+    dropAgent(id);
+    return out;
   } catch (e: any) {
     return reply.code(400).send({ error: e.message ?? String(e) });
   }
@@ -454,6 +521,9 @@ app.post("/api/hosts/:id/revoke", async (req) => {
   const { id } = req.params as { id: string };
   const { revoked } = (req.body ?? {}) as { revoked?: boolean };
   setHostRevoked(id, revoked !== false);
+  /* revoking must kill the live channel, not just future connects (issue
+     #100 item 11) — un-revoking drops nothing (there is nothing to drop) */
+  if (revoked !== false) dropAgent(id);
   return { ok: true };
 });
 app.post("/api/hosts/:id/pin", async (req, reply) => {
