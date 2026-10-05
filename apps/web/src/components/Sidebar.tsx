@@ -269,7 +269,7 @@ function SessionRow({ s, now, archived, trashView }: { s: SessionMeta; now: numb
           <IconBtn
             key={a.id}
             icon={a.icon}
-            label={confirm && a.confirm ? CONFIRM_LABEL[a.id] : a.label}
+            label={confirm && a.confirm ? (CONFIRM_LABEL[a.id] ?? a.label) : a.label}
             active={a.id === "pin" ? !!s.pinned : undefined}
             className={cn(
               "w-6 h-6 shrink-0",
@@ -284,7 +284,9 @@ function SessionRow({ s, now, archived, trashView }: { s: SessionMeta; now: numb
   );
 }
 
-/* second-click labels for the session row's destructive actions */
+/* second-click labels for the session row's destructive actions; a future
+   confirm action without an entry falls back to its first-click label at
+   the call site, so a missing key can never blank the tooltip */
 const CONFIRM_LABEL: Record<string, string> = {
   trash: "Click again to move to trash",
   purge: "Click again: gone forever, no undo",

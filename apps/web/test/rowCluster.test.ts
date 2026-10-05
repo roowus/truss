@@ -80,3 +80,41 @@ test("destructive last (the #85 rule stands); badge/timestamps are NOT actions",
 
   assert.ok(!acts.some((a) => /badge|permission|timestamp|ago|state/i.test(a.id)), "indicators aren't actions — they don't sit in the cluster");
 });
+
+/* ---- branch pins (added in PR #117 audit round 1) -------------------------
+   The contract tests above only ever call sessionRowActions({ pinned }), so
+   the remaining input space — trashView, archived, dead — is pinned here.
+   The trash-view set matters most: it gates purgeSession, the row's only
+   permanently destructive action, and a silent regression there would
+   otherwise ship green. */
+
+test("trash view: exactly restore + purge, no pin, purge last and confirmed", async () => {
+  const mod = await load();
+  assert.ok(mod, "sessionRowActions must exist (see module test)");
+
+  for (const pinned of [true, false]) {
+    const acts = mod.sessionRowActions({ pinned, trashView: true });
+    assert.deepEqual(acts.map((a) => a.id), ["restore", "purge"], "trash rows offer exactly restore + purge — pin/close/archive don't apply to a session out of the live list");
+    const purge = acts.at(-1)!;
+    assert.equal(purge.danger, true, "purge is the destructive entry");
+    assert.ok(acts.every((a) => a.visible === "hover"), "no always-visible member in trash view, pinned or not");
+  }
+});
+
+test("archived rows unarchive instead of shell/archive; dead rows drop close", async () => {
+  const mod = await load();
+  assert.ok(mod, "sessionRowActions must exist (see module test)");
+
+  const live = mod.sessionRowActions({ pinned: false });
+  assert.deepEqual(live.map((a) => a.id), ["pin", "shell", "archive", "close", "trash"], "the live row's full cluster");
+
+  const dead = mod.sessionRowActions({ pinned: false, dead: true });
+  assert.deepEqual(dead.map((a) => a.id), ["pin", "shell", "archive", "trash"], "a dead session has no process left to stop — no close");
+
+  const archived = mod.sessionRowActions({ pinned: false, archived: true });
+  assert.deepEqual(archived.map((a) => a.id), ["pin", "unarchive", "trash"], "an archived row restores, never re-archives");
+
+  for (const [name, acts] of Object.entries({ live, dead, archived })) {
+    assert.equal(acts.at(-1)!.danger, true, `${name}: destructive still rides last`);
+  }
+});
