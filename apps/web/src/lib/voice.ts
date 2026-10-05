@@ -39,13 +39,56 @@ export function speechRecognitionCtor(): SpeechRecognitionCtor | null {
 
 /* SpeechRecognition-backed take: start() opens the mic in the browser's own
    recognizer, stop() ends capture and resolves with the final transcript.
-   The promise rejects via onerror (denied mic, no speech service, …). */
-function recognitionRecorder(Ctor: SpeechRecognitionCtor): VoiceRecorder {
+   The promise rejects via onerror (denied mic, no speech service, …).
+
+   The recognizer owns its audio and exposes no stream, so without help the
+   dictation visualizer (issue #112) would have nothing to read on this
+   path — Chrome/Edge/Safari, the majority. So a take ALSO opens a
+   metering-only getUserMedia (injected, optional): same mic permission as
+   the recognizer's own prompt, analysis only, never recorded or played.
+   Its lifetime mirrors the capture's generation guard — a take cancelled
+   or stopped while the grant is pending releases the late stream and
+   exposes nothing. If metering fails (denied, no device), the take is
+   unaffected; the visualizer just stays hidden. */
+export function recognitionRecorder(
+  Ctor: SpeechRecognitionCtor,
+  deps: { getUserMedia?: () => Promise<MediaStreamLike> } = {},
+): LevelStreamingRecorder {
   let rec: SpeechRecognitionLike | null = null;
   let settle: { res: (t: string) => void; rej: (e: Error) => void } | null = null;
   let result: Promise<string> | null = null;
+  let meter: MediaStreamLike | null = null;
+  let meterGen = 0;
+  const releaseMeter = () => {
+    meterGen++; // invalidate a pending grant, same guard as the capture path
+    meter?.getTracks().forEach((t) => t.stop());
+    meter = null;
+  };
   return {
+    levelStream: () => meter,
     start() {
+      const myMeter = ++meterGen;
+      if (deps.getUserMedia) {
+        /* requested synchronously like the capture path, so a stop/cancel
+           landing right after start() still wins the generation race */
+        let pending: Promise<MediaStreamLike> | null = null;
+        try {
+          pending = deps.getUserMedia();
+        } catch {
+          /* no metering stream — the take still works, bars stay hidden */
+        }
+        pending?.then((s) => {
+          /* the take ended while the metering prompt was up: release the
+             just-granted mic instead of leaking it */
+          if (myMeter !== meterGen) {
+            s.getTracks().forEach((t) => t.stop());
+            return;
+          }
+          meter = s;
+        }).catch(() => {
+          /* no metering stream — the take still works, bars stay hidden */
+        });
+      }
       const r = new Ctor();
       rec = r;
       r.lang = navigator.language || "en-US";
@@ -76,6 +119,7 @@ function recognitionRecorder(Ctor: SpeechRecognitionCtor): VoiceRecorder {
       r.start();
     },
     stop() {
+      releaseMeter();
       try {
         rec?.stop(); // onend fires next with the final transcript
       } catch {
@@ -84,6 +128,7 @@ function recognitionRecorder(Ctor: SpeechRecognitionCtor): VoiceRecorder {
       return result ?? Promise.resolve("");
     },
     cancel() {
+      releaseMeter();
       settle = null;
       result?.catch(() => {}); // nobody awaits it anymore — swallow a late rejection
       result = null;
@@ -253,7 +298,17 @@ export function createBrowserVoiceInput(deps: { onText: (text: string) => void; 
     maxDurationMs: 60_000,
     onText: deps.onText,
     ...(deps.onState ? { onState: deps.onState } : {}),
-    recorder: SR ? recognitionRecorder(SR) : mediaRecorder(),
+    recorder: SR
+      ? recognitionRecorder(SR, {
+          /* metering-only stream for the visualizer (issue #112): the
+             recognizer exposes no audio, so without this the bars would
+             have nothing real to read on the majority path */
+          getUserMedia: () => {
+            if (!navigator.mediaDevices?.getUserMedia) throw new Error("no mic capture for metering");
+            return navigator.mediaDevices.getUserMedia({ audio: true });
+          },
+        })
+      : mediaRecorder(),
     transcribe: transcribeAudio,
   });
   return { ...c, levelStream: () => (c.levelStream() ?? null) as MediaStreamLike | null };
