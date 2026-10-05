@@ -61,10 +61,34 @@ function camel(r: HostRow) {
 
 const hashToken = (t: string) => createHash("sha256").update(t).digest("hex");
 
+/**
+ * Human-minted ids (issue #109): the add-host wizard always has the label at
+ * mint time, so the id IS the slugified label ("Rewiss Macbook Pro" →
+ * "rewiss-macbook-pro") — every surface that prints the id raw still reads
+ * right. Collisions suffix -2, -3…; a label with no safe characters falls
+ * back to the old hex shape. Immutable after mint: env files, tokens, and
+ * pairing on the device all key off it.
+ */
+function mintHostId(label: string): string {
+  const slug = label
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  if (!slug) {
+    let id = randomBytes(4).toString("hex");
+    while (getHost(id)) id = randomBytes(4).toString("hex");
+    return id;
+  }
+  let id = slug;
+  for (let n = 2; getHost(id); n++) id = `${slug}-${n}`;
+  return id;
+}
+
 /** create the row + mint its token; the plaintext returns ONCE (wizard shows it) */
 export function createHost(label: string, note = ""): { host: ReturnType<typeof camel>; token: string } {
   table();
-  const id = randomBytes(4).toString("hex");
+  const id = mintHostId(label);
   const token = `truss_agent_${randomBytes(24).toString("hex")}`;
   store.run(
     `INSERT INTO hosts (id, label, token_hash, token_prefix, created_at, note) VALUES (?, ?, ?, ?, ?, ?)` ,

@@ -2,7 +2,8 @@ import { createContext, memo, useContext, useEffect, useLayoutEffect, useRef, us
 import type { IDockviewPanelProps } from "dockview-react";
 import { store, useApp, useNow, capsOf, type Msg, type ToolRun, type Perm, type SessionView } from "@/lib/store";
 import { argSummary, fmtMs, harnessStyle, shortPath, baseHarness, deadSessionHint } from "@/lib/format";
-import { deviceLabel } from "@/lib/device";
+import { deviceLabel, harnessDisplay, hostAliases } from "@/lib/device";
+import { useDesktops } from "@/lib/desktops";
 import { buildModelOptions, modelValue, splitModelValue } from "@/lib/models";
 import { planHeaderFit, HEADER_CLUSTER, HEADER_GAP } from "@/lib/headerFit";
 import { CHAT_WIDTH_DEFAULT, commitChatWidth, dragDisplayWidth, readChatWidthPref, resolveChatWidth, writeChatWidthPref } from "@/lib/chatWidth";
@@ -80,7 +81,9 @@ function ChatHeader({ id }: { id: string }) {
   const now = useNow(1000, busy || meta.state === "spawning");
   const abnormal = meta.state === "spawning" || meta.state === "error" || meta.state === "closed";
   const [menu, setMenu] = useState(false);
-  const tooltip = [meta.harness, meta.model, shortPath(meta.cwd), meta.project && `project: ${meta.project}`, detail]
+  const hostPrefs = useDesktops((s) => s.hosts);
+  const harnessName = harnessDisplay(meta.harness, hosts, hostAliases(hostPrefs));
+  const tooltip = [harnessName, meta.model, shortPath(meta.cwd), meta.project && `project: ${meta.project}`, detail]
     .filter(Boolean)
     .join("\n");
 
@@ -216,7 +219,7 @@ function ChatHeader({ id }: { id: string }) {
             </button>
             <div className="px-3 py-1.5 text-[11px] text-[var(--t-dim)] leading-relaxed break-all">
               <span className="font-mono text-[var(--t-mute)]">{formatSessionRef(meta, hosts)}</span><br />
-              {meta.harness}{meta.model && ` · ${meta.model}`}<br />{shortPath(meta.cwd)}
+              {harnessName}{meta.model && ` · ${meta.model}`}<br />{shortPath(meta.cwd)}
             </div>
           </div>
         </>
@@ -506,6 +509,9 @@ function PermDock({ id, view }: { id: string; view: SessionView }) {
 function Composer({ id, active }: { id: string; active: boolean }) {
   const meta = useApp((s) => s.sessions[id]);
   const caps = useApp((s) => capsOf(s, meta.harness));
+  const hosts = useApp((s) => s.hosts);
+  const hostPrefs = useDesktops((s) => s.hosts);
+  const harnessName = harnessDisplay(meta.harness, hosts, hostAliases(hostPrefs));
   const pending = useApp((s) => s.views[id]?.pending);
   const since = useApp((s) => s.stateSince[id]);
   const [text, setText] = useState(drafts.get(id) ?? "");
@@ -616,11 +622,11 @@ function Composer({ id, active }: { id: string; active: boolean }) {
     /* one message, not two: while the error banner carries the actual
        failure, the generic "sending resumes it" hint must not sit under it
        saying the opposite */
-    const deadHint = deadSessionHint(dead, !!err, meta.harness);
+    const deadHint = deadSessionHint(dead, !!err, harnessName);
     if (deadHint) hint = <><Icon name="power" size={12} /> {deadHint}</>;
   } else if (spawning) {
     tone = "amber";
-    hint = <><Spinner size={11} /> Booting {meta.harness}… {since ? fmtMs(now - since) : ""}{baseHarness(meta.harness) === "dsh" && " (dsh takes 5–10s)"}</>;
+    hint = <><Spinner size={11} /> Booting {harnessName}… {since ? fmtMs(now - since) : ""}{baseHarness(meta.harness) === "dsh" && " (dsh takes 5–10s)"}</>;
   } else if (running && hasPending) {
     tone = "amber";
     hint = <><Icon name="lock" size={12} /> Waiting on your permission decision above.</>;
@@ -628,7 +634,7 @@ function Composer({ id, active }: { id: string; active: boolean }) {
     hint = <><Icon name="bolt" size={12} /> Messages queue after the current step.</>;
   } else if (running) {
     tone = "amber";
-    hint = <><Icon name="lock" size={12} /> {meta.harness} can't take input mid-run — draft is held, or <button className="underline" onClick={() => store.interrupt(id)}>interrupt</button>.</>;
+    hint = <><Icon name="lock" size={12} /> {harnessName} can't take input mid-run — draft is held, or <button className="underline" onClick={() => store.interrupt(id)}>interrupt</button>.</>;
   }
   /* an active voice take owns the hint line while it lives */
   if (voiceState === "recording") {
@@ -732,7 +738,7 @@ function Composer({ id, active }: { id: string; active: boolean }) {
             }
           }}
           rows={1}
-          placeholder={dead ? `Message to resume ${meta.harness}…` : "Message…"}
+          placeholder={dead ? `Message to resume ${harnessName}…` : "Message…"}
           className="flex-1 min-w-0 resize-none bg-transparent px-1.5 py-1 text-[13.5px] text-[var(--t-fg)] placeholder:text-[var(--t-dim)] outline-none"
         />
         {running && !queues ? (
