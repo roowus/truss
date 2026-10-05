@@ -6,13 +6,7 @@ import { bootServer, type TestServer } from "./server-harness.js";
 /* SPEC-TESTS for interactive pairing — https://github.com/roowus/truss/issues/111
    ("When adding a device even the sent-to-device command is so long —
    installing claude is just `install claude` then `claude`. Make it as
-   simple as possible, use the existing tailscale connection."). These FAIL
-   on purpose today: they pin the contract a fix must satisfy.
-
-   What shipped so far (live-verified on the running instance): the wizard
-   offers tailscale-ssh zero-typing / short-name taildrop / a pairing
-   command (`curl …/i/<code> | sh`) — but the pairing command still embeds
-   host + code inline, i.e. ~40+ chars to type on the remote.
+   simple as possible, use the existing tailscale connection.").
 
    The claude-parity shape: `curl -fsSL <host>/i | sh` — the script itself
    PROMPTS for the 4-char code (nothing inline). On a taildrop, the dropped

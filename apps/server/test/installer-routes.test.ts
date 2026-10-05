@@ -51,6 +51,10 @@ test("POST /api/hosts/:id/pair: 400 on a missing body, 403 on a wrong token, 200
   assert.match(ok.body.code, /^[a-hjkmnp-z2-9]{4,8}$/, "short, unambiguous, typeable");
   assert.ok(ok.body.expiresAt > Date.now(), "carries a future expiry");
   assert.equal(ok.body.command, `curl -fsSL ${srv.base}/i/${ok.body.code} | sh`);
+  /* issue #111: the wizard's lead line — the interactive variant, same code
+     at the prompt instead of inline (audit round 3: pin it, the web side's
+     interface type can't catch a dropped field) */
+  assert.equal(ok.body.interactiveCommand, `curl -fsSL ${srv.base}/i | sh`);
   pairCode = ok.body.code;
 });
 
