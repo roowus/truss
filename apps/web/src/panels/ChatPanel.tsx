@@ -243,8 +243,8 @@ function ChatHeader({ id }: { id: string }) {
             )}
             <div className="px-3 py-1.5 text-[11px] leading-relaxed">
               {/* the all-ids dump, displayed: every id we hold, labeled, full
-                  cwd — labels mirror the copyable dump format (issue #132) so
-                  the menu and the clipboard always agree */}
+                  cwd — labels mirror issue #132's PROPOSED dump format; its
+                  copyable half ("Copy full details") is #132's own to land */}
               <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-2.5 gap-y-0.5 font-mono">
                 <dt className="text-[var(--t-dim)]">truss</dt>
                 <dd className="text-[var(--t-mute)] break-all">{meta.id}</dd>
