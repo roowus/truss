@@ -87,9 +87,11 @@ for e in ledger:
     if missing:
         ok = prompt(sid,
             "Your ready handoff message was incomplete. Per work-session.md phase 3 step 4c, "
-            "post the complete ready message in this session NOW, including: "
+            "post the complete ready message AS A MESSAGE IN THIS SESSION CHAT NOW, including: "
             + "; ".join(missing)
-            + ". The full kit, verbatim URLs, every handoff.")
+            + ". HARD CONSTRAINTS: the message goes in this chat, nowhere else — do NOT create "
+            "GitHub issues or PRs (the issue you link already exists; linking is not filing); "
+            "do not edit the PR body. Just say it here, full kit, verbatim URLs, every handoff.")
         print(f"{sid[:24]} pr#{pr}: missing {len(missing)} element(s) -> repost ordered ({'sent' if ok else 'SEND FAILED'})", flush=True)
     else:
         print(f"{sid[:24]} pr#{pr}: handoff complete", flush=True)
