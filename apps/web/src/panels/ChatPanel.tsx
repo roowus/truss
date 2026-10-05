@@ -749,12 +749,14 @@ function Composer({ id, active }: { id: string; active: boolean }) {
         />
         {/* while a take runs, the chat bar IS the recorder (iMessage /
             Voice Memos style): the waveform fills the input's width over
-            the draft, with the take clock at its left. The textarea stays
-            mounted underneath — the draft is preserved and Esc/Enter keep
-            working. The bars appear once the mic grant lands; if no stream
-            can be had, the clock alone shows the take is alive. */}
+            the draft, with the take clock at its left. The overlay is
+            pointer-events-none — purely decorative — so clicks still land
+            on the textarea underneath: it stays focused/focusable, Esc
+            still cancels the take, Enter still sends, and the draft is one
+            stop away. The bars appear once the mic grant lands; if no
+            stream can be had, the clock alone shows the take is alive. */}
         {voiceState === "recording" && (
-          <div className="absolute inset-0 flex items-center gap-2 px-1.5 rounded-sm bg-[var(--t-bg0)] text-[var(--t-amber)]">
+          <div className="pointer-events-none absolute inset-0 flex items-center gap-2 px-1.5 rounded-sm bg-[var(--t-bg0)] text-[var(--t-amber)]">
             <span className="shrink-0 text-[11.5px] tabular-nums">{fmtTakeTime(voiceNow - (voiceStart ?? voiceNow))}</span>
             <VoiceVisualizer levelStream={voiceLevelStream} className="flex min-w-0 flex-1 items-center gap-[2px] h-5" />
           </div>
