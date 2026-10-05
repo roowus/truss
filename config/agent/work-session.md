@@ -146,24 +146,48 @@ never asked for? When you judge it done:
    is the off switch — if you commit before removing it, your push fires
    another audit.
 2. Do any final cleanup commit without the label.
-3. Confirm the preview is up and healthy at `https://pr-<N>.truss.rewis`
-   (tilt is already running it; fix it if not — the developer tests there).
+3. **Browser-smoke the preview before you hand off.** The unit suites don't
+   render pixels; this is the gap the developer's eyes currently cover. The
+   `playwright` MCP is in your toolset (headless, local-CA-tolerant): drive
+   `https://pr-<N>.truss.rewis` for real — load the page (no console errors),
+   exercise the issue's happy path end to end, take a screenshot. A smoke
+   failure is a round, not a handoff. Put the screenshot path and what you
+   clicked through in the handoff message so the developer's manual test is
+   a confirmation, not a discovery. (If playwright itself is broken, say so
+   in the handoff as a warning — never skip silently.)
 4. **Hand it to the developer on the PR itself** — this is the queue they
-   watch. Preconditions, both checked, not assumed: the `audit` label is OFF
+   watch. EVERY handoff runs ALL of this — the first convergence and every
+   re-convergence after developer feedback alike; there is no shortened
+   "already told them once" form. Preconditions, both checked, not assumed:
+   the `audit` label is OFF
    (`gh pr view --json labels`) and the latest audit's verdict on the FINAL
    head is clean/approved. `ready-for-review` and `audit` must never coexist
    — the label says "done", the loop says "not done".
    a. Retitle: `#<pr> [ready] — <slug>` via the title route.
    b. Apply the review label: `gh pr edit <pr> --add-label ready-for-review`.
-   b. Post the handoff comment:
+   c. Say it in this session too — the developer may be watching the chat,
+      not the PR. Your final message must carry, every time:
+      - the GitHub PR link (`https://github.com/roowus/truss/pull/<N>`)
+      - the live preview link (`https://pr-<N>.truss.rewis`)
+      - **the original issue, restated** — its link
+        (`https://github.com/roowus/truss/issues/<issue>`) and one sentence
+        of what it asked for, so the developer tests against the ask, not
+        your retelling of it
+      - **how to test it** — the concrete steps that exercise the issue's
+        own ask (its test contract when it has one), at the preview
+      Both URLs verbatim, never just one.
+   d. Post the handoff comment:
       `gh pr comment <pr> --body "..."` covering, in plain language:
+      - **The original issue** — link and one-sentence restatement of the
+        ask, plus the exact steps that exercise it at the preview.
       - **What this does** — one or two sentences.
       - **What the audits found and what I fixed** — the fix list with the
         round each landed in; also what I declined and why.
       - **What to look at** — the specific flows/files worth your eyes.
       - **How to test** — exact steps at the preview:
         `https://pr-<N>.truss.rewis` (fill in N; verify it is actually up
-        before posting).
+        before posting). (The comment lives on the PR, so the PR URL is
+        implicit — but the in-session message above carries both.)
       - **The working session**: `https://agent.rewis/#s=<your
         $DSH_SESSION_ID>` — click through if you want to talk to it or see
         the reasoning.
@@ -196,12 +220,26 @@ worth ten stalled guesses, and ten noise questions is worse than guessing.
    `"working"`, and continue with the answer. No answer after several wakes is fine — stay parked; do
    NOT proceed on a guess.
 
-## If the developer messages you after manual testing
+## If the developer messages you (any state, any reason)
 
-They test at the preview URL and message you what's wrong. Treat it like a
-new round: fix, push (re-apply the `audit` label if you want a fresh audit
-of the fix), tell them when to re-test. Merge itself is always the
-developer's click — never merge, never ask to.
+They test at the preview URL and message you what's wrong, or answer a
+question, or just ask for something new. BEFORE acting on the message, flip
+your visible state — the developer reads labels and your title bracket, and
+right now they both say a stale thing:
+
+1. `gh pr edit <pr> --remove-label ready-for-review --remove-label needs-answer`
+   (whichever are on; no-op when absent)
+2. Retitle: `#<pr> [working] — <slug>` via the /plugins/dsh-spawn/title route
+3. Clear the sidebar badge if set:
+   `curl -sS -X POST http://127.0.0.1:3080/plugins/dsh-unread/mark -H 'content-type: application/json' -d '{"sessionId": "'"$DSH_SESSION_ID"'", "unread": false}'`
+4. Ledger entry back to `"state": "working"`.
+
+Then treat the message like a new round: fix, push (re-apply the `audit`
+label if you want a fresh audit of the fix). When the round converges, run
+the FULL handoff again (phase 3 step 4: retitle, label, in-session message
+with both links + the issue restatement + test steps, PR comment) — every
+time, not just the first. Merge itself is always the developer's click —
+never merge, never ask to.
 
 ## Hard rules
 

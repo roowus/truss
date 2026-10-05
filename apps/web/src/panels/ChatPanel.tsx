@@ -2,12 +2,14 @@ import { createContext, memo, useCallback, useContext, useEffect, useLayoutEffec
 import type { IDockviewPanelProps } from "dockview-react";
 import { store, useApp, useNow, capsOf, type Msg, type ToolRun, type Perm, type SessionView } from "@/lib/store";
 import { argSummary, fmtMs, fmtTakeTime, harnessStyle, shortPath, baseHarness, deadSessionHint } from "@/lib/format";
-import { deviceLabel } from "@/lib/device";
+import { deviceLabel, harnessDisplay, hostAliases } from "@/lib/device";
+import { useDesktops } from "@/lib/desktops";
 import { buildModelOptions, modelValue, splitModelValue } from "@/lib/models";
 import { planHeaderFit, HEADER_CLUSTER, HEADER_GAP } from "@/lib/headerFit";
-import { CHAT_WIDTH_DEFAULT, commitChatWidth, dragDisplayWidth, readChatWidthPref, resolveChatWidth, writeChatWidthPref } from "@/lib/chatWidth";
+import { CHAT_WIDTH_DEFAULT, chatHandleGeometry, commitChatWidth, dragDisplayWidth, readChatWidthPref, resolveChatWidth, writeChatWidthPref } from "@/lib/chatWidth";
 import { filesFromTransfer, isFileDrag } from "@/lib/attach";
 import { formatSessionRef } from "@/lib/sessionRef";
+import { resumeCommand } from "@/lib/resumeCommand";
 import { RAIL_INSET, activeRailIndex, railIndexAtOffset, railMarkTop, railNaturalHeight, turnRailItems } from "@/lib/turnRail";
 import { createBrowserVoiceInput, appendTranscript, type BrowserVoiceController } from "@/lib/voice";
 import type { VoiceState } from "@/lib/voiceInput";
@@ -81,7 +83,10 @@ function ChatHeader({ id }: { id: string }) {
   const now = useNow(1000, busy || meta.state === "spawning");
   const abnormal = meta.state === "spawning" || meta.state === "error" || meta.state === "closed";
   const [menu, setMenu] = useState(false);
-  const tooltip = [meta.harness, meta.model, shortPath(meta.cwd), meta.project && `project: ${meta.project}`, detail]
+  const hostPrefs = useDesktops((s) => s.hosts);
+  const aliases = hostAliases(hostPrefs);
+  const harnessName = harnessDisplay(meta.harness, hosts, aliases);
+  const tooltip = [harnessName, meta.model, shortPath(meta.cwd), meta.project && `project: ${meta.project}`, detail]
     .filter(Boolean)
     .join("\n");
 
@@ -96,9 +101,17 @@ function ChatHeader({ id }: { id: string }) {
   const [plan, setPlan] = useState<{ visible: string[]; overflow: string[] }>({ visible: ["select", "stop", "trajectory", "more"], overflow: [] });
 
   /* which device this session runs on: bare harness id = this server,
-     harness@hostId = that remote host (labeled from the registry) */
+     harness@hostId = that remote host (the user's alias wins, then the
+     registry label — same rule as every other surface, so the chip never
+     disagrees with its own tooltip) */
   const hostId = meta.harness.includes("@") ? meta.harness.split("@")[1] : undefined;
-  const device = deviceLabel(meta.harness, hosts);
+  const device = deviceLabel(meta.harness, hosts, aliases);
+
+  /* the harness-native resume hint (issue #131): the visible id is truss's;
+     the harness's own CLI wants its harness_ref — surfaced here, copyable,
+     with the host named when the session runs remotely */
+  const resumeCmd = resumeCommand(meta.harness, meta.harness_ref);
+  const resumeBase = baseHarness(meta.harness);
 
   /* model picker: the catalog lists base harnesses; remote sessions share
      the base harness's catalog */
@@ -171,7 +184,7 @@ function ChatHeader({ id }: { id: string }) {
       {menu && (
         <>
           <div className="fixed inset-0 z-40" onClick={() => setMenu(false)} />
-          <div className="absolute right-2 top-[42px] z-50 w-52 rounded-lg bg-[var(--t-bg2)] border border-[var(--t-line2)] shadow-2xl py-1 t-pop">
+          <div className="absolute right-2 top-[42px] z-50 w-64 rounded-lg bg-[var(--t-bg2)] border border-[var(--t-line2)] shadow-2xl py-1 t-pop">
             {plan.overflow.includes("select") && (
               <div className="px-2 py-1.5" onClick={(e) => e.stopPropagation()}>
                 <Select
@@ -215,9 +228,48 @@ function ChatHeader({ id }: { id: string }) {
               <Icon name="clip" size={13} className="text-[var(--t-mute)]" />
               Copy reference
             </button>
-            <div className="px-3 py-1.5 text-[11px] text-[var(--t-dim)] leading-relaxed break-all">
-              <span className="font-mono text-[var(--t-mute)]">{formatSessionRef(meta, hosts)}</span><br />
-              {meta.harness}{meta.model && ` · ${meta.model}`}<br />{shortPath(meta.cwd)}
+            {resumeCmd && (
+              <button
+                onClick={() => {
+                  void navigator.clipboard.writeText(resumeCmd);
+                  store.toast("ok", "Resume command copied", resumeCmd);
+                  setMenu(false);
+                }}
+                className="w-full flex items-center gap-2.5 px-3 h-8 text-left text-[12.5px] text-[var(--t-fg2)] hover:bg-white/[0.05]"
+                title={`Copy the command that resumes this session in ${resumeBase}'s own CLI — run it on ${hostId ? device : "this server"}`}
+              >
+                <Icon name="term" size={13} className="text-[var(--t-mute)]" />
+                Resume in {resumeBase}'s CLI{hostId ? ` on ${device}` : ""}
+              </button>
+            )}
+            <div className="px-3 py-1.5 text-[11px] leading-relaxed">
+              {/* the all-ids dump, displayed: every id we hold, labeled, full
+                  cwd — labels mirror issue #132's PROPOSED dump format; its
+                  copyable half ("Copy full details") is #132's own to land */}
+              <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-2.5 gap-y-0.5 font-mono">
+                <dt className="text-[var(--t-dim)]">truss</dt>
+                <dd className="text-[var(--t-mute)] break-all">{meta.id}</dd>
+                {meta.harness_ref && (
+                  <>
+                    <dt className="text-[var(--t-dim)]">{resumeBase} session</dt>
+                    <dd className="text-[var(--t-mute)] break-all">{meta.harness_ref}</dd>
+                  </>
+                )}
+                {hostId && (
+                  <>
+                    <dt className="text-[var(--t-dim)]">host</dt>
+                    <dd className="text-[var(--t-mute)] break-all">{hostId}</dd>
+                  </>
+                )}
+                <dt className="text-[var(--t-dim)]">cwd</dt>
+                <dd className="text-[var(--t-mute)] break-all">{meta.cwd}</dd>
+                {resumeCmd && (
+                  <>
+                    <dt className="text-[var(--t-dim)]">resume</dt>
+                    <dd className="text-[var(--t-mute)] break-all">{resumeCmd}</dd>
+                  </>
+                )}
+              </dl>
             </div>
           </div>
         </>
@@ -507,6 +559,10 @@ function PermDock({ id, view }: { id: string; view: SessionView }) {
 function Composer({ id, active }: { id: string; active: boolean }) {
   const meta = useApp((s) => s.sessions[id]);
   const caps = useApp((s) => capsOf(s, meta.harness));
+  const hosts = useApp((s) => s.hosts);
+  const hostPrefs = useDesktops((s) => s.hosts);
+  const aliases = hostAliases(hostPrefs);
+  const harnessName = harnessDisplay(meta.harness, hosts, aliases);
   const pending = useApp((s) => s.views[id]?.pending);
   const since = useApp((s) => s.stateSince[id]);
   const [text, setText] = useState(drafts.get(id) ?? "");
@@ -626,11 +682,11 @@ function Composer({ id, active }: { id: string; active: boolean }) {
     /* one message, not two: while the error banner carries the actual
        failure, the generic "sending resumes it" hint must not sit under it
        saying the opposite */
-    const deadHint = deadSessionHint(dead, !!err, meta.harness);
+    const deadHint = deadSessionHint(dead, !!err, harnessName);
     if (deadHint) hint = <><Icon name="power" size={12} /> {deadHint}</>;
   } else if (spawning) {
     tone = "amber";
-    hint = <><Spinner size={11} /> Booting {meta.harness}… {since ? fmtMs(now - since) : ""}{baseHarness(meta.harness) === "dsh" && " (dsh takes 5–10s)"}</>;
+    hint = <><Spinner size={11} /> Booting {harnessName}… {since ? fmtMs(now - since) : ""}{baseHarness(meta.harness) === "dsh" && " (dsh takes 5–10s)"}</>;
   } else if (running && hasPending) {
     tone = "amber";
     hint = <><Icon name="lock" size={12} /> Waiting on your permission decision above.</>;
@@ -638,7 +694,7 @@ function Composer({ id, active }: { id: string; active: boolean }) {
     hint = <><Icon name="bolt" size={12} /> Messages queue after the current step.</>;
   } else if (running) {
     tone = "amber";
-    hint = <><Icon name="lock" size={12} /> {meta.harness} can't take input mid-run — draft is held, or <button className="underline" onClick={() => store.interrupt(id)}>interrupt</button>.</>;
+    hint = <><Icon name="lock" size={12} /> {harnessName} can't take input mid-run — draft is held, or <button className="underline" onClick={() => store.interrupt(id)}>interrupt</button>.</>;
   }
   /* an active voice take no longer touches the hint line (review feedback:
      the hint pushed the composer bar up) — the recording state lives
@@ -743,7 +799,7 @@ function Composer({ id, active }: { id: string; active: boolean }) {
             }
           }}
           rows={1}
-          placeholder={dead ? `Message to resume ${meta.harness}…` : "Message…"}
+          placeholder={dead ? `Message to resume ${harnessName}…` : "Message…"}
           className="flex-1 min-w-0 resize-none bg-transparent px-1.5 py-1 text-[13.5px] text-[var(--t-fg)] placeholder:text-[var(--t-dim)] outline-none"
         />
         {/* while a take runs, the chat bar IS the recorder (iMessage /
@@ -786,7 +842,7 @@ function Composer({ id, active }: { id: string; active: boolean }) {
 /* ---------------- draggable chat column width (issue #6) ---------------- */
 
 /* one width state shared by the timeline and the composer (same axis), with
-   hover-revealed drag handles at the panel's side edges */
+   hover-revealed drag handles riding the chat column's edges */
 function ChatWidthProvider({ timeline, composer, perms }: { timeline: ReactNode; composer: ReactNode; perms: ReactNode }) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const [columnW, setColumnW] = useState(0);
@@ -856,15 +912,20 @@ function ChatWidthProvider({ timeline, composer, perms }: { timeline: ReactNode;
     window.addEventListener("pointercancel", cancel);
   };
 
-  const handleCls = (side: "left" | "right") =>
-    cn(
-      "absolute top-0 bottom-0 w-2 z-20 cursor-col-resize group/edge",
-      side === "left" ? "left-0" : "right-0",
-    );
+  /* the handles ride the chat column's edges and move with it (issue #116) —
+     pinned to the panel's edges they float ever further from the column as
+     the panel widens; hidden entirely when the margin has no room */
+  const geo = chatHandleGeometry(columnW, width);
+  const handleCls = "absolute top-0 bottom-0 z-20 cursor-col-resize group/edge";
+  const handleStyle = (side: "left" | "right"): React.CSSProperties =>
+    side === "left"
+      ? { left: `calc(50% - ${geo.offset + geo.width}px)`, width: geo.width }
+      : { left: `calc(50% + ${geo.offset}px)`, width: geo.width };
   const gripCls = cn(
     "absolute top-1/2 -translate-y-1/2 w-[3px] h-10 rounded-full transition-colors",
+    "opacity-0 group-hover/edge:opacity-100",
     "bg-[var(--t-line2)] group-hover/edge:bg-[var(--t-amber)]",
-    dragging && "bg-[var(--t-amber)]",
+    dragging && "bg-[var(--t-amber)] opacity-100",
   );
 
   return (
@@ -873,10 +934,10 @@ function ChatWidthProvider({ timeline, composer, perms }: { timeline: ReactNode;
       <div className="flex-1 min-h-0 flex flex-col" style={{ ["--t-chatw" as never]: `${width}px` }}>
         <ChatColumnCtx.Provider value={width}>{timeline}{perms}{composer}</ChatColumnCtx.Provider>
       </div>
-      {/* edge drag handles */}
-      {(["left", "right"] as const).map((side) => (
-        <div key={side} className={handleCls(side)} style={{ touchAction: "none" /* touch: drag resizes instead of scrolling */ }} onPointerDown={onPointerDown(side)} title="Drag to resize the chat column" aria-label={`Resize chat column (${side} edge)`} role="separator" aria-orientation="vertical">
-          <span className={cn(gripCls, side === "left" ? "left-0.5" : "right-0.5")} />
+      {/* edge drag handles — placed from the geometry, hover-only grip */}
+      {geo.visible && (["left", "right"] as const).map((side) => (
+        <div key={side} className={handleCls} style={{ ...handleStyle(side), touchAction: "none" /* touch: drag resizes instead of scrolling */ }} onPointerDown={onPointerDown(side)} title="Drag to resize the chat column" aria-label={`Resize chat column (${side} edge)`} role="separator" aria-orientation="vertical">
+          <span className={cn(gripCls, side === "left" ? "right-0.5" : "left-0.5")} />
         </div>
       ))}
     </div>

@@ -41,6 +41,10 @@ export interface AgentInfo {
   protocol?: number;
   bundleHash?: string;
   bundleCurrent?: boolean;
+  /** directory discovery (issue #123): the remote's home + its one suggested
+     cwd, announced at hello. Absent on pre-discovery agents. */
+  home?: string;
+  suggestedCwd?: string;
 }
 
 export interface SessionMeta {
@@ -60,6 +64,9 @@ export interface SessionMeta {
   created_at: string | number;
   updated_at: string | number;
   live: boolean;
+  /** the harness's own session id (pi sessionId, dsh uuid) — the resume
+     target for the harness's own CLI (issue #131) */
+  harness_ref?: string | null;
 }
 
 export interface CreateSessionBody {

@@ -11,12 +11,17 @@
  *
  * Tunnel protocol (JSON lines over WS), level 2 (issue #100):
  *   agent→server  {type:"hello", hostId, hostname, adapters:[{id,capabilities}],
- *                  sessions:[sessionId], protocol, bundleHash}   ← reattach +
- *                  version handshake: sessions are the harnesses STILL ALIVE
- *                 here after a blip; the server reconciles instead of wiping
+ *                  sessions:[sessionId], protocol, bundleHash,
+ *                  home, suggestedCwds}                  ← reattach + version
+ *                  handshake (sessions are the harnesses STILL ALIVE here
+ *                  after a blip) + directory discovery (issue #123): home and
+ *                  the existing projects-family dirs, so the server can
+ *                  prefill a sensible remote cwd
  *   server→agent  {type:"welcome", protocol, bundleHash}  ← skew warning input
  *   server→agent  {type:"spawn", reqId, adapterId, opts:{sessionId,cwd,model,provider,resumeRef}}
  *   agent→server  {type:"spawned", reqId, ok, error?}
+ *   server→agent  {type:"models.list", reqId, adapterId}  ← catalog probe
+ *   agent→server  {type:"models.result", reqId, models}  (issue #123)
  *   agent→server  {type:"event", sessionId, ev}          (proto events)
  *   server→agent  {type:"send", sessionId, text}
  *   server→agent  {type:"interrupt", sessionId}
@@ -35,6 +40,8 @@ import { fileURLToPath } from "node:url";
 import WebSocket from "ws";
 import { dialFailureHint } from "./dialHint.js";
 import { applyServerEnv } from "./serverEnv.js";
+import { applyDataDir } from "./dataDir.js";
+import { discoverCwds } from "./discovery.js";
 import type { HarnessAdapter, AdapterHandle, SessionOpts } from "../../../apps/server/src/adapters/types.js";
 import { piAdapter } from "../../../apps/server/src/adapters/pi.js";
 import { claudeAdapter } from "../../../apps/server/src/adapters/claude.js";
@@ -65,6 +72,11 @@ const HOST_ID =
    (issue #100, item 16: the claude adapter used to freeze the loopback
    defaults at module scope, before this code ever ran). */
 applyServerEnv(SERVER);
+/* adapters persist per-session state under TRUSS_DATA_DIR; its
+   adapter-side fallback is repo-relative and escapes the bundle
+   (~/.truss/../../data → EACCES on the first remote pi spawn — PR #126
+   preview testing). Default it to the install dir before any spawn. */
+applyDataDir();
 
 interface LiveEntry {
   adapter: HarnessAdapter;
@@ -160,6 +172,10 @@ function connect() {
       sessions: [...live.keys()],
       protocol: PROTOCOL,
       bundleHash: BUNDLE_HASH,
+      /* directory discovery (issue #123): home always, the projects-family
+         dirs that exist here — recomputed per hello so a dir created while
+         the tunnel was down shows up after the next reconnect */
+      ...discoverCwds(),
     });
     /* then flush whatever piled up while the tunnel was down */
     for (const line of offlineQueue.splice(0)) ws!.send(line);
@@ -212,6 +228,24 @@ function connect() {
           sendFrame({ type: "spawned", reqId, ok: true });
         } catch (err) {
           sendFrame({ type: "spawned", reqId, ok: false, error: String(err) });
+        }
+        return;
+      }
+      case "models.list": {
+        /* catalog probe (issue #123): the server asks what THIS host's
+           harness can offer, so the picker's `pi@host` rows are the remote's
+           real models, not the bare default */
+        const { reqId, adapterId } = msg as { reqId: string; adapterId: string };
+        const adapter = localAdapters.find((a) => a.id === adapterId);
+        if (!adapter) {
+          sendFrame({ type: "models.result", reqId, models: [], error: `no adapter ${adapterId} on ${HOST_ID}` });
+          return;
+        }
+        try {
+          const models = await adapter.listModels();
+          sendFrame({ type: "models.result", reqId, models });
+        } catch (err) {
+          sendFrame({ type: "models.result", reqId, models: [], error: String(err) });
         }
         return;
       }

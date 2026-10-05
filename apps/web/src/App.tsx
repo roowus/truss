@@ -8,6 +8,7 @@ import { StatusBar, Toasts, CommandPalette } from "@/components/Chrome";
 import { NewSessionDialog, type NewSessionPreset } from "@/components/NewSessionDialog";
 import { AddHostWizard } from "./components/AddHostWizard";
 import { openPanel } from "@/lib/workspace";
+import { canClose, isCloseWindowChord, isReopenClosedChord } from "@/lib/workspaceClose";
 import { TrussLogo, Spinner } from "@/components/ui";
 import { cn } from "@/utils/cn";
 
@@ -72,7 +73,19 @@ function Shell() {
     const key = (e: KeyboardEvent) => {
       const t = e.target as HTMLElement;
       const typing = t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.isContentEditable || t.closest(".xterm"));
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+      /* Chrome's window chords are window-level: they fire even mid-typing. */
+      if (isCloseWindowChord(e)) {
+        e.preventDefault();
+        const live = desktops.state.spaces.filter((s) => !s.archived);
+        if (canClose(live, desktops.state.activeId)) desktops.remove(desktops.state.activeId);
+        else store.toast("info", "The last workspace stays open", "Truss always keeps at least one workspace.");
+        /* Shift+Z is a text-redo chord, so unlike the window chords it must
+           yield while typing; Shift+T (browser-reserved, rarely delivered)
+           fires window-level wherever it does arrive */
+      } else if (isReopenClosedChord(e, !!typing)) {
+        e.preventDefault();
+        desktops.reopenClosed();
+      } else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
         e.preventDefault();
         setPalette((p) => !p);
       } else if (!typing && e.altKey && e.shiftKey && e.key.toLowerCase() === "t") {

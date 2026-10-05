@@ -2,7 +2,9 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { store, useApp, useNow } from "@/lib/store";
 import { desktops, useDesktops } from "@/lib/desktops";
 import { fmtCost, harnessStyle, shortPath } from "@/lib/format";
+import { harnessDisplay, hostAliases } from "@/lib/device";
 import { openDailyDriver, openFreeShell, openPanel } from "@/lib/workspace";
+import { describeClosed } from "@/lib/workspaceClose";
 import { HarnessMark, Icon, StateDot } from "./ui";
 import { cn } from "@/utils/cn";
 
@@ -126,6 +128,7 @@ export function CommandPalette({ onClose, onNew }: { onClose: () => void; onNew:
   const order = useApp((s) => s.order);
   const sessions = useApp((s) => s.sessions);
   const agents = useApp((s) => s.agents);
+  const hosts = useApp((s) => s.hosts);
   const spaces = useDesktops((s) => s.spaces);
   const hostPrefs = useDesktops((s) => s.hosts);
   const [q, setQ] = useState("");
@@ -134,12 +137,17 @@ export function CommandPalette({ onClose, onNew }: { onClose: () => void; onNew:
   useEffect(() => input.current?.focus(), []);
 
   const cmds: Cmd[] = useMemo(() => {
+    /* Read at open time: the palette mounts fresh, so a non-reactive peek is
+       always current. This is the guaranteed reopen path — browsers reserve
+       Ctrl/⌘ Shift+T in normal tabs, so the chord may never reach the page. */
+    const closedTop = desktops.peekClosed();
     const base: Cmd[] = [
       { id: "new", label: "New session…", icon: "plus", hint: "N", run: onNew },
       { id: "add-tab", label: "Add tab…", icon: "plus", hint: "Alt+Shift+T", run: () => window.dispatchEvent(new Event("truss:add-tab")) },
       { id: "shell", label: "New free shell", icon: "term", run: () => openFreeShell() },
       { id: "settings", label: "Settings", icon: "settings", hint: "Ctrl/⌘ ,", run: () => openPanel("settings") },
       { id: "new-workspace", label: "New workspace", icon: "desktop", run: () => desktops.create() },
+      ...(closedTop ? [{ id: "reopen-closed", label: describeClosed(closedTop), icon: closedTop.type === "workspace" ? "desktop" : "layout", hint: "Ctrl/⌘ Shift+Z", run: () => desktops.reopenClosed() }] : []),
       { id: "welcome", label: "Open welcome", icon: "layout", run: () => openPanel("welcome") },
     ];
     const ws: Cmd[] = spaces.map((space, index) => ({ id: `ws-${space.id}`, label: `Switch to ${space.name}`, icon: "desktop", hint: `Alt+${index + 1}`, run: () => desktops.switchTo(space.id) }));
@@ -148,13 +156,13 @@ export function CommandPalette({ onClose, onNew }: { onClose: () => void; onNew:
       const s = sessions[id];
       if (!s) return [];
       return [
-        { id: "c" + id, label: s.title, hint: `${s.harness} · ${shortPath(s.cwd)}`, harness: s.harness, run: () => openPanel("chat", { sessionId: id }) },
+        { id: "c" + id, label: s.title, hint: `${harnessDisplay(s.harness, hosts, hostAliases(hostPrefs))} · ${shortPath(s.cwd)}`, harness: s.harness, run: () => openPanel("chat", { sessionId: id }) },
         { id: "d" + id, label: `${s.title} — chat + trajectory + context`, hint: "daily driver", icon: "layout", run: () => openDailyDriver(id) },
         { id: "t" + id, label: `${s.title} — trajectory`, icon: "wave", run: () => openPanel("trajectory", { sessionId: id }) },
       ];
     });
     return [...base, ...ws, ...hs, ...ss];
-  }, [order, sessions, spaces, agents, hostPrefs, onNew]);
+  }, [order, sessions, spaces, agents, hosts, hostPrefs, onNew]);
   const list = cmds.filter((c) => !q || (c.label + " " + (c.hint ?? "")).toLowerCase().includes(q.toLowerCase())).slice(0, 40);
   useEffect(() => setI(0), [q]);
 

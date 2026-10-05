@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useState } from "react";
 import type { IDockviewPanelProps } from "dockview-react";
 import { store, useApp, useNow } from "@/lib/store";
+import { useDesktops } from "@/lib/desktops";
 import { ago, harnessStyle, shortPath } from "@/lib/format";
+import { harnessDisplay, hostAliases } from "@/lib/device";
 import { Btn, Empty, HarnessMark, Icon, Select, Spinner } from "@/components/ui";
 import { openPanel } from "@/lib/workspace";
 import type { TaskInfo, TaskStatus } from "@/lib/proto";
@@ -24,6 +26,8 @@ const COLS: { id: TaskStatus; label: string; color: string }[] = [
 export function TasksPanel({ params }: IDockviewPanelProps<P>) {
   const backend = useApp((s) => s.backend);
   const harnesses = useApp((s) => s.harnesses);
+  const hosts = useApp((s) => s.hosts);
+  const hostPrefs = useDesktops((s) => s.hosts);
   const sessions = useApp((s) => s.sessions);
   const focus = useApp((s) => (params.sessionId ? s.sessions[params.sessionId] : s.focused ? s.sessions[s.focused] : undefined));
   const [tasks, setTasks] = useState<TaskInfo[] | null>(null);
@@ -126,7 +130,7 @@ export function TasksPanel({ params }: IDockviewPanelProps<P>) {
               onChange={(v) => setForm({ ...form, harness: v })}
               ariaLabel="Harness"
               width={150}
-              options={harnesses.map((h) => ({ value: h.id, label: h.id }))}
+              options={harnesses.map((h) => ({ value: h.id, label: harnessDisplay(h.id, hosts, hostAliases(hostPrefs)) }))}
             />
             <Btn size="xs" variant="amber" disabled={busy === "new" || !form.title.trim() || !form.cwd.trim() || !form.harness} onClick={() => void submit()}>Add card</Btn>
             <Btn size="xs" variant="ghost" onClick={() => setCreating(false)}>Cancel</Btn>

@@ -653,9 +653,10 @@ export function listHarnesses() {
     id: a.id,
     capabilities: a.capabilities,
     /* lazy adapters can fill an empty catalog on request (POST
-       /api/harnesses/probe); the dialog asks only for these — a static or
-       config-less catalog (pi without models.json, remote adapters) can
-       never change from a probe, so asking would be a wasted round trip */
+       /api/harnesses/probe); the dialog asks only for these. Since issue
+       #123 that includes remote adapters (their probe tunnels a models.list
+       to the agent) — only a static or config-less catalog (pi without
+       models.json) can never change from a probe */
     probeable: typeof a.probeModels === "function",
   }));
 }

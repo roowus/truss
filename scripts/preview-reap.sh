@@ -80,8 +80,13 @@ done
 #    survived; the ledger is the source of truth for worker sessions
 while read -r n; do
   [ -n "$n" ] || continue
-  [ "${STATE[$n]:-}" = "MERGED" ] || continue
-  retitle "$n" merged
+  case "${STATE[$n]:-}" in
+    MERGED) retitle "$n" merged ;;
+    CLOSED) retitle "$n" closed ;;
+    *) continue ;;
+  esac
+  # labels are pre-merge signals — they must not outlive the merge
+  gh pr edit "$n" -R roowus/truss --remove-label ready-for-review --remove-label needs-answer 2>/dev/null || true
   # mark the ledger entry so this fires once
   python3 - "$LEDGER" "$n" <<'EOF'
 import json, sys

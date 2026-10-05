@@ -16,6 +16,11 @@
  *     sense) are icon-only and can never be closed by click.
  *   - the X never sits on title TEXT — the icon-overlay (favicon swap) only
  *     happens on icon-only slivers.
+ *   - indicators (the truss status dot / pending badge — extras Chrome
+ *     doesn't have) drop below their own floors, the way the title drops
+ *     below CHROME_TAB_TITLE_MIN: a narrow titled tab keeps a readable
+ *     title instead of a dot and nothing else (issue #129). The badge is
+ *     pricier than the dot, so it waits for its own, higher floor.
  */
 
 /** Chrome's standard tab width when the strip has room (~240px). */
@@ -38,6 +43,47 @@ export const CHROME_TAB_ICON = 40;
  */
 export const CHROME_TAB_CLOSE_MIN = 120;
 
+/**
+ * The close X's slot width at a titled tab's trailing edge: the w-5 (20px)
+ * button plus its right-0.5 (2px) offset, as Workspace.tsx renders it.
+ * Reserved as trailing padding when the X is hover-hidden or absent, so an
+ * indicator never kisses the edge.
+ */
+export const CHROME_TAB_CLOSE_SLOT = 22;
+
+/**
+ * Below this width a titled tab hides its indicators (the status dot and
+ * the pending badge) — the same tradeoff slivers make one band lower
+ * (issue #129). The #125 reserve pushed a dotted tab's fixed row content
+ * to 64px, so between CHROME_TAB_TITLE_MIN and ~92px the title span sat
+ * entirely inside the 14px fade mask: a dot and no readable title. The
+ * floor is the titled floor plus exactly the reserve a shown indicator
+ * forces — at this width a dotted tab's title span is 30px again, the
+ * room it had at CHROME_TAB_TITLE_MIN before the reserve existed.
+ */
+export const CHROME_TAB_INDICATOR_MIN = CHROME_TAB_TITLE_MIN + CHROME_TAB_CLOSE_SLOT;
+
+/**
+ * The pending badge's row footprint: the pill is min-w-4 (16px) with px-1
+ * (8px) around a 9px lock icon — 17px wins — plus the gap-1.5 (6px) it
+ * adds to the row, as Workspace.tsx renders it. (A count digit for
+ * pending > 1 adds a few more px; the badge is transient and the title
+ * recovers as soon as it clears.)
+ */
+export const CHROME_TAB_BADGE_SLOT = 23;
+
+/**
+ * Below this width a titled tab hides the pending badge while still
+ * showing the status dot (issue #129, audit round 1): a dot + badge row
+ * is 87px of fixed content, so at the indicator floor its title span
+ * would be 7px — the exact unreadable state #129 names. The badge floor
+ * is the indicator floor plus exactly the badge's slot, so a dot + badge
+ * tab at this width keeps the same 30px of title room the indicator floor
+ * guarantees the dot-only row. A hidden badge orphans no signal: the
+ * sidebar badge and the global pending pill still show it.
+ */
+export const CHROME_TAB_BADGE_MIN = CHROME_TAB_INDICATOR_MIN + CHROME_TAB_BADGE_SLOT;
+
 export interface ChromeTabInput {
   id: string;
   active?: boolean;
@@ -49,6 +95,20 @@ export interface ChromeTabView {
   showClose: "always" | "hover" | "never";
   /** true only on slivers: the hover X takes the favicon's place. */
   closeOverIcon: boolean;
+  /**
+   * true when the tab may render its indicators (status dot, pending
+   * badge). Below CHROME_TAB_INDICATOR_MIN a titled tab drops them so the
+   * title keeps readable room (issue #129) — and with no indicator
+   * showing, the #125 trailing reserve is 0 too.
+   */
+  showIndicator: boolean;
+  /**
+   * true when the tab may render the pending badge. Between
+   * CHROME_TAB_INDICATOR_MIN and CHROME_TAB_BADGE_MIN the dot still shows
+   * but the badge hides — a dot + badge row would swallow the title
+   * there (issue #129, audit round 1).
+   */
+  showBadge: boolean;
 }
 
 /**
@@ -63,6 +123,23 @@ export function chromeTabsAvailableWidth(headerWidth: number, trayWidths: number
   let w = Number.isFinite(headerWidth) ? headerWidth : 0;
   for (const t of trayWidths) w -= Number.isFinite(t) ? t : 0;
   return Math.max(0, w);
+}
+
+/**
+ * The breathing room a titled tab reserves at its trailing edge (issue
+ * #125). The X is hover-revealed or absent on most tabs (the #95 matrix
+ * above), which left the status dot as the row's last in-flow element,
+ * flush against the tab's right edge. Reserving the X's slot keeps the dot
+ * off the edge AND lets the hover-revealed X appear without shifting
+ * anything (the #21 no-shift spirit — reserve, not reflow).
+ *
+ * Returns 0 when the X is inline (it IS the trailing element), on slivers
+ * (no title, no dot), or when no indicator is showing (the title fades to
+ * the edge, like Chrome).
+ */
+export function tabTrailingReserve(view: ChromeTabView, hasIndicator: boolean): number {
+  if (!view.showTitle || !hasIndicator) return 0;
+  return view.showClose === "always" ? 0 : CHROME_TAB_CLOSE_SLOT;
 }
 
 export function chromeTabLayout(input: { stripWidth: number; tabs: ChromeTabInput[] }): {
@@ -83,7 +160,7 @@ export function chromeTabLayout(input: { stripWidth: number; tabs: ChromeTabInpu
   for (const tab of tabs) {
     if (tab.pinned) {
       /* Chrome-sense pinned: icon-only, no X, ever — no accidental closes. */
-      perTab[tab.id] = { showTitle: false, showClose: "never", closeOverIcon: false };
+      perTab[tab.id] = { showTitle: false, showClose: "never", closeOverIcon: false, showIndicator: false, showBadge: false };
       continue;
     }
     const showClose: ChromeTabView["showClose"] = roomy
@@ -99,6 +176,13 @@ export function chromeTabLayout(input: { stripWidth: number; tabs: ChromeTabInpu
       /* the favicon swap exists only on icon-only slivers — the X never
          overlays title text */
       closeOverIcon: showClose !== "never" && !titled,
+      /* indicators (dot/badge) are truss extras Chrome doesn't have: below
+         the indicator floor a titled tab drops them for title room, the
+         way a sliver drops the title itself */
+      showIndicator: titled && width >= CHROME_TAB_INDICATOR_MIN,
+      /* the badge is pricier than the dot — it waits for its own, higher
+         floor so a dot + badge row can't swallow the title */
+      showBadge: titled && width >= CHROME_TAB_BADGE_MIN,
     };
   }
   return { width, perTab };

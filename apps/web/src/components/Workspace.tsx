@@ -27,7 +27,7 @@ import { MonitorPanel } from "@/panels/MonitorPanel";
 import { HostPanel } from "@/panels/HostPanel";
 import { SettingsPanel } from "@/panels/SettingsPanel";
 import { DesktopStrip } from "./DesktopStrip";
-import { chromeTabLayout, chromeTabsAvailableWidth, type ChromeTabView } from "@/lib/chromeTabs";
+import { chromeTabLayout, chromeTabsAvailableWidth, tabTrailingReserve, type ChromeTabView } from "@/lib/chromeTabs";
 import { tabClosePlacement } from "@/lib/tabClose";
 import { TabPicker } from "./TabPicker";
 import { Btn, Icon, StateDot, TrussLogo } from "./ui";
@@ -99,7 +99,7 @@ function TrussTab({ api, params }: IDockviewPanelHeaderProps<{ sessionId?: strin
      observe the header for resizes (sash/window) and the strip's childList
      only for tab add/remove — never the strip's own width. */
   const rootRef = useRef<HTMLDivElement>(null);
-  const [view, setView] = useState<ChromeTabView>({ showTitle: true, showClose: "always", closeOverIcon: false });
+  const [view, setView] = useState<ChromeTabView>({ showTitle: true, showClose: "always", closeOverIcon: false, showIndicator: true, showBadge: true });
   const measureRef = useRef<() => void>(() => {});
   useEffect(() => {
     /* The dockview tab element is resolved LAZILY, on every measure — never
@@ -185,14 +185,26 @@ function TrussTab({ api, params }: IDockviewPanelHeaderProps<{ sessionId?: strin
   useEffect(() => {
     measureRef.current();
   }, [active]);
+  /* the trailing reserve (issue #125): when the X is hover-hidden or absent
+     and an indicator (dot/badge) is showing, the X's slot stays reserved as
+     right padding — the indicator never kisses the edge, and hover-revealing
+     the X can't shift the row (reserve, not reflow). 0 when the X is inline
+     (it is the trailing element), on slivers, or with no indicator (the
+     title fades to the edge, like Chrome). Below the indicator floor
+     (issue #129) the row renders no indicator, so nothing is reserved and
+     the title keeps the full width; each indicator gates on its own floor
+     (the badge's is higher — audit round 1). */
+  const hasIndicator = Boolean((view.showIndicator && kind === "chat" && meta) || (view.showBadge && pending > 0));
+  const trailingReserve = tabTrailingReserve(view, hasIndicator);
   return (
     <div
       ref={rootRef}
       className={cn(
         "truss-tab group/tab relative flex items-center gap-1.5 h-full w-full text-[12px] select-none",
         /* icon-only slivers center their favicon, like Chrome */
-        view.showTitle ? "pl-2 pr-1" : "justify-center px-0",
+        view.showTitle ? "pl-2" : "justify-center px-0",
       )}
+      style={view.showTitle ? { paddingRight: 4 + trailingReserve } : undefined}
       onMouseDown={(e) => {
         if (e.button === 1) { e.preventDefault(); api.close(); }
       }}
@@ -214,8 +226,14 @@ function TrussTab({ api, params }: IDockviewPanelHeaderProps<{ sessionId?: strin
           on empty space when the title fits and only touches text that
           actually overflows */}
       {view.showTitle && <span className="min-w-0 flex-1 overflow-hidden whitespace-nowrap t-fade-r">{title}</span>}
-      {view.showTitle && meta && kind === "chat" && <StateDot state={meta.state} size={6} />}
-      {view.showTitle && pending > 0 && (
+      {/* indicators drop below the indicator floor (issue #129): a narrow
+          titled tab shows its title instead of a dot it has no room for —
+          the same tradeoff slivers make one band lower */}
+      {view.showTitle && view.showIndicator && meta && kind === "chat" && <StateDot state={meta.state} size={6} />}
+      {/* the badge waits for its own, higher floor (issue #129 audit):
+          in the dot-only band it would still swallow the title; the
+          sidebar badge and the global pending pill carry the signal */}
+      {view.showTitle && view.showBadge && pending > 0 && (
         <span className="inline-flex items-center gap-0.5 min-w-4 h-4 px-1 rounded-full bg-[var(--t-amber)] text-[#1b1305] text-[9.5px] font-bold t-pulse-soft shrink-0" title={`${pending} permission request(s) waiting`}>
           <Icon name="lock" size={9} />
           {pending > 1 && <span>{pending}</span>}
@@ -285,6 +303,19 @@ function GroupActions({ props, spaceId }: { props: IDockviewHeaderActionsProps; 
           {max ? <path d="M6 2v4H2M10 2v4h4M6 14v-4H2M10 14v-4h4" /> : <path d="M2 6V2h4M14 6V2h-4M2 10v4h4M14 10v4h-4" />}
         </svg>
       </button>
+      {/* a batch tab close, at the group's corner: closes every tab in the
+          group in one gesture, remembered as ONE undo entry so the reopen
+          chord (Cmd/Ctrl+Shift+Z) restores the group whole (issue #124;
+          orphaned shells stop via onDidRemovePanel -> cleanupTerminalLater
+          in desktops.register) */}
+      <button
+        className="w-6 h-6 grid place-items-center rounded text-[var(--t-dim)] hover:text-[var(--t-red)] hover:bg-white/5"
+        title="Close this whole tab group (Ctrl/⌘ Shift+Z reopens)"
+        aria-label="Close this whole tab group"
+        onClick={() => desktops.closeGroup(spaceId, [...props.group.panels])}
+      >
+        <Icon name="x" size={12} />
+      </button>
       {picker && plusRef.current && <TabPicker anchor={plusRef.current} spaceId={spaceId} groupId={props.group.id} onClose={() => setPicker(false)} />}
     </div>
   );
@@ -311,7 +342,13 @@ const DesktopCanvas = memo(function DesktopCanvas({ id, visible }: { id: string;
   const contextMenu = useCallback(({ panel }: GetTabContextMenuItemsParams): (BuiltInContextMenuItem | ReactContextMenuItemConfig)[] => {
     const others = desktops.state.spaces.filter((s) => s.id !== id);
     return [
-      "close", "closeOthers", "separator",
+      "close",
+      /* the batch close goes through the undo stack as ONE entry, matching
+         the group-corner X (built-in closeOthers would record N singles) */
+      ...(panel.group
+        ? [{ label: "Close Others", action: () => desktops.closeGroup(id, panel.group.panels.filter((p) => p.id !== panel.id)) }]
+        : ["closeOthers" as const]),
+      "separator",
       ...others.map((space) => ({ label: `Copy to ${space.name}`, action: () => desktops.transferPanel(id, panel.id, space.id) })),
       ...(others.length ? ["separator" as const] : []),
       ...others.map((space) => ({ label: `Move to ${space.name}`, action: () => desktops.transferPanel(id, panel.id, space.id, true) })),
