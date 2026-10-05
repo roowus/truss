@@ -155,7 +155,12 @@ never asked for? When you judge it done:
    — the label says "done", the loop says "not done".
    a. Retitle: `#<pr> [ready] — <slug>` via the title route.
    b. Apply the review label: `gh pr edit <pr> --add-label ready-for-review`.
-   b. Post the handoff comment:
+   c. Say it in this session too — the developer may be watching the chat,
+      not the PR. Your final message must carry both links, every time:
+      the GitHub PR (`https://github.com/roowus/truss/pull/<N>`) and the
+      live preview (`https://pr-<N>.truss.rewis`), plus one line on what to
+      try there. Both URLs verbatim, never just one.
+   d. Post the handoff comment:
       `gh pr comment <pr> --body "..."` covering, in plain language:
       - **What this does** — one or two sentences.
       - **What the audits found and what I fixed** — the fix list with the
@@ -163,7 +168,8 @@ never asked for? When you judge it done:
       - **What to look at** — the specific flows/files worth your eyes.
       - **How to test** — exact steps at the preview:
         `https://pr-<N>.truss.rewis` (fill in N; verify it is actually up
-        before posting).
+        before posting). (The comment lives on the PR, so the PR URL is
+        implicit — but the in-session message above carries both.)
       - **The working session**: `https://agent.rewis/#s=<your
         $DSH_SESSION_ID>` — click through if you want to talk to it or see
         the reasoning.
