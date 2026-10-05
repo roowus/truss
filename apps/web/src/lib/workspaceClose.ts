@@ -1,10 +1,17 @@
 /**
- * Closing a whole workspace, Chrome-style (issue #115). The pure decision
- * core; DesktopStrip.tsx renders the hover X, App.tsx binds the chords, and
- * desktops.ts runs the teardown/restore. Chrome's model, adapted: a window's
- * X closes everything in one gesture, Cmd+Shift+W closes the window,
- * Cmd+Shift+T reopens what you just closed — except Chrome quits on the last
- * window and truss always keeps at least one workspace.
+ * Closing things, Chrome-style (issues #115 and #124). The pure decision
+ * core; DesktopStrip.tsx renders the workspace hover X, Workspace.tsx the
+ * per-tab X and group-corner X, App.tsx binds the chords, and desktops.ts
+ * runs the teardown/restore. Chrome's model, adapted: a window's X closes
+ * everything in one gesture, Cmd+Shift+W closes the window, Cmd+Shift+T
+ * reopens what you just closed — except Chrome quits on the last window and
+ * truss always keeps at least one workspace.
+ *
+ * The undo stack is ONE mixed LIFO for everything closable (Chrome parity:
+ * the chord restores whatever went last, tab or window): ClosedSnapshot for
+ * whole workspaces, ClosedPanels for a tab or a whole tab group closed in
+ * one gesture. Panels are captured as plain descriptors — the same shape
+ * transferPanel re-adds — so a restore needs no live panel objects.
  */
 
 export interface CloseableSpace {
@@ -14,9 +21,77 @@ export interface CloseableSpace {
 }
 
 export interface ClosedSnapshot {
+  type: "workspace";
   name: string;
   layout: unknown;
   at: number;
+}
+
+/** Everything a restore needs to re-add a closed tab; mirrors transferPanel's addPanel input. */
+export interface PanelDescriptor {
+  id: string;
+  component: string;
+  tabComponent: string;
+  title: string;
+  params?: Record<string, unknown>;
+}
+
+/** A tab close, or a whole tab group closed in one gesture (restored as one). */
+export interface ClosedPanels {
+  type: "panels";
+  spaceId: string;
+  panels: PanelDescriptor[];
+  at: number;
+}
+
+/** The mixed undo stack's entry: a closed workspace or closed tab(s). */
+export type ClosedEntry = ClosedSnapshot | ClosedPanels;
+
+/** The slice of a dockview panel the descriptor capture reads (structural, so tests stay DOM-free). */
+export interface PanelLike {
+  id: string;
+  title?: string;
+  params?: Record<string, unknown>;
+  toJSON(): { contentComponent?: string; tabComponent?: string; params?: Record<string, unknown>; title?: string };
+}
+
+/** Capture a panel for the undo stack — the same fallbacks transferPanel uses when re-adding. */
+export function panelDescriptor(panel: PanelLike): PanelDescriptor {
+  const data = panel.toJSON();
+  return {
+    id: panel.id,
+    component: data.contentComponent ?? panel.id.split(":")[0],
+    tabComponent: data.tabComponent ?? "truss",
+    title: panel.title ?? data.title ?? "",
+    params: panel.params ?? data.params,
+  };
+}
+
+/** The welcome tab closes itself when the first chat opens — machinery, never a user gesture. */
+export function isUndoablePanel(id: string): boolean {
+  return id !== "welcome";
+}
+
+/** The palette/chord label for the entry reopenClosed() would restore. */
+export function describeClosed(entry: ClosedEntry): string {
+  if (entry.type === "workspace") return `Reopen closed workspace: ${entry.name}`;
+  if (entry.panels.length === 1) return `Reopen closed tab: ${entry.panels[0].title || entry.panels[0].id}`;
+  return `Reopen ${entry.panels.length} closed tabs`;
+}
+
+/**
+ * Where a tab restore lands: the workspace it closed from when that one is
+ * still live and visible (an archived workspace stays hidden — a restore
+ * there would be invisible), else the active workspace.
+ */
+export function restoreSpaceId(entry: ClosedPanels, spaces: { id: string; archived?: boolean }[], activeId: string): string {
+  const home = spaces.find((s) => s.id === entry.spaceId);
+  return home && !home.archived ? home.id : activeId;
+}
+
+/** Drop descriptors whose panel already exists in the target (re-opened by hand since the close). */
+export function freshPanels(panels: PanelDescriptor[], exists: (id: string) => boolean): PanelDescriptor[] {
+  return panels.filter((p) => !exists(p.id));
 }
 
 export interface ChordEvent {

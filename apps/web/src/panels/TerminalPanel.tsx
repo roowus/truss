@@ -139,6 +139,8 @@ export function TerminalPanel({ params, api, containerApi }: IDockviewPanelProps
               onClick={async () => {
                 await desktops.killTerminal(params.terminalId);
                 await openFreeShell(cwd);
+                /* the swap's leftover, not a user close — keep it off the undo stack */
+                desktops.suppressPanelClose(undefined, api.id);
                 getDockApi()?.getPanel(api.id)?.api.close();
               }}
             >

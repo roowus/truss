@@ -286,15 +286,14 @@ function GroupActions({ props, spaceId }: { props: IDockviewHeaderActionsProps; 
         </svg>
       </button>
       {/* a batch tab close, at the group's corner: closes every tab in the
-          group in one gesture, each tab behaving exactly as if its own X
-          was clicked (no undo, matching the per-tab X; orphaned shells stop
-          via onDidRemovePanel -> cleanupTerminalLater in desktops.register).
-          Panel-level undo is a separate feature — see the PR discussion. */}
+          group in one gesture, remembered as ONE undo entry so Cmd/Ctrl+Shift+T
+          restores the group whole (issue #124; orphaned shells stop via
+          onDidRemovePanel -> cleanupTerminalLater in desktops.register) */}
       <button
         className="w-6 h-6 grid place-items-center rounded text-[var(--t-dim)] hover:text-[var(--t-red)] hover:bg-white/5"
-        title="Close this whole tab group"
+        title="Close this whole tab group (Ctrl/⌘ Shift+T reopens)"
         aria-label="Close this whole tab group"
-        onClick={() => { for (const p of [...props.group.panels]) p.api.close(); }}
+        onClick={() => desktops.closeGroup(spaceId, [...props.group.panels])}
       >
         <Icon name="x" size={12} />
       </button>
