@@ -5,13 +5,13 @@ import type { ProtoEvent } from "../src/lib/proto";
 // store.ts touches `window` at module scope (`(window as any).__truss = store`).
 // That is the ONLY browser global referenced at import time (the Store
 // constructor itself only builds plain data; requestAnimationFrame/document are
-// used inside methods these tests never call), so this one shim is sufficient.
+// used inside methods, not at import), so this one shim is sufficient.
 // It must be installed BEFORE the module is imported — hence a dynamic import
 // (static imports are hoisted and would evaluate store.ts before the shim).
 (globalThis as any).window ??= {};
-/* session.updated goes through Store.onFrame (not the pure reduce), which
-   schedules notifications via requestAnimationFrame — shim it for those two
-   Store-level tests; everything else still uses the pure reduce path */
+/* Store-level tests drive onFrame (session.updated) and init (the boot-probe
+   pin), which schedule notifications via requestAnimationFrame — shim it for
+   them; everything else still uses the pure reduce path */
 (globalThis as any).requestAnimationFrame ??= (cb: (t: number) => void) => setTimeout(() => cb(Date.now()), 0);
 /* refreshSessionsSoon (reached by the restore path) schedules via
    window.setTimeout */
@@ -465,11 +465,16 @@ test("init fires the boot-time catalog probe once the harness list lands", async
     feed: async () => ({ items: [] }),
     hosts: async () => ({ hosts: [] }),
   };
+  /* init writes ~10 state slices (agents, sessions/order, terminals, todos,
+     feed, hosts, loaded flags…) — snapshot the whole state and restore it,
+     so a test appended after this one inherits nothing (audit: the sibling
+     tests reset every slice they touch; this one must too) */
+  const before = { ...store.state };
   try {
     await s.init(be);
     assert.equal(probes, 1, "init asks once after the boot fetch");
   } finally {
     delete (s as Record<string, unknown>).probeEmptyCatalogs;
-    store.set({ backend: null } as never);
+    store.set(before);
   }
 });
