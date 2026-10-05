@@ -67,6 +67,12 @@ export interface ChromeTabView {
  * so reading it while also writing tab widths into it is a feedback loop
  * that ratchets the strip narrower on every click.
  */
+export function chromeTabsAvailableWidth(headerWidth: number, trayWidths: number[]): number {
+  let w = Number.isFinite(headerWidth) ? headerWidth : 0;
+  for (const t of trayWidths) w -= Number.isFinite(t) ? t : 0;
+  return Math.max(0, w);
+}
+
 /**
  * The breathing room a titled tab reserves at its trailing edge (issue
  * #125). The X is hover-revealed or absent on most tabs (the #95 matrix
@@ -82,12 +88,6 @@ export interface ChromeTabView {
 export function tabTrailingReserve(view: ChromeTabView, hasIndicator: boolean): number {
   if (!view.showTitle || !hasIndicator) return 0;
   return view.showClose === "always" ? 0 : CHROME_TAB_CLOSE_SLOT;
-}
-
-export function chromeTabsAvailableWidth(headerWidth: number, trayWidths: number[]): number {
-  let w = Number.isFinite(headerWidth) ? headerWidth : 0;
-  for (const t of trayWidths) w -= Number.isFinite(t) ? t : 0;
-  return Math.max(0, w);
 }
 
 export function chromeTabLayout(input: { stripWidth: number; tabs: ChromeTabInput[] }): {
