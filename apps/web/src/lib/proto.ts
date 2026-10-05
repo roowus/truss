@@ -64,6 +64,9 @@ export interface SessionMeta {
   created_at: string | number;
   updated_at: string | number;
   live: boolean;
+  /** the harness's own session id (pi sessionId, dsh uuid) — the resume
+     target for the harness's own CLI (issue #131) */
+  harness_ref?: string | null;
 }
 
 export interface CreateSessionBody {

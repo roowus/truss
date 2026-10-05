@@ -9,6 +9,7 @@ import { planHeaderFit, HEADER_CLUSTER, HEADER_GAP } from "@/lib/headerFit";
 import { CHAT_WIDTH_DEFAULT, chatHandleGeometry, commitChatWidth, dragDisplayWidth, readChatWidthPref, resolveChatWidth, writeChatWidthPref } from "@/lib/chatWidth";
 import { filesFromTransfer, isFileDrag } from "@/lib/attach";
 import { formatSessionRef } from "@/lib/sessionRef";
+import { resumeCommand } from "@/lib/resumeCommand";
 import { RAIL_INSET, activeRailIndex, railIndexAtOffset, railMarkTop, railNaturalHeight, turnRailItems } from "@/lib/turnRail";
 import { createBrowserVoiceInput, appendTranscript } from "@/lib/voice";
 import type { VoiceController, VoiceState } from "@/lib/voiceInput";
@@ -104,6 +105,12 @@ function ChatHeader({ id }: { id: string }) {
      disagrees with its own tooltip) */
   const hostId = meta.harness.includes("@") ? meta.harness.split("@")[1] : undefined;
   const device = deviceLabel(meta.harness, hosts, aliases);
+
+  /* the harness-native resume hint (issue #131): the visible id is truss's;
+     the harness's own CLI wants its harness_ref — surfaced here, copyable,
+     with the host named when the session runs remotely */
+  const resumeCmd = resumeCommand(meta.harness, meta.harness_ref);
+  const resumeBase = baseHarness(meta.harness);
 
   /* model picker: the catalog lists base harnesses; remote sessions share
      the base harness's catalog */
@@ -220,9 +227,29 @@ function ChatHeader({ id }: { id: string }) {
               <Icon name="clip" size={13} className="text-[var(--t-mute)]" />
               Copy reference
             </button>
+            {resumeCmd && (
+              <button
+                onClick={() => {
+                  void navigator.clipboard.writeText(resumeCmd);
+                  store.toast("ok", "Resume command copied", resumeCmd);
+                  setMenu(false);
+                }}
+                className="w-full flex items-center gap-2.5 px-3 h-8 text-left text-[12.5px] text-[var(--t-fg2)] hover:bg-white/[0.05]"
+                title={`Copy the command that resumes this session in ${resumeBase}'s own CLI — run it on ${hostId ? device : "this server"}`}
+              >
+                <Icon name="term" size={13} className="text-[var(--t-mute)]" />
+                Resume in {resumeBase}'s CLI{hostId ? ` on ${device}` : ""}
+              </button>
+            )}
             <div className="px-3 py-1.5 text-[11px] text-[var(--t-dim)] leading-relaxed break-all">
               <span className="font-mono text-[var(--t-mute)]">{formatSessionRef(meta, hosts)}</span><br />
               {harnessName}{meta.model && ` · ${meta.model}`}<br />{shortPath(meta.cwd)}
+              {resumeCmd && (
+                <>
+                  <br />
+                  <span className="font-mono text-[var(--t-mute)]">{resumeCmd}</span>
+                </>
+              )}
             </div>
           </div>
         </>
