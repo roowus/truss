@@ -50,7 +50,7 @@ import { startDoubletakePoll } from "./integrations/doubletake.js";
 import { composePractices, getGlobalPractices, saveGlobalPractices } from "./practices.js";
 import { createHost, deleteHost, getHost, isHostTombstoned, listHosts, renameHost, rotateHostToken, setHostPinned, setHostRevoked, verifyAgentToken } from "./hosts.js";
 import { assertDialableServerUrl, netInfo, taildropToPeer, tailscalePeers, tailscaleServe, tailscaleSshOk, tailscaleSshRun } from "./net.js";
-import { deliveryOptions, installerDropName, interactiveInstallScript } from "./installer.js";
+import { deliveryOptions, installerDropName, interactiveInstallScript, pairingPage } from "./installer.js";
 import { mintPairing, redeemPairing, redeemRateOk } from "./pairing.js";
 import { agentBundleError, agentBundleHash, assertSafeServerUrl, ensureAgentBundle, standaloneInstallScript, installScript } from "./agentbundle.js";
 import { registerMcpPerms } from "./mcp-perms.js";
@@ -480,6 +480,15 @@ app.post("/i/redeem", async (req, reply) => {
   return { hostId: entry.hostId, token: entry.token, serverUrl: entry.serverUrl };
 });
 
+/* the browser side of the same flow (issue #111 review): open <server>/p on
+   the remote, type the code into the page, click Download — the page turns
+   it into a GET /i/<code> below, so the download itself is the one-shot
+   redeem and the terminal only ever runs `sh ~/Downloads/t.sh`. The page is
+   generic and token-free; a wrong code costs nothing and no burn. */
+app.get("/p", async (_req, reply) => {
+  return reply.header("Content-Type", "text/html; charset=utf-8").send(pairingPage());
+});
+
 /* the pairing-code endpoint: redeem once, get the standalone script */
 app.get("/i/:code", async (req, reply) => {
   /* rate-limited per client (issue #1): the code keyspace is small by design,
@@ -491,7 +500,13 @@ app.get("/i/:code", async (req, reply) => {
   const entry = redeemPairing(code);
   if (!entry) return reply.code(410).type("text/plain").send("that install code is used up or expired — mint a fresh one from the Truss add-host wizard\n");
   try {
-    return reply.header("Content-Type", "text/x-shellscript; charset=utf-8").send(standaloneInstallScript(entry.hostId, entry.serverUrl, entry.token));
+    /* attachment + t.sh: a browser that lands here (from /p, or a directly
+       typed URL) downloads the installer under the name the pairing page
+       tells the user to run; curl ignores the header entirely */
+    return reply
+      .header("Content-Type", "text/x-shellscript; charset=utf-8")
+      .header("Content-Disposition", 'attachment; filename="t.sh"')
+      .send(standaloneInstallScript(entry.hostId, entry.serverUrl, entry.token));
   } catch (err) {
     return reply.code(400).type("text/plain").send(`error: ${err instanceof Error ? err.message : err}\n`);
   }

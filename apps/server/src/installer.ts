@@ -151,3 +151,99 @@ curl -fsSL "$SURL/agent/install.sh?host=$HOST_ID" -o "$SCRIPT"
 sh "$SCRIPT" "$TOKEN"
 `;
 }
+
+/**
+ * The browser pairing page (issue #111 review round), served at GET /p.
+ * Rationale: a URL alone can never install anything (a browser cannot spawn
+ * a daemon), so the floor is split across the two surfaces the remote has —
+ * the BROWSER does the fetching (short URL, autocomplete, no pipe-to-sh
+ * typos) and the terminal only runs a short local path:
+ *
+ *   open <server>/p → type the 4-char code into the page → Download →
+ *   sh ~/Downloads/t.sh
+ *
+ * The page is generic and token-free, exactly like the /i script: the code
+ * the user types is turned into a same-origin GET /i/<code>, the EXISTING
+ * burn-once route, so the download itself redeems the code and carries the
+ * credentials. No new credential surface is created here. Wrong codes do
+ * not burn anything (redeemPairing only burns codes that exist), so the
+ * page can retry inline; the 429 the route answers under hammering is
+ * surfaced as its own message.
+ */
+export function pairingPage(): string {
+  return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pair this device with Truss</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #14161a; color: #e8e6e3; font: 15px/1.5 -apple-system, system-ui, sans-serif; }
+  main { width: 340px; max-width: calc(100vw - 48px); }
+  h1 { font-size: 18px; margin: 0 0 6px; }
+  p { color: #a09c97; margin: 0 0 16px; }
+  form { display: flex; gap: 8px; }
+  input { flex: 1; font: 22px/1 ui-monospace, monospace; letter-spacing: 0.35em; text-transform: lowercase; padding: 10px 12px; border-radius: 8px; border: 1px solid #3a3d44; background: #1c1f24; color: #f5d06f; }
+  button { font: 600 14px/1 inherit; padding: 0 16px; border-radius: 8px; border: 0; background: #f5a623; color: #1a1a1a; cursor: pointer; }
+  button:disabled { opacity: 0.5; cursor: default; }
+  #err { color: #e57373; margin: 12px 0 0; }
+  #next { margin-top: 20px; padding: 12px; border: 1px solid #3a3d44; border-radius: 8px; background: #1c1f24; }
+  #next p { margin: 0 0 8px; }
+  code { font: 13px ui-monospace, monospace; color: #8fd3c7; user-select: all; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Pair this device with Truss</h1>
+  <p>Type the 4-character code from the add-host wizard, then download the installer. The code is single-use: downloading uses it up.</p>
+  <form id="f">
+    <input id="code" autocomplete="off" autocapitalize="none" spellcheck="false" maxlength="8" placeholder="xxxx" autofocus aria-label="pairing code">
+    <button type="submit" id="dl">Download</button>
+  </form>
+  <p id="err" hidden></p>
+  <div id="next" hidden>
+    <p>Installer saved to Downloads. In a terminal on this machine, run:</p>
+    <code>sh ~/Downloads/t.sh</code>
+  </div>
+</main>
+<script>
+var f = document.getElementById("f"), c = document.getElementById("code"),
+    dl = document.getElementById("dl"), err = document.getElementById("err"),
+    next = document.getElementById("next");
+f.addEventListener("submit", function (e) {
+  e.preventDefault();
+  var code = c.value.trim().toLowerCase();
+  if (!code) return;
+  err.hidden = true;
+  dl.disabled = true;
+  fetch("/i/" + encodeURIComponent(code)).then(function (r) {
+    if (!r.ok) {
+      err.textContent = r.status === 429
+        ? "Too many tries. Wait a minute, then retry."
+        : "That code is used up, expired, or mis-typed. Mint a fresh one in the wizard.";
+      err.hidden = false;
+      dl.disabled = false;
+      return null;
+    }
+    return r.blob();
+  }).then(function (blob) {
+    if (!blob) return;
+    var a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "t.sh";
+    a.click();
+    URL.revokeObjectURL(a.href);
+    dl.disabled = false;
+    next.hidden = false;
+  }).catch(function () {
+    err.textContent = "Could not reach the server. Check the address, then retry.";
+    err.hidden = false;
+    dl.disabled = false;
+  });
+});
+</script>
+</body>
+</html>
+`;
+}

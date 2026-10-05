@@ -115,3 +115,18 @@ test("GET /i with a metacharacter Host header refuses to embed it (400)", async 
   assert.equal(status, 400, "a hostile Host must never reach the script");
   assert.ok(!body.includes("curl evil"), "nothing of the injection survives");
 });
+
+/* review round (issue #111): the browser half of the floor — /p is the page
+   the remote OPENS, its code box downloads through the existing burn-once
+   /i/<code> route, and the terminal only runs `sh ~/Downloads/t.sh`. */
+test("GET /p serves the browser pairing page: code box, /i/<code> download, token-free", async () => {
+  const res = await fetch(`${srv.base}/p`);
+  assert.equal(res.status, 200, "the page exists");
+  assert.match(res.headers.get("content-type") ?? "", /text\/html/, "a page, not a script");
+  const body = await res.text();
+  assert.ok(body.includes("<!doctype html"), "actually html");
+  assert.match(body, /aria-label="pairing code"/, "the code box is there");
+  assert.match(body, /\/i\//, "the download goes through the burn-once route");
+  assert.match(body, /sh ~\/Downloads\/t\.sh/, "the terminal step is the short local path");
+  assert.ok(!/truss_agent_[0-9a-f]{10,}/.test(body), "the page is token-free like the /i script");
+});

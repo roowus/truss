@@ -6,6 +6,7 @@ import { dropInstructionLabel } from "@/lib/installInstruction";
 import { buildInstallCommand, agentRunCommand } from "@/lib/installCommand";
 import { reachableAddresses, reachableTailscaleReturn } from "@/lib/reachability";
 import type { DeliveryOption, NetInfo, TailscalePeer } from "@/lib/proto";
+import QRCode from "qrcode";
 import { Btn, Icon, Select, Spinner } from "./ui";
 import { cn } from "@/utils/cn";
 
@@ -31,6 +32,9 @@ export function AddHostWizard({ onClose }: { onClose: () => void }) {
   /* installer delivery (issue #1): taildrop to the picked device, or mint a
      short typeable pairing command */
   const [pairCmd, setPairCmd] = useState<{ command: string; interactiveCommand: string; code: string; expiresAt: number } | null>(null);
+  /* the pairing page's QR (issue #111 review): encodes <serverAddr>/p so a
+     phone-class remote (or a phone bridging to one) skips typing the URL */
+  const [pairQr, setPairQr] = useState<string | null>(null);
   const [pairBusy, setPairBusy] = useState(false);
   const [dropState, setDropState] = useState<"idle" | "sending" | "sent" | "failed">("idle");
   const [dropErr, setDropErr] = useState<string | null>(null);
@@ -341,7 +345,10 @@ export function AddHostWizard({ onClose }: { onClose: () => void }) {
                   if (!created) return;
                   setPairBusy(true);
                   be?.pairHost(created.id, created.token, serverAddr).then(
-                    (r) => setPairCmd({ command: r.command, interactiveCommand: r.interactiveCommand, code: r.code, expiresAt: r.expiresAt }),
+                    (r) => {
+                      setPairCmd({ command: r.command, interactiveCommand: r.interactiveCommand, code: r.code, expiresAt: r.expiresAt });
+                      QRCode.toDataURL(`${serverAddr}/p`, { width: 144, margin: 1 }).then(setPairQr, () => setPairQr(null));
+                    },
                     (e) => store.toast("error", "Couldn't mint a pairing code", e?.message ?? String(e)),
                   ).finally(() => setPairBusy(false));
                 }}
@@ -368,11 +375,19 @@ export function AddHostWizard({ onClose }: { onClose: () => void }) {
             )}
             {pairCmd && (
               <div className="rounded-lg border border-[var(--t-line)] bg-[var(--t-bg0)] px-3 py-2 space-y-2">
-                {/* the typing floor (issue #111): a short command, then the
-                    code at the prompt — leads over the inline variant */}
+                {/* the browser path leads (issue #111 review): the remote
+                    opens /p, types the code into the page, downloads t.sh —
+                    the terminal only runs `sh ~/Downloads/t.sh` */}
+                <div className="flex items-start gap-3">
+                  <div className="min-w-0 flex-1">
+                    <div className="font-mono text-[12px] text-[var(--t-fg)] break-all select-all">{serverAddr}/p</div>
+                    <div className="mt-0.5 text-[10px] text-[var(--t-dim)]">open this in a browser on the remote, enter <span className="font-mono text-[var(--t-amber)]">{pairCmd.code}</span> there, then run <span className="font-mono text-[var(--t-fg2)]">sh ~/Downloads/t.sh</span> · single-use · expires in {until(pairCmd.expiresAt)}</div>
+                  </div>
+                  {pairQr && <img src={pairQr} width={72} height={72} className="shrink-0 rounded border border-[var(--t-line2)]" alt={`QR code for ${serverAddr}/p`} title={`${serverAddr}/p`} />}
+                </div>
                 <div>
-                  <div className="font-mono text-[12px] text-[var(--t-fg)] break-all select-all">{pairCmd.interactiveCommand}</div>
-                  <div className="mt-0.5 text-[10px] text-[var(--t-dim)]">type it on the remote; when it asks for the pairing code, enter <span className="font-mono text-[var(--t-amber)]">{pairCmd.code}</span> · single-use · expires in {until(pairCmd.expiresAt)}</div>
+                  <div className="font-mono text-[11px] text-[var(--t-fg2)] break-all select-all">{pairCmd.interactiveCommand}</div>
+                  <div className="mt-0.5 text-[10px] text-[var(--t-dim)]">no browser on the remote: type this; when it asks for the pairing code, enter <span className="font-mono text-[var(--t-amber)]">{pairCmd.code}</span></div>
                 </div>
                 <div>
                   <div className="font-mono text-[11px] text-[var(--t-fg2)] break-all select-all">{pairCmd.command}</div>

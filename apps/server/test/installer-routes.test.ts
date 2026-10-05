@@ -83,6 +83,10 @@ test("redeem round trip: GET /i/:code serves the standalone installer exactly on
   const first = await fetch(`${srv.base}/i/${pairCode}`);
   assert.equal(first.status, 200);
   assert.match(first.headers.get("content-type") ?? "", /shellscript/);
+  /* issue #111 review: a browser landing here (from the /p pairing page)
+     must DOWNLOAD the installer under the name the page tells the user to
+     run — curl ignores the header, so the pipe-to-sh flow is unaffected */
+  assert.match(first.headers.get("content-disposition") ?? "", /attachment; filename="t\.sh"/, "browsers download it as t.sh");
   const body = await first.text();
   assert.ok(body.startsWith("#!/bin/sh"), "a runnable installer");
   assert.ok(body.includes(`TOKEN="${token}"`), "the standalone variant embeds the token — zero-arg install");
