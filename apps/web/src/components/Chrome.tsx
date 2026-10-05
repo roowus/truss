@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { store, useApp, useNow } from "@/lib/store";
 import { desktops, useDesktops } from "@/lib/desktops";
 import { fmtCost, harnessStyle, shortPath } from "@/lib/format";
+import { harnessDisplay, hostAliases } from "@/lib/device";
 import { openDailyDriver, openFreeShell, openPanel } from "@/lib/workspace";
 import { HarnessMark, Icon, StateDot } from "./ui";
 import { cn } from "@/utils/cn";
@@ -126,6 +127,7 @@ export function CommandPalette({ onClose, onNew }: { onClose: () => void; onNew:
   const order = useApp((s) => s.order);
   const sessions = useApp((s) => s.sessions);
   const agents = useApp((s) => s.agents);
+  const hosts = useApp((s) => s.hosts);
   const spaces = useDesktops((s) => s.spaces);
   const hostPrefs = useDesktops((s) => s.hosts);
   const [q, setQ] = useState("");
@@ -148,13 +150,13 @@ export function CommandPalette({ onClose, onNew }: { onClose: () => void; onNew:
       const s = sessions[id];
       if (!s) return [];
       return [
-        { id: "c" + id, label: s.title, hint: `${s.harness} · ${shortPath(s.cwd)}`, harness: s.harness, run: () => openPanel("chat", { sessionId: id }) },
+        { id: "c" + id, label: s.title, hint: `${harnessDisplay(s.harness, hosts, hostAliases(hostPrefs))} · ${shortPath(s.cwd)}`, harness: s.harness, run: () => openPanel("chat", { sessionId: id }) },
         { id: "d" + id, label: `${s.title} — chat + trajectory + context`, hint: "daily driver", icon: "layout", run: () => openDailyDriver(id) },
         { id: "t" + id, label: `${s.title} — trajectory`, icon: "wave", run: () => openPanel("trajectory", { sessionId: id }) },
       ];
     });
     return [...base, ...ws, ...hs, ...ss];
-  }, [order, sessions, spaces, agents, hostPrefs, onNew]);
+  }, [order, sessions, spaces, agents, hosts, hostPrefs, onNew]);
   const list = cmds.filter((c) => !q || (c.label + " " + (c.hint ?? "")).toLowerCase().includes(q.toLowerCase())).slice(0, 40);
   useEffect(() => setI(0), [q]);
 

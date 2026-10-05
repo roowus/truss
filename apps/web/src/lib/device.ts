@@ -8,13 +8,14 @@ export interface DeviceHost {
 
 /**
  * Resolve a session's harness id to a human device name: bare harness ids
- * run on this server; `harness@hostId` runs on that remote host (labeled
- * from the registry, falling back to the raw id when the host is unknown).
+ * run on this server; `harness@hostId` runs on that remote host (the user's
+ * alias wins, then the registry label, falling back to the raw id when the
+ * host is unknown).
  */
-export function deviceLabel(harness: string, hosts: DeviceHost[]): string {
+export function deviceLabel(harness: string, hosts: DeviceHost[], aliases?: Record<string, string>): string {
   const hostId = hostOf(harness);
   if (!hostId) return "this server";
-  return hosts.find((h) => h.id === hostId)?.label ?? hostId;
+  return hostDisplay(hostId, hosts, aliases);
 }
 
 /**

@@ -67,14 +67,18 @@ const hashToken = (t: string) => createHash("sha256").update(t).digest("hex");
  * "rewiss-macbook-pro") — every surface that prints the id raw still reads
  * right. Collisions suffix -2, -3…; a label with no safe characters falls
  * back to the old hex shape. Immutable after mint: env files, tokens, and
- * pairing on the device all key off it.
+ * pairing on the device all key off it. Capped at 48 chars — the id lands
+ * in the install command, the on-device env filename, and the systemd unit
+ * name, and a pasted paragraph of a label would live there forever.
  */
 function mintHostId(label: string): string {
   const slug = label
     .trim()
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 48)
+    .replace(/-+$/, "");
   if (!slug) {
     let id = randomBytes(4).toString("hex");
     while (getHost(id)) id = randomBytes(4).toString("hex");

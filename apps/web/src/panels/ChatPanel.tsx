@@ -82,7 +82,8 @@ function ChatHeader({ id }: { id: string }) {
   const abnormal = meta.state === "spawning" || meta.state === "error" || meta.state === "closed";
   const [menu, setMenu] = useState(false);
   const hostPrefs = useDesktops((s) => s.hosts);
-  const harnessName = harnessDisplay(meta.harness, hosts, hostAliases(hostPrefs));
+  const aliases = hostAliases(hostPrefs);
+  const harnessName = harnessDisplay(meta.harness, hosts, aliases);
   const tooltip = [harnessName, meta.model, shortPath(meta.cwd), meta.project && `project: ${meta.project}`, detail]
     .filter(Boolean)
     .join("\n");
@@ -98,9 +99,11 @@ function ChatHeader({ id }: { id: string }) {
   const [plan, setPlan] = useState<{ visible: string[]; overflow: string[] }>({ visible: ["select", "stop", "trajectory", "more"], overflow: [] });
 
   /* which device this session runs on: bare harness id = this server,
-     harness@hostId = that remote host (labeled from the registry) */
+     harness@hostId = that remote host (the user's alias wins, then the
+     registry label — same rule as every other surface, so the chip never
+     disagrees with its own tooltip) */
   const hostId = meta.harness.includes("@") ? meta.harness.split("@")[1] : undefined;
-  const device = deviceLabel(meta.harness, hosts);
+  const device = deviceLabel(meta.harness, hosts, aliases);
 
   /* model picker: the catalog lists base harnesses; remote sessions share
      the base harness's catalog */
@@ -511,7 +514,8 @@ function Composer({ id, active }: { id: string; active: boolean }) {
   const caps = useApp((s) => capsOf(s, meta.harness));
   const hosts = useApp((s) => s.hosts);
   const hostPrefs = useDesktops((s) => s.hosts);
-  const harnessName = harnessDisplay(meta.harness, hosts, hostAliases(hostPrefs));
+  const aliases = hostAliases(hostPrefs);
+  const harnessName = harnessDisplay(meta.harness, hosts, aliases);
   const pending = useApp((s) => s.views[id]?.pending);
   const since = useApp((s) => s.stateSince[id]);
   const [text, setText] = useState(drafts.get(id) ?? "");
