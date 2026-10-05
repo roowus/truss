@@ -1,5 +1,3 @@
-import { store } from "../db.js";
-
 /**
  * Persistence for the lazily discovered ACP model catalogs (issue #101).
  *
@@ -12,7 +10,30 @@ import { store } from "../db.js";
  *
  * Persistence must never break a spawn or a picker fetch: every failure
  * (db down, junk JSON, schema drift) reads as an empty catalog.
+ *
+ * The store is SOFT and dynamically imported: db.js opens sqlite at import,
+ * which is fine on the server but impossible inside the bundled node-agent
+ * (better-sqlite3's native binding cannot bundle — the agent crashed at
+ * boot on it, caught in PR #113 preview testing). The agent needs no
+ * persistence — every discovery live-reports to the server — so a missing
+ * store simply reads as an empty catalog. The dynamic import also keeps
+ * esbuild from initializing db.js on the agent's boot path at all.
  */
+
+interface KvStore {
+  getKv(key: string): string | undefined;
+  setKv(key: string, value: string): void;
+}
+
+let kvStore: KvStore | null = null;
+const storeReady: Promise<void> = import("../db.js").then(
+  (m) => {
+    kvStore = m.store;
+  },
+  () => {
+    /* no database in this process (the bundled node-agent) — memory-only */
+  },
+);
 
 export interface CatalogModel {
   provider: string;
@@ -27,7 +48,7 @@ function isCatalogModel(m: unknown): m is CatalogModel {
 
 export function readCatalogCache(key: string): CatalogModel[] {
   try {
-    const raw = store.getKv(key);
+    const raw = kvStore?.getKv(key);
     if (!raw) return [];
     const parsed = JSON.parse(raw) as unknown;
     if (!Array.isArray(parsed)) return [];
@@ -39,7 +60,7 @@ export function readCatalogCache(key: string): CatalogModel[] {
 
 export function writeCatalogCache(key: string, models: CatalogModel[]) {
   try {
-    store.setKv(key, JSON.stringify(models));
+    kvStore?.setKv(key, JSON.stringify(models));
   } catch {
     /* a picker that shows this boot's discovery is still correct — the
        write only matters for the NEXT boot */
@@ -72,6 +93,15 @@ export interface LazyCatalog {
  */
 export function lazyCatalog(key: string, harvest: () => Promise<CatalogModel[]>): LazyCatalog {
   let models = readCatalogCache(key);
+  /* the store lands a microtask after module load (the import is dynamic,
+     see the header). A catalog created in that window hydrates when it
+     lands — picker fetches are HTTP requests, always later than a
+     microtask, so a server restart still never shows an empty window. */
+  if (!kvStore) {
+    void storeReady.then(() => {
+      if (!models.length) models = readCatalogCache(key);
+    });
+  }
   let inflight: Promise<boolean> | null = null;
   let lastProbeAt = 0;
   return {
