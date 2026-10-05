@@ -49,17 +49,24 @@ When you are handed a PR you did not make (the developer commented
    `~/.local/state/truss-sessions.json`; if it didn't, append your own entry:
    `{"pr": <n>, "session": "<id>", "since": "<iso>", "state": "working"}`.
 1. Read the issue fully, including its suggested tests.
-2. Branch: `git fetch origin main && git checkout -b fix/<n>-<slug>` (or
-   feat/) from `origin/main` — NEVER from another PR's branch. Cumulative
-   branches are banned (TRUSS.md "Branches"): the PR's diff vs main must be
-   exactly this issue's work so PRs merge in any order.
+2. Branch INSIDE your own worktree — never in the main checkout. The main
+   checkout at `/home/ubuntu/projects/truss` is shared infrastructure (the
+   live server, the crons, other sessions); you may read it, never switch
+   it. Create your branch in your own worktree:
+   `git -C /home/ubuntu/projects/truss fetch origin` then
+   `git -C /home/ubuntu/projects/truss worktree add pr-preview/w/<n> -b fix/<n>-<slug> origin/main`
+   (or feat/). NEVER branch from another PR's branch. Cumulative branches
+   are banned (TRUSS.md "Branches"): the PR's diff vs main must be exactly
+   this issue's work so PRs merge in any order.
 3. Boot your preview early: `sudo -n systemctl start truss-pr@<n>` — NEVER
    a bare `tilt up`. The systemd unit owns the stack so it survives dsh
    restarts (a session-spawned tilt dies with the host and the preview goes
    dark mid-review — learned the hard way). The worktree at
    `pr-preview/w/<n>` is yours; keep it in sync with your branch via
    `git -C pr-preview/w/<n> pull` after commits, or work directly in the
-   worktree — your choice, but commit from the branch either way.
+   worktree — your choice of editor, but all edits, commits, and pushes happen in
+   `pr-preview/w/<n>` — the main checkout stays on `main`, untouched,
+   always.
 4. Implement per TRUSS.md: pnpm never npm; `pnpm -r run lint`,
    `pnpm -r run build`, and `pnpm test` green before you claim done; every
    behavior change ships with its test in the same commit; a regression gets
