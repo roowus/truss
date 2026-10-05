@@ -459,7 +459,13 @@ app.get("/i", async (req, reply) => {
   const proto = req.headers["x-forwarded-proto"] === "https" ? "https" : "http";
   const serverUrl = `${proto}://${req.headers.host ?? `127.0.0.1:${PORT}`}`;
   try {
-    return reply.header("Content-Type", "text/x-shellscript; charset=utf-8").send(interactiveInstallScript(serverUrl));
+    /* attachment + t.sh: a browser landing here (the /p page's Download
+       button) saves the generic script under the name the page says to run;
+       curl ignores the header, the pipe-to-sh contract is untouched */
+    return reply
+      .header("Content-Type", "text/x-shellscript; charset=utf-8")
+      .header("Content-Disposition", 'attachment; filename="t.sh"')
+      .send(interactiveInstallScript(serverUrl));
   } catch (e: any) {
     return reply.code(400).type("text/plain").send(`error: ${e.message ?? e}\n`);
   }
@@ -480,11 +486,11 @@ app.post("/i/redeem", async (req, reply) => {
   return { hostId: entry.hostId, token: entry.token, serverUrl: entry.serverUrl };
 });
 
-/* the browser side of the same flow (issue #111 review): open <server>/p on
-   the remote, type the code into the page, click Download — the page turns
-   it into a GET /i/<code> below, so the download itself is the one-shot
-   redeem and the terminal only ever runs `sh ~/Downloads/t.sh`. The page is
-   generic and token-free; a wrong code costs nothing and no burn. */
+/* the browser side of the same flow (issue #111 review rounds): open
+   <server>/p on the remote, download the generic installer, run it, type
+   the code at its prompt. The page is static and token-free; the download
+   is just GET /i above with an attachment header, so nothing here burns a
+   code and nothing new holds a credential. */
 app.get("/p", async (_req, reply) => {
   return reply.header("Content-Type", "text/html; charset=utf-8").send(pairingPage());
 });

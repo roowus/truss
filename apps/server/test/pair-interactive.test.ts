@@ -116,17 +116,22 @@ test("GET /i with a metacharacter Host header refuses to embed it (400)", async 
   assert.ok(!body.includes("curl evil"), "nothing of the injection survives");
 });
 
-/* review round (issue #111): the browser half of the floor — /p is the page
-   the remote OPENS, its code box downloads through the existing burn-once
-   /i/<code> route, and the terminal only runs `sh ~/Downloads/t.sh`. */
-test("GET /p serves the browser pairing page: code box, /i/<code> download, token-free", async () => {
+/* review rounds (issue #111): the browser half of the floor, download FIRST
+   like every familiar CLI installer — /p is a static page whose Download
+   button is a plain anchor to the generic /i script (no code typed into the
+   browser, nothing burns), and the terminal only runs `sh ~/Downloads/t.sh`
+   and answers the code prompt. */
+test("GET /p serves the browser pairing page: download-first, generic, token-free", async () => {
   const res = await fetch(`${srv.base}/p`);
   assert.equal(res.status, 200, "the page exists");
   assert.match(res.headers.get("content-type") ?? "", /text\/html/, "a page, not a script");
   const body = await res.text();
   assert.ok(body.includes("<!doctype html"), "actually html");
-  assert.match(body, /aria-label="pairing code"/, "the code box is there");
-  assert.match(body, /\/i\//, "the download goes through the burn-once route");
+  assert.match(body, /href="\/i"[^>]*download="t\.sh"/, "the Download button is the generic /i script, saved as t.sh");
+  assert.ok(!body.includes('"/i/"'), "no code is ever turned into a redeem call in the browser");
   assert.match(body, /sh ~\/Downloads\/t\.sh/, "the terminal step is the short local path");
   assert.ok(!/truss_agent_[0-9a-f]{10,}/.test(body), "the page is token-free like the /i script");
+
+  const script = await fetch(`${srv.base}/i`);
+  assert.match(script.headers.get("content-disposition") ?? "", /attachment; filename="t\.sh"/, "browsers download /i as t.sh (curl ignores it)");
 });

@@ -153,22 +153,21 @@ sh "$SCRIPT" "$TOKEN"
 }
 
 /**
- * The browser pairing page (issue #111 review round), served at GET /p.
- * Rationale: a URL alone can never install anything (a browser cannot spawn
- * a daemon), so the floor is split across the two surfaces the remote has —
- * the BROWSER does the fetching (short URL, autocomplete, no pipe-to-sh
- * typos) and the terminal only runs a short local path:
+ * The browser pairing page (issue #111 review rounds), served at GET /p.
+ * A URL alone can never install anything (a browser cannot spawn a daemon),
+ * so the floor is split across the two surfaces the remote has, download
+ * FIRST like every familiar CLI installer:
  *
- *   open <server>/p → type the 4-char code into the page → Download →
- *   sh ~/Downloads/t.sh
+ *   open <server>/p → Download (the generic, token-free /i script, a
+ *   couple of KB) → `sh ~/Downloads/t.sh` → the script asks for the
+ *   4-char code → paired.
  *
- * The page is generic and token-free, exactly like the /i script: the code
- * the user types is turned into a same-origin GET /i/<code>, the EXISTING
- * burn-once route, so the download itself redeems the code and carries the
- * credentials. No new credential surface is created here. Wrong codes do
- * not burn anything (redeemPairing only burns codes that exist), so the
- * page can retry inline; the 429 the route answers under hammering is
- * surfaced as its own message.
+ * The page embeds nothing at all (a fully static string: no interpolation,
+ * no injection surface). The code is never typed into the browser: it is
+ * typed at the installer's own prompt, which redeems it at POST /i/redeem.
+ * Styled to the app's "graphite & signal" tokens (bg0/bg1, line2, amber,
+ * teal) with system font stacks, self-contained so a tailnet-only remote
+ * needs no internet to render it.
  */
 export function pairingPage(): string {
   return `<!doctype html>
@@ -176,74 +175,85 @@ export function pairingPage(): string {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Pair this device with Truss</title>
+<title>Pair this device · Truss</title>
 <style>
   :root { color-scheme: dark; }
-  body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #14161a; color: #e8e6e3; font: 15px/1.5 -apple-system, system-ui, sans-serif; }
-  main { width: 340px; max-width: calc(100vw - 48px); }
-  h1 { font-size: 18px; margin: 0 0 6px; }
-  p { color: #a09c97; margin: 0 0 16px; }
-  form { display: flex; gap: 8px; }
-  input { flex: 1; font: 22px/1 ui-monospace, monospace; letter-spacing: 0.35em; text-transform: lowercase; padding: 10px 12px; border-radius: 8px; border: 1px solid #3a3d44; background: #1c1f24; color: #f5d06f; }
-  button { font: 600 14px/1 inherit; padding: 0 16px; border-radius: 8px; border: 0; background: #f5a623; color: #1a1a1a; cursor: pointer; }
-  button:disabled { opacity: 0.5; cursor: default; }
-  #err { color: #e57373; margin: 12px 0 0; }
-  #next { margin-top: 20px; padding: 12px; border: 1px solid #3a3d44; border-radius: 8px; background: #1c1f24; }
-  #next p { margin: 0 0 8px; }
-  code { font: 13px ui-monospace, monospace; color: #8fd3c7; user-select: all; }
+  * { box-sizing: border-box; }
+  body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #0b0c0e; color: #ece7dd;
+         font: 13px/1.55 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; -webkit-font-smoothing: antialiased; }
+  .card { width: 400px; max-width: calc(100vw - 32px); background: #111316; border: 1px solid #353941; border-radius: 12px;
+          padding: 24px; box-shadow: 0 18px 50px rgba(0,0,0,0.45); }
+  .brand { display: flex; align-items: center; gap: 10px; margin-bottom: 4px; }
+  .brand h1 { font-size: 16px; font-weight: 600; margin: 0; }
+  .sub { color: #9b968c; margin: 0 0 20px; }
+  .step { display: flex; gap: 12px; padding: 12px 0; border-top: 1px solid #23262c; }
+  .n { flex: none; width: 22px; height: 22px; border-radius: 999px; border: 1px solid #f0b35a; color: #f0b35a;
+       display: grid; place-items: center; font-size: 11px; font-weight: 600; margin-top: 1px; }
+  .step p { margin: 0 0 10px; color: #d0cabe; }
+  .hint { color: #66635d; font-size: 11.5px; margin: 8px 0 0; }
+  .dl { display: inline-flex; align-items: center; gap: 8px; background: #f0b35a; color: #1a1a1a; font-weight: 600;
+        padding: 10px 18px; border-radius: 9px; text-decoration: none; }
+  .dl:hover { filter: brightness(1.08); }
+  .cmd { display: flex; align-items: center; gap: 8px; background: #0b0c0e; border: 1px solid #23262c; border-radius: 8px; padding: 9px 12px; }
+  .cmd code { flex: 1; font: 13px "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace; color: #5fc9c0; user-select: all; }
+  .copy { flex: none; font: inherit; font-size: 11.5px; color: #9b968c; background: none; border: 1px solid #353941;
+          border-radius: 6px; padding: 4px 10px; cursor: pointer; }
+  .copy:hover { color: #ece7dd; border-color: #66635d; }
+  .foot { margin-top: 18px; padding-top: 14px; border-top: 1px solid #23262c; color: #66635d; font-size: 11.5px; }
 </style>
 </head>
 <body>
-<main>
-  <h1>Pair this device with Truss</h1>
-  <p>Type the 4-character code from the add-host wizard, then download the installer. The code is single-use: downloading uses it up.</p>
-  <form id="f">
-    <input id="code" autocomplete="off" autocapitalize="none" spellcheck="false" maxlength="8" placeholder="xxxx" autofocus aria-label="pairing code">
-    <button type="submit" id="dl">Download</button>
-  </form>
-  <p id="err" hidden></p>
-  <div id="next" hidden>
-    <p>Installer saved to Downloads. In a terminal on this machine, run:</p>
-    <code>sh ~/Downloads/t.sh</code>
+<main class="card">
+  <div class="brand">
+    <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#f0b35a" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <path d="M3 20 L12 4 L21 20 Z"/><path d="M7.5 12 L16.5 12"/><path d="M12 4 L12 12"/><path d="M7.5 12 L3 20"/><path d="M16.5 12 L21 20"/>
+    </svg>
+    <h1>Pair this device with Truss</h1>
   </div>
+  <p class="sub">Three short steps. Nothing runs until you run it.</p>
+
+  <section class="step">
+    <span class="n">1</span>
+    <div>
+      <p>Download the installer.</p>
+      <a class="dl" href="/i" download="t.sh">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3 v12"/><path d="M6 11 l6 6 6-6"/><path d="M4 21 h16"/></svg>
+        Download installer
+      </a>
+      <p class="hint">A couple of KB. It carries no credentials, so a stale copy is harmless.</p>
+    </div>
+  </section>
+
+  <section class="step">
+    <span class="n">2</span>
+    <div style="flex:1">
+      <p>Run it in a terminal on this machine.</p>
+      <div class="cmd">
+        <code>sh ~/Downloads/t.sh</code>
+        <button class="copy" id="copy" type="button">Copy</button>
+      </div>
+    </div>
+  </section>
+
+  <section class="step">
+    <span class="n">3</span>
+    <div>
+      <p>Type the 4-character code when it asks.</p>
+      <p class="hint">The code is in the Truss add-host wizard. Single-use, lives for 10 minutes; if it dies, mint another and run the same file again.</p>
+    </div>
+  </section>
+
+  <p class="foot">Once it is up, the agent dials out over your tailnet. No inbound ports, nothing listens on this device.</p>
 </main>
 <script>
-var f = document.getElementById("f"), c = document.getElementById("code"),
-    dl = document.getElementById("dl"), err = document.getElementById("err"),
-    next = document.getElementById("next");
-f.addEventListener("submit", function (e) {
-  e.preventDefault();
-  var code = c.value.trim().toLowerCase();
-  if (!code) return;
-  err.hidden = true;
-  dl.disabled = true;
-  fetch("/i/" + encodeURIComponent(code)).then(function (r) {
-    if (!r.ok) {
-      err.textContent = r.status === 429
-        ? "Too many tries. Wait a minute, then retry."
-        : "That code is used up, expired, or mis-typed. Mint a fresh one in the wizard.";
-      err.hidden = false;
-      dl.disabled = false;
-      return null;
-    }
-    return r.blob();
-  }).then(function (blob) {
-    if (!blob) return;
-    var a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = "t.sh";
-    a.click();
-    /* Safari can abort the download when the blob URL dies in the same tick
-       (audit B1) — revoke lazily; one retained blob on a transient page is
-       harmless, a missing file is not */
-    setTimeout(function () { URL.revokeObjectURL(a.href); }, 10000);
-    dl.disabled = false;
-    next.hidden = false;
-  }).catch(function () {
-    err.textContent = "Could not reach the server. Check the address, then retry.";
-    err.hidden = false;
-    dl.disabled = false;
-  });
+var btn = document.getElementById("copy");
+btn.addEventListener("click", function () {
+  var done = function () { btn.textContent = "Copied"; setTimeout(function () { btn.textContent = "Copy"; }, 1500); };
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText("sh ~/Downloads/t.sh").then(done, function () { btn.textContent = "Select it above"; });
+  } else {
+    btn.textContent = "Select it above";
+  }
 });
 </script>
 </body>

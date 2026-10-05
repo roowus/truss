@@ -375,13 +375,13 @@ export function AddHostWizard({ onClose }: { onClose: () => void }) {
             )}
             {pairCmd && (
               <div className="rounded-lg border border-[var(--t-line)] bg-[var(--t-bg0)] px-3 py-2 space-y-2">
-                {/* the browser path leads (issue #111 review): the remote
-                    opens /p, types the code into the page, downloads t.sh —
-                    the terminal only runs `sh ~/Downloads/t.sh` */}
+                {/* the browser path leads (issue #111 review): download the
+                    installer from /p, run it, type the code at its prompt.
+                    The link opens in a new tab with one click */}
                 <div className="flex items-start gap-3">
                   <div className="min-w-0 flex-1">
-                    <div className="font-mono text-[12px] text-[var(--t-fg)] break-all select-all">{serverAddr}/p</div>
-                    <div className="mt-0.5 text-[10px] text-[var(--t-dim)]">open this in a browser on the remote, enter <span className="font-mono text-[var(--t-amber)]">{pairCmd.code}</span> there, then run <span className="font-mono text-[var(--t-fg2)]">sh ~/Downloads/t.sh</span> · single-use · expires in {until(pairCmd.expiresAt)}</div>
+                    <a href={`${serverAddr}/p`} target="_blank" rel="noreferrer" className="font-mono text-[12px] text-[var(--t-sky)] underline decoration-dotted underline-offset-2 break-all hover:brightness-125">{serverAddr}/p</a>
+                    <div className="mt-0.5 text-[10px] text-[var(--t-dim)]">open on the remote (one click), download the installer, run <span className="font-mono text-[var(--t-fg2)]">sh ~/Downloads/t.sh</span>, and type <span className="font-mono text-[var(--t-amber)]">{pairCmd.code}</span> when it asks · single-use · expires in {until(pairCmd.expiresAt)}</div>
                   </div>
                   {pairQr && <img src={pairQr} width={72} height={72} className="shrink-0 rounded border border-[var(--t-line2)]" alt={`QR code for ${serverAddr}/p`} title={`${serverAddr}/p`} />}
                 </div>
