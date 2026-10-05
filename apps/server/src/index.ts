@@ -164,6 +164,9 @@ wireRemoteRegistry({
   unregister: unregisterAdapter,
   /* an agent hello'd/dropped — open clients refetch hosts + harnesses */
   registryChanged: () => broadcastRaw({ type: "agents.changed", sessionId: "" }),
+  /* a tunnel probe filled a remote harness's catalog (issue #123) — same
+     refetch contract as the local lazy-catalog probe (issue #101) */
+  modelsChanged: (harness) => broadcastRaw({ type: "models.updated", sessionId: "", harness }),
   sessionGone: (sessionId, detail) => {
     if (store.getSession(sessionId)) store.setSessionState(sessionId, "error");
     /* the live entry must die with it (audit B1): otherwise sendPrompt's
@@ -244,6 +247,14 @@ app.get("/agent/connect", { websocket: true }, (socket, req) => {
           sessions: Array.isArray(msg.sessions) ? (msg.sessions as unknown[]).map(String) : undefined,
           protocol: typeof msg.protocol === "number" ? msg.protocol : undefined,
           bundleHash: typeof msg.bundleHash === "string" ? msg.bundleHash : undefined,
+          /* directory discovery (issue #123) — absent from pre-probe agents,
+             which then simply carry no cwd suggestion. Strings only, capped
+             (audit B3): the tunnel is a trust boundary, and map(String)
+             would turn junk entries into "[object Object]" suggestions */
+          home: typeof msg.home === "string" ? msg.home : undefined,
+          suggestedCwds: Array.isArray(msg.suggestedCwds)
+            ? msg.suggestedCwds.filter((d): d is string => typeof d === "string").slice(0, 16)
+            : undefined,
         },
       );
       /* welcome: the server's half of the handshake — the agent warns its

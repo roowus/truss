@@ -37,6 +37,31 @@ test("explicit env wins over the derivation; gaps get filled", async () => {
   assert.equal(env.TRUSS_CLAUDE_BASE_URL, "http://custom:9/x", "the operator's setting survives");
 });
 
+/* issue #123, PR #126 preview testing: the first pi spawn on a REMOTE host
+   died with EACCES mkdir '/Users/data/pi-sessions'. The pi adapter's
+   TRUSS_DATA_DIR fallback is repo-relative (apps/server/data) — inside the
+   bundle, import.meta.url is ~/.truss/node-agent.mjs and ../.. escapes the
+   home dir entirely. The agent now defaults TRUSS_DATA_DIR to the install
+   dir (dataDir.ts, same relative-import precedent as serverEnv above). */
+
+interface DataDirModule {
+  applyDataDir(env: Record<string, string | undefined>, home?: string): string;
+}
+
+test("the agent defaults TRUSS_DATA_DIR to the install home, never escaping it", async () => {
+  const spec = "../../../packages/node-agent/src/dataDir.js";
+  const { applyDataDir } = (await import(spec)) as DataDirModule;
+
+  const env: Record<string, string | undefined> = {};
+  const dir = applyDataDir(env, "/Users/rewis");
+  assert.equal(dir, "/Users/rewis/.truss", "the bundle's home is the install dir");
+  assert.ok(!dir.startsWith("/Users/data"), "regression: the repo-relative fallback escaped to /Users/data → EACCES");
+  assert.equal(env.TRUSS_DATA_DIR, dir, "the env is set so every adapter spawn inherits it");
+
+  const explicit: Record<string, string | undefined> = { TRUSS_DATA_DIR: "/srv/agent-data" };
+  assert.equal(applyDataDir(explicit, "/Users/rewis"), "/srv/agent-data", "an explicit TRUSS_DATA_DIR always wins");
+});
+
 test("claude.ts has no module-scope env reads left (the ESM-hoisting bug)", async () => {
   /* the lazy-read half: module scope must not touch process.env for these —
      on a remote agent, module evaluation predates applyServerEnv */

@@ -41,6 +41,10 @@ export interface AgentInfo {
   protocol?: number;
   bundleHash?: string;
   bundleCurrent?: boolean;
+  /** directory discovery (issue #123): the remote's home + its one suggested
+     cwd, announced at hello. Absent on pre-discovery agents. */
+  home?: string;
+  suggestedCwd?: string;
 }
 
 export interface SessionMeta {
