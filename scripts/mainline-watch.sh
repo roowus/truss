@@ -22,6 +22,10 @@ git diff --quiet && git diff --cached --quiet || { echo "$(date -Is) skip: dirty
 OLD=$(git rev-parse --short HEAD)
 git merge --ff-only origin/main -q || { echo "$(date -Is) skip: main not ff"; exit 0; }
 NEW=$(git rev-parse --short HEAD)
+# capture the full sha NOW, right after the merge — reading it after the
+# multi-minute build would race a second cron tick that ff-merges a newer
+# main mid-build and make us compare /health against the wrong target
+NEWFULL=$(git rev-parse HEAD)
 echo "$(date -Is) main moved $OLD -> $NEW — rebuilding"
 
 export PATH="$HOME/.local/bin:$HOME/.nvm/versions/node/$(ls "$HOME/.nvm/versions/node" 2>/dev/null | tail -1)/bin:$PATH"
@@ -33,7 +37,6 @@ sudo -n systemctl restart truss || { echo "$(date -Is) restart command failed on
 # keeps serving — `systemctl restart` still exits 0 and nothing changed.
 # Ask /health which commit is answering and refuse to claim success on a
 # mismatch.
-NEWFULL=$(git rev-parse HEAD)
 verified=""
 for _ in $(seq 1 15); do
   body=$(curl -fsS -m 3 http://127.0.0.1:4040/health 2>/dev/null) || { sleep 2; continue; }
