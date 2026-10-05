@@ -119,3 +119,47 @@ test("parseSessionRef: bare #id works, junk is null, never throws", async () => 
     assert.equal(ref.parseSessionRef(junk), null, `${JSON.stringify(junk)} → null`);
   }
 });
+
+/* issue #132: the copyable reference should carry the FULL identity — every
+   id we hold — not just the tweetable line. formatSessionRefFull adds a
+   labeled block under the one-liner (which stays byte-identical so
+   parseSessionRef round-trips it). */
+
+interface SessionRefFullModule {
+  formatSessionRefFull(meta: { id: string; harness: string; cwd: string; harnessRef?: string | null }, hosts?: unknown[]): string;
+}
+
+test("formatSessionRefFull: one-liner first (unchanged), then every id labeled — full cwd, no shortening", async () => {
+  const spec = "../src/lib/sessionRef";
+  const mod = (await import(spec).catch(() => null)) as (SessionRefFullModule & { formatSessionRef: (m: never, h?: never) => string; parseSessionRef: (t: string) => { sessionId: string } | null }) | null;
+  assert.ok(mod, "sessionRef module must exist (see module test)");
+  assert.equal(typeof mod.formatSessionRefFull, "function", "sessionRef.ts must export formatSessionRefFull — see issue #132");
+
+  const meta = { id: "aa07c1d9", harness: "pi@525b9cd4", cwd: "/Users/rewis/projects/doubletake", harnessRef: "01a0edfd-6598-727a-99ee-15ab86352a3c" };
+  const block = mod.formatSessionRefFull(meta as never, HOSTS as never);
+  const lines = block.split("\n");
+
+  assert.equal(lines[0], mod.formatSessionRef(meta as never, HOSTS as never), "line 1 is the tweetable line, byte-identical");
+  const joined = lines.slice(1).join("\n");
+  assert.match(joined, /truss[^\n]*aa07c1d9/i, "the truss id, labeled");
+  assert.match(joined, /01a0edfd-6598-727a-99ee-15ab86352a3c/, "the harness-native uuid is there");
+  assert.match(joined, /525b9cd4/, "the host id is there too");
+  assert.ok(joined.includes("/Users/rewis/projects/doubletake"), "the FULL cwd — no ~ shortening in the details block");
+
+  /* and the block still parses back to the session */
+  assert.equal(mod.parseSessionRef(block)?.sessionId, "aa07c1d9", "a pasted full block still deep-links");
+});
+
+test("formatSessionRefFull: never fabricates — missing fields are simply absent", async () => {
+  const spec = "../src/lib/sessionRef";
+  const mod = (await import(spec).catch(() => null)) as SessionRefFullModule | null;
+  assert.ok(mod, "sessionRef module must exist (see module test)");
+
+  const local = mod.formatSessionRefFull({ id: "3f9a1c2e", harness: "pi", cwd: "/home/ubuntu/x" } as never);
+  assert.ok(!local.includes("host id"), "local sessions carry no host id line");
+  assert.ok(!/session:|harness id/i.test(local.split("\n").slice(1).join("\n")) || !/uuid|[0-9a-f]{8}-[0-9a-f]{4}/.test(local), "no fabricated harness id");
+
+  const noRef = mod.formatSessionRefFull({ id: "aa07c1d9", harness: "pi@525b9cd4", cwd: "/x", harnessRef: null } as never);
+  assert.ok(!noRef.includes("undefined") && !noRef.includes("null"), "no undefined/null leaks into the block");
+  assert.match(noRef, /525b9cd4/, "the host id still shows when the harness ref is missing");
+});

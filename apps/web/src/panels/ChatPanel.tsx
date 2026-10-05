@@ -8,7 +8,7 @@ import { buildModelOptions, modelValue, splitModelValue } from "@/lib/models";
 import { planHeaderFit, HEADER_CLUSTER, HEADER_GAP } from "@/lib/headerFit";
 import { CHAT_WIDTH_DEFAULT, chatHandleGeometry, commitChatWidth, dragDisplayWidth, readChatWidthPref, resolveChatWidth, writeChatWidthPref } from "@/lib/chatWidth";
 import { filesFromTransfer, isFileDrag } from "@/lib/attach";
-import { formatSessionRef } from "@/lib/sessionRef";
+import { formatSessionRef, formatSessionRefFull } from "@/lib/sessionRef";
 import { RAIL_INSET, activeRailIndex, railIndexAtOffset, railMarkTop, railNaturalHeight, turnRailItems } from "@/lib/turnRail";
 import { createBrowserVoiceInput, appendTranscript } from "@/lib/voice";
 import type { VoiceController, VoiceState } from "@/lib/voiceInput";
@@ -219,6 +219,19 @@ function ChatHeader({ id }: { id: string }) {
             >
               <Icon name="clip" size={13} className="text-[var(--t-mute)]" />
               Copy reference
+            </button>
+            <button
+              onClick={() => {
+                const full = formatSessionRefFull({ ...meta, harnessRef: meta.harness_ref }, hosts);
+                void navigator.clipboard.writeText(full);
+                store.toast("ok", "Full details copied", full);
+                setMenu(false);
+              }}
+              className="w-full flex items-center gap-2.5 px-3 h-8 text-left text-[12.5px] text-[var(--t-fg2)] hover:bg-white/[0.05]"
+              title="Copy the full identity: the one-line reference plus every id we hold (truss id, harness session uuid, host id) and the full directory"
+            >
+              <Icon name="clip" size={13} className="text-[var(--t-mute)]" />
+              Copy full details
             </button>
             <div className="px-3 py-1.5 text-[11px] text-[var(--t-dim)] leading-relaxed break-all">
               <span className="font-mono text-[var(--t-mute)]">{formatSessionRef(meta, hosts)}</span><br />

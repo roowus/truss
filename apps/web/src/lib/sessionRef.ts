@@ -1,5 +1,5 @@
 import { deviceLabel, type DeviceHost } from "./device";
-import { baseHarness, shortPath } from "./format";
+import { baseHarness, hostOf, shortPath } from "./format";
 
 /**
  * Copyable chat references (issue #13): one line carrying id · harness ·
@@ -12,12 +12,27 @@ export interface SessionRefMeta {
   id: string;
   harness: string; // may be "<base>@<hostId>" for remote sessions
   cwd: string;
+  /** the harness's own session uuid (harness_ref) when the harness told us */
+  harnessRef?: string | null;
 }
 
 export function formatSessionRef(meta: SessionRefMeta, hosts: DeviceHost[] = []): string {
   const base = baseHarness(meta.harness);
   const host = meta.harness.includes("@") ? deviceLabel(meta.harness, hosts) : null;
   return `#${meta.id} · ${base}${host ? ` @ ${host}` : ""} · ${shortPath(meta.cwd)}`;
+}
+
+/** issue #132: the one-liner first (byte-identical, so parseSessionRef still
+    round-trips a pasted block), then every id we hold, labeled, with the
+    full unshortened cwd. Missing fields are simply absent — never
+    fabricated, never "undefined"/"null" lines. */
+export function formatSessionRefFull(meta: SessionRefMeta, hosts: DeviceHost[] = []): string {
+  const lines = [formatSessionRef(meta, hosts), `truss: ${meta.id}`];
+  if (meta.harnessRef) lines.push(`${baseHarness(meta.harness)} session: ${meta.harnessRef}`);
+  const hostId = hostOf(meta.harness);
+  if (hostId) lines.push(`host: ${hostId}`);
+  lines.push(`cwd: ${meta.cwd}`);
+  return lines.join("\n");
 }
 
 export interface ParsedSessionRef {

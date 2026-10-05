@@ -61,6 +61,9 @@ export interface SessionMeta {
   pinned?: boolean;
   /** set while the session sits in the 30-day trash (raw rows from /api/trash) */
   deleted_at?: string | number | null;
+  /** the harness's own session uuid, spread from the session row (issue #132);
+      absent until the harness hands it over */
+  harness_ref?: string | null;
   created_at: string | number;
   updated_at: string | number;
   live: boolean;
