@@ -16,7 +16,8 @@ import {
   type ClosedEntry,
 } from "./workspaceClose";
 import type { Backend } from "./backend";
-import { store } from "./store";
+import { store, toMs } from "./store";
+import { marksForFocusChange, seedReadMarks } from "./unread";
 
 export interface Desktop {
   id: string;
@@ -66,6 +67,11 @@ interface DesktopState {
   settings: UiSettings;
   /** Undo stack for "reopen what I closed" (Chrome's gesture; the chord here is Cmd/Ctrl+Shift+Z — browsers reserve Shift+T). Capped. Mixed: workspaces AND tabs. Lives in state so the Trash panel (issue #146) can browse it live; persisted with the layout doc. */
   closed: ClosedEntry[];
+  /** Per-session "read up to here" marks (ms epoch) for the sidebar's
+      unread badge (issue #173), persisted with the layout doc. undefined
+      means the loaded doc predates the feature — the first-load seed runs
+      once sessions arrive and this never stays undefined after that. */
+  readAt?: Record<string, number>;
   loadError?: string;
   saveStatus: "idle" | "saving" | "saved" | "error";
 }
@@ -78,6 +84,8 @@ interface SavedDocument {
   settings: UiSettings;
   /** the closed stack, serialized via serializeClosed (validated on the way back in) */
   closed?: string;
+  /** unread read-marks (issue #173); absent on docs written before the feature */
+  readAt?: Record<string, number>;
 }
 
 const defaultSettings: UiSettings = {
@@ -99,6 +107,14 @@ function freshState(): DesktopState {
     closed: [],
     saveStatus: "idle",
   };
+}
+
+/* the doc crosses the wire — keep only sane session-id → ms-epoch entries */
+export function parseReadAt(raw: unknown): Record<string, number> | undefined {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+  const out: Record<string, number> = {};
+  for (const [k, v] of Object.entries(raw)) if (typeof v === "number" && Number.isFinite(v)) out[k] = v;
+  return out;
 }
 
 function parseSaved(raw: string): DesktopState {
@@ -143,6 +159,7 @@ function parseSaved(raw: string): DesktopState {
       },
     },
     closed: parseClosed(doc.closed),
+    readAt: parseReadAt(doc.readAt),
     saveStatus: "idle",
   };
 }
@@ -172,6 +189,7 @@ class DesktopManager {
   }
 
   async load(backend: Backend) {
+    this.wireReadMarks();
     try {
       const { layout } = await backend.getLayout();
       this.set(layout ? parseSaved(layout) : freshState());
@@ -180,6 +198,64 @@ class DesktopManager {
       this.set({ ...freshState(), loadError: msg });
       store.toast("error", "Workspace restore failed", msg);
     }
+  }
+
+  /* ---- unread read-marks (issue #173) ----
+     Focus drives the marks: opening a session (or switching away from it)
+     means everything up to that moment was seen. The map persists with the
+     layout doc, so the badges survive a reload. */
+
+  private readWired = false;
+  private lastReadFocus: string | undefined;
+
+  /** One store subscription for the whole feature; load() is the boot path. */
+  private wireReadMarks() {
+    if (this.readWired) return;
+    this.readWired = true;
+    store.subscribe(() => this.onStoreForReadMarks());
+    this.onStoreForReadMarks();
+  }
+
+  private onStoreForReadMarks() {
+    this.maybeSeedReadAt();
+    /* legacy doc but the session list is not in yet: the seed (below) will
+       baseline everything at once — marking just the focused row now would
+       define the map early and skip it */
+    if (this.state.readAt === undefined) return;
+    const id = store.state.focused;
+    if (id === this.lastReadFocus) return;
+    const prev = this.lastReadFocus;
+    this.lastReadFocus = id;
+    /* the mark compares against server-stamped updated_at, so the client
+       clock alone is not enough (audit B3): a server running ahead of the
+       browser would put activity past the mark and the just-read badge
+       would reappear and never clear. Mark up to the newest activity the
+       rows on either side of the focus change are already showing. */
+    let now = Date.now();
+    for (const x of [prev, id]) {
+      const s = x ? store.state.sessions[x] : undefined;
+      if (s) now = Math.max(now, toMs(s.updated_at));
+    }
+    const readAt = marksForFocusChange(this.state.readAt, prev, id, now);
+    if (readAt) {
+      this.set({ readAt });
+      this.queueSave();
+    }
+  }
+
+  /* First boot on a doc that predates the feature: everything already in
+     the list is the baseline, marked read at its own updated_at, so the
+     upgrade does not paint every row unread. Sessions that appear later
+     start unmarked and speak for themselves. */
+  private maybeSeedReadAt() {
+    if (this.state.readAt !== undefined) return;
+    if (!store.state.sessionsLoaded) return;
+    const listed = store.state.order.flatMap((id) => {
+      const s = store.state.sessions[id];
+      return s ? [{ id, updatedAt: toMs(s.updated_at) }] : [];
+    });
+    this.set({ readAt: seedReadMarks(listed) });
+    this.queueSave();
   }
 
   getApi(id = this.state.activeId) {
@@ -277,6 +353,7 @@ class DesktopManager {
       hosts: this.state.hosts,
       settings: this.state.settings,
       closed: serializeClosed(this.state.closed),
+      readAt: this.state.readAt,
     };
   }
 
