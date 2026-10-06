@@ -115,7 +115,11 @@ function ChatHeader({ id }: { id: string }) {
 
   /* the model picker left the header in issue #143 — it lives in the
      composer bar now, so nothing here plans or renders for it */
-  useEffect(() => {
+  /* layout effect, not effect: the first measure must land before the first
+     paint — the optimistic initial plan names every member visible, so a
+     post-paint measure would flash an overflowing row on narrow panels
+     (audit round 3, B1) */
+  useLayoutEffect(() => {
     const el = headerRef.current;
     if (!el) return;
     /* Stop only while running, the team shortcut only when the harness
