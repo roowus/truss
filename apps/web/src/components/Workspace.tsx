@@ -11,7 +11,8 @@ import {
   type ReactContextMenuItemConfig,
 } from "dockview-react";
 import "dockview-react/dist/styles/dockview.css";
-import { useApp } from "@/lib/store";
+import { store, useApp } from "@/lib/store";
+import { cleanTabTitle, tabRenameTarget } from "@/lib/tabRename";
 import { desktops, useDesktops } from "@/lib/desktops";
 import { getDockApi, renameSessionPanels, renameHostPanels } from "@/lib/workspace";
 import { ChatPanel } from "@/panels/ChatPanel";
@@ -63,12 +64,21 @@ const KIND_ICON: Record<string, string> = {
 
 const theme: DockviewTheme = { ...themeDark, name: "truss", className: "dockview-theme-dark", gap: 6, dndTabIndicator: "line" };
 
-function TrussTab({ api, params }: IDockviewPanelHeaderProps<{ sessionId?: string }>) {
+function TrussTab({ api, params }: IDockviewPanelHeaderProps<{ sessionId?: string; terminalId?: string }>) {
   const [title, setTitle] = useState(api.title ?? "");
   useEffect(() => {
     const d = api.onDidTitleChange((e: { title: string }) => setTitle(e.title));
     return () => d.dispose();
   }, [api]);
+  /* double-click inline rename (issue #141, the DesktopStrip pattern):
+     chats rename the session, shells the terminal (lib/tabRename picks the
+     target); other kinds never offer the gesture */
+  const [renaming, setRenaming] = useState(false);
+  const [renameValue, setRenameValue] = useState("");
+  const renameRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (renaming) renameRef.current?.select();
+  }, [renaming]);
   /* active (focused) tab — an ultra-cramped strip shows an X only here
      (hover-revealed); inactive slivers get none */
   const [active, setActive] = useState(api.isActive);
@@ -81,6 +91,21 @@ function TrussTab({ api, params }: IDockviewPanelHeaderProps<{ sessionId?: strin
   }, [api]);
   const kind = api.id.split(":")[0];
   const sid = params?.sessionId;
+  const renameTarget = tabRenameTarget({ kind, sessionId: sid, terminalId: params?.terminalId });
+  const beginRename = () => {
+    if (!renameTarget) return;
+    setRenameValue(title);
+    setRenaming(true);
+  };
+  const commitRename = () => {
+    if (!renaming) return;
+    setRenaming(false);
+    if (!renameTarget) return;
+    const next = cleanTabTitle(renameValue);
+    if (!next || next === title) return;
+    if (renameTarget.kind === "session") void store.renameSession(renameTarget.id, next);
+    else void store.renameTerminal(renameTarget.id, next);
+  };
   const meta = useApp((s) => (sid ? s.sessions[sid] : undefined));
   const pending = useApp((s) => (sid ? s.views[sid]?.pending.length ?? 0 : 0));
   const color = meta ? harnessStyle(meta.harness).color : undefined;
@@ -208,7 +233,7 @@ function TrussTab({ api, params }: IDockviewPanelHeaderProps<{ sessionId?: strin
       onMouseDown={(e) => {
         if (e.button === 1) { e.preventDefault(); api.close(); }
       }}
-      title={`${title}\nRight-click to copy or move to another workspace\n(middle-click closes)`}
+      title={`${title}\nRight-click to copy or move to another workspace\n(middle-click closes)${renameTarget ? "\n(double-click renames)" : ""}`}
     >
       <span
         style={{ color: kind === "chat" ? color : undefined }}
@@ -224,8 +249,32 @@ function TrussTab({ api, params }: IDockviewPanelHeaderProps<{ sessionId?: strin
       {/* the tab's name, fading out at the cut — Chrome-style, no ellipsis.
           The span grows to fill the tab's free space, so the fade zone sits
           on empty space when the title fits and only touches text that
-          actually overflows */}
-      {view.showTitle && <span className="min-w-0 flex-1 overflow-hidden whitespace-nowrap t-fade-r">{title}</span>}
+          actually overflows. Double-click swaps it for an inline rename
+          input (DesktopStrip's beginRename pattern) on renamable kinds. */}
+      {view.showTitle &&
+        (renaming ? (
+          <input
+            ref={renameRef}
+            aria-label="Rename tab"
+            value={renameValue}
+            maxLength={64}
+            onChange={(e) => setRenameValue(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") commitRename();
+              else if (e.key === "Escape") setRenaming(false);
+            }}
+            onBlur={commitRename}
+            /* mousedown must not reach the tab root (middle-click close,
+               dockview drag) while editing */
+            onMouseDown={(e) => e.stopPropagation()}
+            onDoubleClick={(e) => e.stopPropagation()}
+            className="min-w-0 flex-1 px-1 -mx-1 rounded bg-[var(--t-bg1)] outline-none text-[12px] text-[var(--t-fg)]"
+          />
+        ) : (
+          <span className="min-w-0 flex-1 overflow-hidden whitespace-nowrap t-fade-r" onDoubleClick={renameTarget ? beginRename : undefined}>
+            {title}
+          </span>
+        ))}
       {/* indicators drop below the indicator floor (issue #129): a narrow
           titled tab shows its title instead of a dot it has no room for —
           the same tradeoff slivers make one band lower */}

@@ -873,6 +873,16 @@ export function createDemoBackend(): Backend {
       if (sess) (sess.meta as any).pinned = pinned;
       return { ok: true };
     },
+    async renameSession(id, title) {
+      await net(20);
+      const sess = sessions.get(id);
+      if (!sess) throw new ApiError(404, `no such session: ${id}`);
+      const next = title.trim().slice(0, 64);
+      if (!next) throw new ApiError(400, "title must not be blank");
+      sess.meta.title = next;
+      emit(sess, { type: "session.updated", title: next });
+      return { ok: true };
+    },
     credentials: async () => ({ routes: [], service: "demo", serviceActive: false }),
     upsertCredential: async () => ({ ok: true, restarted: false }),
     deleteCredential: async () => ({ ok: true, restarted: false }),

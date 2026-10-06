@@ -79,6 +79,8 @@ export interface Backend {
   archiveProject(project: string, archived: boolean): Promise<unknown>;
   /** pin/unpin (issue #86): pinned rows float to the top of their sidebar section */
   pinSession(id: string, pinned: boolean): Promise<unknown>;
+  /** retitle a chat (issue #141): the tab's double-click rename */
+  renameSession(id: string, title: string): Promise<unknown>;
   listTerminals(): Promise<{ terminals: TerminalInfo[] }>;
   createTerminal(body: { cwd?: string; title?: string }): Promise<{ terminal: TerminalInfo }>;
   deleteTerminal(id: string): Promise<unknown>;
@@ -223,6 +225,8 @@ export function createLiveBackend(): Backend {
       req("POST", `/api/projects/archive`, { project, archived }),
     pinSession: (id, pinned) =>
       req("POST", `/api/sessions/${encodeURIComponent(id)}/pin`, { pinned }),
+    renameSession: (id, title) =>
+      req("POST", `/api/sessions/${encodeURIComponent(id)}/rename`, { title }),
     listTerminals: async () => {
       const r = await req<any>("GET", "/api/terminals");
       return { terminals: r.terminals ?? r ?? [] };
