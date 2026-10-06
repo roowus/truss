@@ -38,7 +38,7 @@ export interface SplitLayout {
 export interface Junction {
   x: number;
   y: number;
-  /** the four adjacent groups, by their leaf data */
+  /** the adjacent groups, by their leaf data — three or four distinct (a T's spanning panel repeats) */
   quadrants: { tl: unknown; tr: unknown; bl: unknown; br: unknown };
 }
 

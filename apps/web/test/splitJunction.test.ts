@@ -67,9 +67,9 @@ function grid2x2(W = 800, H = 600, a = 500, b = 380): Layout {
 }
 
 /* an L: top row spans the width, bottom row splits — the center crossing
-   has no top-left/top-right pair over the bottom split... i.e. only ONE
-   quadrant set exists around (a,b): bottom-left present, top-left/right are
-   ONE panel → no four-quadrant junction there */
+   has no top-left/top-right pair over the bottom split: top-left and
+   top-right are ONE panel. Since #187 that is a T-junction, not a gap —
+   the spanning panel's quadrant samples name it twice. */
 function lShape(W = 800, H = 600, a = 500, b = 380): Layout {
   return {
     width: W,
@@ -112,7 +112,7 @@ test("src/lib/splitJunction.ts exists", async () => {
   assert.ok(mod, "src/lib/splitJunction.ts must export splitJunctions + dragJunction — see issue #148");
 });
 
-test("a 2×2 grid has exactly one junction at the crossing, naming all four quadrants; an L has none there", async () => {
+test("a 2×2 grid has exactly one junction at the crossing, naming all four quadrants; an L's crossing is a T, spanning panel named twice", async () => {
   const mod = await load();
   assert.ok(mod, "splitJunction module must exist (see module test)");
 

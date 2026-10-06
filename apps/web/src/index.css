@@ -110,7 +110,8 @@ body {
 
 /* ── splitter junction handles (issue #148, components/SplitJunctions.tsx):
    where a vertical and a horizontal sash cross, the crossing is a grabbable
-   vertex that resizes the four adjacent panels at once. Hover-revealed like
+   vertex that resizes the adjacent panels at once (three at a T, four at
+   a +). Hover-revealed like
    the sashes themselves (same amber, same 0.15s delay). The hit box stays
    small on purpose: the crossing sits at the top edge of the lower groups'
    tab strips, and a fat invisible box would swallow tab clicks (audit B1). ── */
