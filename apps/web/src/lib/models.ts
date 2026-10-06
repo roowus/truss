@@ -29,6 +29,31 @@ export function splitModelValue(v: string): { provider?: string; model: string }
   return { provider: v.slice(0, i), model: v.slice(i + 1) };
 }
 
+/* Known single-provider scopes get a plain-language reason, not just a name
+   (issue #170): claude's picker lists exactly the models the loopback
+   key-proxy serves, and a short list with no explanation reads as a bug.
+   Keep these user-facing: plain words, no em dashes (TRUSS.md). */
+const PROVIDER_SCOPE_NOTES: Record<string, string> = {
+  "zai-local": "via zai-local (the local key-proxy)",
+};
+
+/**
+ * One line under the model picker's list explaining the list's scope, or
+ * null when there is nothing to explain (issue #170):
+ * - every row from one provider → "via <provider>", with a plain-language
+ *   reason for the providers we know are scoped on purpose;
+ * - two or three providers → all named;
+ * - more → null: the catalog is rich, and the per-row provider labels
+ *   (#169) carry the scope instead of a footnote;
+ * - empty → null.
+ */
+export function catalogScopeNote(models: { provider: string }[]): string | null {
+  const providers = [...new Set(models.map((m) => m.provider).filter(Boolean))];
+  if (providers.length === 0 || providers.length > 3) return null;
+  if (providers.length === 1) return PROVIDER_SCOPE_NOTES[providers[0]] ?? `via ${providers[0]}`;
+  return `via ${providers.join(" · ")}`;
+}
+
 /**
  * Options for a session's model picker: the catalog filtered to the base
  * harness (a remote pi session shares the local pi catalog), with the

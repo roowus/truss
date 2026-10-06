@@ -4,7 +4,7 @@ import { store, useApp, useNow, capsOf, type Msg, type ToolRun, type Perm, type 
 import { argSummary, fmtMs, fmtTakeTime, harnessStyle, shortPath, baseHarness, deadSessionHint } from "@/lib/format";
 import { deviceLabel, harnessDisplay, hostAliases } from "@/lib/device";
 import { useDesktops } from "@/lib/desktops";
-import { buildModelOptions, modelValue, splitModelValue } from "@/lib/models";
+import { buildModelOptions, catalogScopeNote, modelValue, splitModelValue } from "@/lib/models";
 import { planHeaderFit, HEADER_CLUSTER, HEADER_GAP } from "@/lib/headerFit";
 import { CHAT_WIDTH_DEFAULT, chatHandleGeometry, commitChatWidth, dragDisplayWidth, readChatWidthPref, resolveChatWidth, writeChatWidthPref } from "@/lib/chatWidth";
 import { filesFromTransfer, isFileDrag } from "@/lib/attach";
@@ -666,6 +666,11 @@ function Composer({ id, active }: { id: string; active: boolean }) {
      and switching the model is not text input. */
   const currentValue = modelValue(meta.provider, meta.model);
   const modelOptions = buildModelOptions(models, meta.harness, meta.model, meta.provider);
+  /* issue #170: a scoped catalog says so under the open list (claude's 11
+     models ARE the key-proxy's whole catalog — without the note a short
+     list reads as missing data). Scoped to the same harness filter the
+     options use; rich catalogs get null and stay quiet. */
+  const scopeNote = catalogScopeNote(models.filter((m) => m.harness === baseHarness(meta.harness)));
   const onModelPick = (v: string) => {
     const { provider, model } = splitModelValue(v);
     if (v && v !== currentValue) void store.switchModel(id, model, provider).catch(() => {});
@@ -881,6 +886,7 @@ function Composer({ id, active }: { id: string; active: boolean }) {
             options={modelOptions}
             onChange={onModelPick}
             ariaLabel="Switch model"
+            note={scopeNote}
             className={cn("!h-7 !px-2 !py-0 !text-[11px] font-mono text-[var(--t-mute)] w-auto max-w-[160px] shrink-0", taAlignEnd && "mb-0.5")}
           />
         )}

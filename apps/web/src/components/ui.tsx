@@ -185,6 +185,7 @@ export function Select({
   ariaLabel,
   width,
   size = "form",
+  note,
 }: {
   value: string;
   options: SelectOption[];
@@ -196,6 +197,10 @@ export function Select({
   /** "bar" = the compact 24px filter-bar row (matches the search box);
      "form" (default) = 34px t-input — every dialog keeps its look */
   size?: "bar" | "form";
+  /** one line under the open list explaining the list itself (issue #170:
+     a scoped model catalog says so, so a short list stops reading as a
+     bug); pinned to the popover's bottom edge like the filter is to its top */
+  note?: string | null;
 }) {
   const [open, setOpen] = useState(false);
   const [highlight, setHighlight] = useState(0);
@@ -351,6 +356,14 @@ export function Select({
           ))}
           {visible.length === 0 && (
             <div className="px-3 py-4 text-center text-[11px] text-[var(--t-dim)]">No matches for “{filter}”.</div>
+          )}
+          {note && (
+            /* sticky + opaque like the filter row up top: the note explains
+               the list as a whole, so it must be visible without scrolling
+               to the end of a long one */
+            <div className="sticky bottom-0 px-3 py-1.5 border-t border-[var(--t-line)] bg-[var(--t-bg2)] text-[10.5px] leading-tight text-[var(--t-dim)]">
+              {note}
+            </div>
           )}
         </div>,
         document.body,
