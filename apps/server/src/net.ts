@@ -136,19 +136,24 @@ export async function netInfo(port: number, bindHost?: string): Promise<NetInfo>
       const dns = (j?.CurrentTailnet?.MagicDNSSuffix && j?.Self?.DNSName) ? String(j.Self.DNSName).replace(/\.$/, "") : undefined;
       out.tailscale.dnsName = dns;
       /* serve status: `tailscale serve status --json` — newer CLIs;
-         fall back to text parse on older ones */
+         fall back to text parse on older ones. Attribution is by PROXY
+         TARGET, not by name (issue #171 audit): a config only counts as
+         ours when it proxies to this server's port — otherwise the toggle
+         would show "Turn off" for a neighbor's site (and OFF would tear it
+         down) and the wizard would offer the neighbor's URL as ours */
       try {
         const sv = await sh("tailscale", ["serve", "status", "--json"]);
         const sj = JSON.parse(sv);
-        const web = sj?.Web && typeof sj.Web === "object" ? Object.keys(sj.Web) : [];
-        const hit = web.find((k) => k.includes(dns ?? "") || k.includes(ip4));
+        const web: [string, unknown][] = sj?.Web && typeof sj.Web === "object" ? Object.entries(sj.Web) : [];
+        const hit = web.find(([, v]) => JSON.stringify(v).includes(`127.0.0.1:${port}`));
         out.tailscale.serveOn = !!hit;
-        if (hit) out.tailscale.serveUrl = `https://${hit}`;
+        if (hit) out.tailscale.serveUrl = `https://${hit[0]}`;
       } catch {
         const sv = await sh("tailscale", ["serve", "status"]);
         const m = sv.match(/https:\/\/[^\s]+/);
-        out.tailscale.serveOn = !!m;
-        if (m) out.tailscale.serveUrl = m[0];
+        const ours = sv.includes(`127.0.0.1:${port}`);
+        out.tailscale.serveOn = !!m && ours;
+        if (m && ours) out.tailscale.serveUrl = m[0];
       }
     } catch {
       /* status parse failed — ip4 is enough */
@@ -167,9 +172,14 @@ export async function netInfo(port: number, bindHost?: string): Promise<NetInfo>
        probe 443 NOW so the UI can warn about the alternate port before the
        click — never after tailscaled has taken the port over. Probe every
        local address: the incident's Caddy owned 443 on the TAILNET ip,
-       which a loopback-only probe calls free. */
+       which a loopback-only probe calls free. The alternate port is probed
+       as well, so a both-busy machine shows the refusal, not a plan that
+       would shadow whoever owns 8443 (audit B2). */
     if (!out.tailscale.serveOn && out.tailscale.canServe !== false) {
-      out.tailscale.servePlan = planServe({ port, port443Busy: await webServerPresent(443, serveCollisionHosts()) });
+      const hosts = serveCollisionHosts();
+      const busy443 = await webServerPresent(443, hosts);
+      const altBusy = busy443 ? await webServerPresent(SERVE_ALT_PORT, hosts) : false;
+      out.tailscale.servePlan = planServe({ port, port443Busy: busy443, altPortBusy: altBusy });
     }
   } catch {
     /* tailscale not installed */
@@ -224,9 +234,17 @@ export const SERVE_ALT_PORT = 8443;
 
 /** pure: decide what tailscale serve should claim. A busy 443 is NEVER
    claimed (that was the outage) — the plan moves to the alternate port and
-   carries a warning that names the conflict. */
-export function planServe(input: { port: number; port443Busy: boolean }): ServePlan {
+   carries a warning that names the conflict. The alternate is probed too:
+   with both busy there is no safe claim, and the warning says the toggle
+   will refuse instead of shadowing whoever owns 8443. */
+export function planServe(input: { port: number; port443Busy: boolean; altPortBusy?: boolean }): ServePlan {
   if (!input.port443Busy) return { httpsPort: 443, warning: null };
+  if (input.altPortBusy) {
+    return {
+      httpsPort: SERVE_ALT_PORT,
+      warning: `Ports 443 and ${SERVE_ALT_PORT} are both in use by other servers on this machine. Serving on either would shadow one of them, so the toggle refuses until one is free.`,
+    };
+  }
   return {
     httpsPort: SERVE_ALT_PORT,
     warning: `Port 443 is already in use by another server on this machine. Truss will serve on tailnet port ${SERVE_ALT_PORT} instead, so your other sites keep working; Truss lives at :${SERVE_ALT_PORT}.`,
@@ -244,37 +262,52 @@ export function serveCommands(plan: ServePlan, port: number): { on: string[]; of
 }
 
 /** the local addresses a 443-serving neighbour could live on: loopback plus
-   every IPv4 this machine has. The tailnet address MATTERS most — tailscale
-   serve answers on the tailnet path (netstack), so a server bound to the
-   tailnet ip:443 (the incident box's Caddy did exactly that) is precisely
-   who gets shadowed, and a loopback-only probe would miss it. */
+   every address this machine has, v4 AND v6 (the incident shape one family
+   over, audit B3 — a server bound to the tailnet fd7a:: address is exactly
+   as shadowable). The tailnet address MATTERS most: tailscale serve answers
+   on the tailnet path (netstack), so a server bound to the tailnet ip:443
+   (the incident box's Caddy did exactly that) is precisely who gets
+   shadowed, and a loopback-only probe would miss it. Link-local v6 is
+   skipped — unconnectable without a scope id. */
 function serveCollisionHosts(): string[] {
-  const hosts = new Set<string>(["127.0.0.1"]);
+  const hosts = new Set<string>(["127.0.0.1", "::1"]);
   for (const addrs of Object.values(networkInterfaces())) {
     for (const a of addrs ?? []) {
       if (a.family === "IPv4") hosts.add(a.address);
+      if (a.family === "IPv6" && !a.address.toLowerCase().startsWith("fe80:")) hosts.add(a.address);
     }
   }
   return [...hosts];
 }
 
+export type ProbeOutcome = "connect" | "refused" | "timeout" | "error";
+
+/** the probe fold, exported for tests (audit B1/B4): an ANSWER on any
+   address is busy; a TIMEOUT on any address is busy too — a dropped SYN
+   means "unsure", and an unsure port is never claimed (a false busy costs a
+   warning and an :8443 URL; a false free costs the #171 outage). Only
+   all-refused/all-errored reads free. */
+export function probeBusy(outcomes: ProbeOutcome[]): boolean {
+  return outcomes.some((o) => o === "connect" || o === "timeout");
+}
+
 /** does a web server ANSWER on this port at any of the given local
-   addresses? A completed connect is the collision tailscaled serve would
-   shadow; refused, timed-out, or errored all read as free. Never rejects. */
+   addresses? The per-address outcomes fold through probeBusy. Never
+   rejects. */
 export function webServerPresent(port: number, hosts: string[] = ["127.0.0.1"], timeoutMs = 1500): Promise<boolean> {
   const one = (host: string) =>
-    new Promise<boolean>((res) => {
+    new Promise<ProbeOutcome>((res) => {
       const sock = connect({ host, port, timeout: timeoutMs });
-      const done = (hit: boolean) => {
+      const done = (o: ProbeOutcome) => {
         sock.removeAllListeners();
         sock.destroy();
-        res(hit);
+        res(o);
       };
-      sock.on("connect", () => done(true));
-      sock.on("timeout", () => done(false));
-      sock.on("error", () => done(false));
+      sock.on("connect", () => done("connect"));
+      sock.on("timeout", () => done("timeout"));
+      sock.on("error", (e) => done((e as NodeJS.ErrnoException)?.code === "ECONNREFUSED" ? "refused" : "error"));
     });
-  return Promise.all(hosts.map(one)).then((r) => r.some(Boolean));
+  return Promise.all(hosts.map(one)).then(probeBusy);
 }
 
 /* run one serveCommands line. The lines are built by serveCommands from
@@ -285,21 +318,31 @@ async function runServeLine(line: string): Promise<void> {
   await sh(cmd, args);
 }
 
-/** the https port tailscale is ACTUALLY serving on for this machine (null
-   when nothing serves or the status can't be read). OFF targets this, not
-   a fresh plan — the plan can change between on and off, the status can't
+/** pure: `tailscale serve status --json` text → the https port serving THIS
+   truss — the config whose handlers proxy to our local port. null when
+   nothing serves, nothing ATTRIBUTABLE serves, or the text is garbage:
+   OFF must never tear down a config it cannot attribute (audit B1 — an
+   unattributed teardown is the neighbor-killer). */
+export function parseServingHttpsPort(statusJson: string, port: number): number | null {
+  try {
+    const sj = JSON.parse(statusJson);
+    const web: [string, unknown][] = sj?.Web && typeof sj.Web === "object" ? Object.entries(sj.Web) : [];
+    const ours = web.find(([, v]) => JSON.stringify(v).includes(`127.0.0.1:${port}`));
+    if (!ours) return null;
+    const m = ours[0].match(/:(\d+)$/);
+    return m ? Number(m[1]) : 443;
+  } catch {
+    return null;
+  }
+}
+
+/** the https port tailscale is ACTUALLY serving this truss on (null when
+   unattributable or the status can't be read). OFF targets this, not a
+   fresh plan — the plan can change between on and off, the status can't
    lie about what is up. */
 async function servingHttpsPort(port: number): Promise<number | null> {
   try {
-    const sv = await sh("tailscale", ["serve", "status", "--json"]);
-    const sj = JSON.parse(sv);
-    const web: string[] = sj?.Web && typeof sj.Web === "object" ? Object.keys(sj.Web) : [];
-    if (web.length === 0) return null;
-    /* a machine can serve several things — prefer the config that proxies
-       to OUR port; off tears down Truss's own, not a neighbor's */
-    const ours = web.find((k) => JSON.stringify(sj.Web[k]).includes(`127.0.0.1:${port}`));
-    const m = (ours ?? web[0]).match(/:(\d+)$/);
-    return m ? Number(m[1]) : 443;
+    return parseServingHttpsPort(await sh("tailscale", ["serve", "status", "--json"]), port);
   } catch {
     return null;
   }
@@ -311,12 +354,25 @@ export async function tailscaleServe(on: boolean, port: number): Promise<NetInfo
   try {
     if (on) {
       /* plan FIRST: a busy 443 is never claimed; the UI already warned
-         about the alternate port before the click */
-      const plan = planServe({ port, port443Busy: await webServerPresent(443, serveCollisionHosts()) });
+         about the alternate port before the click. The alternate is probed
+         too — claiming a busy 8443 would be the same incident one port
+         over (audit B2), so both-busy refuses outright. */
+      const hosts = serveCollisionHosts();
+      const busy443 = await webServerPresent(443, hosts);
+      const altBusy = busy443 ? await webServerPresent(SERVE_ALT_PORT, hosts) : false;
+      const plan = planServe({ port, port443Busy: busy443, altPortBusy: altBusy });
+      if (busy443 && altBusy) throw new Error(plan.warning ?? `ports 443 and ${SERVE_ALT_PORT} are both in use`);
       for (const line of serveCommands(plan, port).on) await runServeLine(line);
     } else {
-      const httpsPort = (await servingHttpsPort(port)) ?? planServe({ port, port443Busy: await webServerPresent(443, serveCollisionHosts()) }).httpsPort;
-      for (const line of serveCommands({ httpsPort, warning: null }, port).off) await runServeLine(line);
+      /* off tears down the port ACTUALLY serving THIS truss, attributed by
+         proxy target. null = nothing serving that we can attribute — do
+         NOT guess a port: an unattributed teardown kills a neighbor's site
+         (audit B1, the same incident class as #171). */
+      const serving = await servingHttpsPort(port);
+      if (serving === null) {
+        throw new Error(`no tailscale serve config proxies to this Truss (port ${port}), so nothing was torn down. If another app's serve config is active, it was left alone.`);
+      }
+      for (const line of serveCommands({ httpsPort: serving, warning: null }, port).off) await runServeLine(line);
     }
   } catch (err) {
     /* denials name the fix (issue #37): the operator one-liner, not a bare 400 */

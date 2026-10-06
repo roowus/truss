@@ -90,6 +90,19 @@ test("loopback bind + tailscale serve on → only the serve URL survives", async
   );
 });
 
+test("issue #171: a serve URL on the ALTERNATE port (busy-443 machine) survives verbatim", async () => {
+  const mod = await load();
+  assert.ok(mod, "reachability module must exist (see module test)");
+  const net = NET("127.0.0.1", true);
+  net.tailscale.serveUrl = "https://rewvis.tail208cbf.ts.net:8443";
+  const out = mod.reachableAddresses(net);
+  assert.deepEqual(
+    out.map((a) => a.value),
+    ["https://rewvis.tail208cbf.ts.net:8443"],
+    "the wizard offers the serve URL with the planned port, not a re-derived 443",
+  );
+});
+
 test("a specific bind ip keeps only its own entries; loopback ipv6 treated as loopback", async () => {
   const mod = await load();
   assert.ok(mod, "reachability module must exist (see module test)");

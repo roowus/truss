@@ -90,6 +90,27 @@ test("webServerPresent: a live listener reads busy, a closed port reads free", a
   }
 });
 
+/* audit round 2, B1/B4: the timeout direction is the conservative core of
+   the plan — a dropped SYN means "unsure", and an unsure port is never
+   claimed. A black-holed port can't be faked without a firewall, so the
+   fold is pinned directly. */
+
+test("probeBusy: connect or timeout anywhere → busy; only all-refused/errored is free", async () => {
+  const { cleanup } = await freshServer("net-probe-fold");
+  try {
+    const net = await import("../src/net.js");
+    assert.equal(net.probeBusy(["connect"]), true, "an answer is busy");
+    assert.equal(net.probeBusy(["refused", "connect"]), true);
+    assert.equal(net.probeBusy(["timeout"]), true, "a black hole is UNSURE — never claimed (a false busy costs a warning; a false free costs the outage)");
+    assert.equal(net.probeBusy(["refused", "timeout", "error"]), true, "one unsure address among clear ones still reads busy");
+    assert.equal(net.probeBusy(["refused", "refused"]), false, "refused everywhere is free");
+    assert.equal(net.probeBusy(["error", "refused"]), false, "unreachable/refused is free");
+    assert.equal(net.probeBusy([]), false, "nothing probed is free");
+  } finally {
+    cleanup();
+  }
+});
+
 test("netInfo surfaces tailscale.servePlan while serve is off and clickable (the pre-click warning)", async () => {
   const { cleanup } = await freshServer("net-plan");
   try {
@@ -103,6 +124,47 @@ test("netInfo surfaces tailscale.servePlan while serve is off and clickable (the
       assert.equal(plan.warning, null, "443 free → the standard plan, no noise");
     } else {
       assert.match(plan.warning ?? "", /443/, "the alternate-port plan names the conflict");
+    }
+  } finally {
+    cleanup();
+  }
+});
+
+test("planServe: both candidate ports busy → the plan refuses, naming both", async () => {
+  const { cleanup } = await freshServer("net-plan-both");
+  try {
+    const net = await import("../src/net.js");
+    const plan = net.planServe({ port: 4040, port443Busy: true, altPortBusy: true });
+    assert.match(plan.warning ?? "", /443/, "names the standard port");
+    assert.match(plan.warning ?? "", /8443/, "names the alternate too");
+    assert.match(plan.warning ?? "", /refuse/i, "says the toggle refuses rather than shadowing 8443's owner");
+  } finally {
+    cleanup();
+  }
+});
+
+/* audit B1 (PR #178): OFF tears down only a config it can ATTRIBUTE to this
+   truss — the status is matched by proxy target, never by name, and an
+   unattributable status yields null so the toggle tears nothing down */
+
+test("parseServingHttpsPort: only a config proxying to OUR port is attributed", async () => {
+  const { cleanup } = await freshServer("net-serve-attr");
+  try {
+    const net = await import("../src/net.js");
+    const status = JSON.stringify({
+      Web: {
+        "rewvis.tail208cbf.ts.net:443": { Handlers: { "/": { Proxy: "http://127.0.0.1:3000" } } },
+        "rewvis.tail208cbf.ts.net:8443": { Handlers: { "/": { Proxy: "http://127.0.0.1:4040" } } },
+      },
+    });
+    assert.equal(net.parseServingHttpsPort(status, 4040), 8443, "ours is the config proxying to our port");
+    assert.equal(net.parseServingHttpsPort(status, 5555), null, "a neighbor's config is NOT ours — OFF must target nothing");
+
+    const portlessKey = JSON.stringify({ Web: { "rewvis.tail208cbf.ts.net": { Handlers: { "/": { Proxy: "http://127.0.0.1:4040" } } } } });
+    assert.equal(net.parseServingHttpsPort(portlessKey, 4040), 443, "a key without a port suffix is 443");
+
+    for (const junk of ["", "not json", "{}", "[]", "null"]) {
+      assert.equal(net.parseServingHttpsPort(junk, 4040), null, `${JSON.stringify(junk)} → null, never a crash`);
     }
   } finally {
     cleanup();
