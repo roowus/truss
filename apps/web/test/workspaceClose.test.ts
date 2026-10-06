@@ -31,11 +31,18 @@ interface Space {
   name?: string;
   layout?: unknown;
 }
+interface ChordEv {
+  key: string;
+  metaKey?: boolean;
+  ctrlKey?: boolean;
+  altKey?: boolean;
+  shiftKey?: boolean;
+}
 interface WorkspaceCloseModule {
   canClose(spaces: Space[], id: string): boolean;
   nextActiveAfterClose(spaces: Space[], closedId: string, activeId: string): string;
-  isCloseWindowChord(e: { key: string; metaKey?: boolean; ctrlKey?: boolean; shiftKey?: boolean }): boolean;
-  isReopenClosedChord(e: { key: string; metaKey?: boolean; ctrlKey?: boolean; shiftKey?: boolean }, typing?: boolean): boolean;
+  isCloseWindowChord(e: ChordEv, typing?: boolean): boolean;
+  isReopenClosedChord(e: ChordEv, typing?: boolean): boolean;
   pushClosed(stack: unknown[], snapshot: unknown, cap?: number): unknown[];
   popClosed(stack: unknown[]): { snapshot: unknown; rest: unknown[] } | null;
 }
@@ -66,13 +73,23 @@ test("close guards: the last workspace never dies; the active neighbor follows C
   assert.equal(mod.nextActiveAfterClose(SPACES, "c", "a"), "a", "closing a background workspace never yanks focus");
 });
 
-test("the chords: Cmd/Ctrl+Shift+W closes, Cmd/Ctrl+Shift+Z reopens — and only those", async () => {
+test("the chords: Alt+Shift+W closes, Cmd/Ctrl+Shift+Z reopens — and only those", async () => {
   const mod = await load();
   assert.ok(mod, "workspaceClose module must exist (see module test)");
 
-  assert.ok(mod.isCloseWindowChord({ key: "w", metaKey: true, shiftKey: true }), "mac chord");
-  assert.ok(mod.isCloseWindowChord({ key: "W", ctrlKey: true, shiftKey: true }), "win/linux chord, caps-tolerant");
+  /* browsers reserve Cmd/Ctrl+Shift+W for their own window close (the keydown
+     never reaches a plain tab — verified in #122), so the advertised close
+     chord is Alt+Shift+W: the strip's Alt+Shift+<letter> pattern (Alt+Shift+T
+     adds a tab), unreserved in Chrome/Firefox/Safari. Shift+W stays as a
+     legacy alias for keyboard-lock/embedded setups that pass it through. */
+  assert.ok(mod.isCloseWindowChord({ key: "w", altKey: true, shiftKey: true }), "the advertised close chord (issue #181)");
+  assert.ok(mod.isCloseWindowChord({ key: "W", altKey: true, shiftKey: true }), "caps-tolerant");
+  assert.ok(!mod.isCloseWindowChord({ key: "w", altKey: true, shiftKey: true }, true), "Alt+Shift+W yields while typing, like Alt+Shift+T");
+  assert.ok(mod.isCloseWindowChord({ key: "w", metaKey: true, shiftKey: true }), "legacy mac chord");
+  assert.ok(mod.isCloseWindowChord({ key: "W", ctrlKey: true, shiftKey: true }), "legacy win/linux chord, caps-tolerant");
+  assert.ok(mod.isCloseWindowChord({ key: "w", metaKey: true, shiftKey: true }, true), "the legacy alias stays window-level where delivered (Chrome-style)");
   assert.ok(!mod.isCloseWindowChord({ key: "w", metaKey: true }), "plain Cmd+W is the TAB close — untouched");
+  assert.ok(!mod.isCloseWindowChord({ key: "w", altKey: true }), "Alt without Shift never fires");
   assert.ok(!mod.isCloseWindowChord({ key: "w", shiftKey: true }), "no modifier, no fire");
 
   /* browsers reserve Cmd/Ctrl+Shift+T (the keydown never reaches a plain
@@ -89,7 +106,9 @@ test("the chords: Cmd/Ctrl+Shift+W closes, Cmd/Ctrl+Shift+Z reopens — and only
   /* the chords never collide */
   assert.ok(!(mod.isCloseWindowChord({ key: "z", metaKey: true, shiftKey: true })));
   assert.ok(!(mod.isCloseWindowChord({ key: "t", metaKey: true, shiftKey: true })));
+  assert.ok(!(mod.isCloseWindowChord({ key: "t", altKey: true, shiftKey: true })), "Alt+Shift+T stays add-tab");
   assert.ok(!(mod.isReopenClosedChord({ key: "w", metaKey: true, shiftKey: true })));
+  assert.ok(!(mod.isReopenClosedChord({ key: "w", altKey: true, shiftKey: true })));
 });
 
 test("the undo stack: LIFO, capped, snapshots carry name + layout", async () => {

@@ -8,7 +8,10 @@
  * truss always keeps at least one workspace. Chrome's own Cmd+Shift+T is
  * browser-reserved (the keydown never reaches a plain tab), so the reopen
  * chord is Cmd/Ctrl+Shift+Z — "undo the close" — with Shift+T kept as a
- * legacy alias for setups that do pass it through.
+ * legacy alias for setups that do pass it through. Cmd+Shift+W is just as
+ * browser-reserved (Chrome closes its own window — verified in #122), so
+ * the advertised close chord is Alt+Shift+W, the strip's Alt+Shift+<letter>
+ * pattern (issue #181), with Shift+W kept as its legacy alias.
  *
  * The undo stack is ONE mixed LIFO for everything closable (Chrome parity:
  * the chord restores whatever went last, tab or window): ClosedSnapshot for
@@ -130,6 +133,7 @@ export interface ChordEvent {
   key: string;
   metaKey?: boolean;
   ctrlKey?: boolean;
+  altKey?: boolean;
   shiftKey?: boolean;
 }
 
@@ -156,8 +160,21 @@ export function nextActiveAfterClose(spaces: CloseableSpace[], closedId: string,
 const chord = (e: ChordEvent, key: string) =>
   (e.metaKey === true || e.ctrlKey === true) && e.shiftKey === true && e.key.toLowerCase() === key;
 
-/** Cmd/Ctrl+Shift+W closes the active workspace. Plain Cmd+W stays the tab close. */
-export const isCloseWindowChord = (e: ChordEvent) => chord(e, "w");
+/* The strip's own pattern (Alt+Shift+T adds a tab): exactly Alt+Shift, no
+   Cmd/Ctrl — extra modifiers mean some other gesture. */
+const altChord = (e: ChordEvent, key: string) =>
+  e.altKey === true && e.shiftKey === true && e.metaKey !== true && e.ctrlKey !== true && e.key.toLowerCase() === key;
+
+/**
+ * Alt+Shift+W closes the active workspace — the chord browsers actually
+ * deliver: Chrome reserves Cmd/Ctrl+Shift+W for its own window close and the
+ * keydown never reaches a plain tab (verified in #122), so Shift+W is dead
+ * there. It stays as a legacy alias for keyboard-lock/embedded setups that
+ * pass it through, where it keeps Chrome's window-level semantics (fires
+ * mid-typing). The advertised Alt+Shift chord follows the strip pattern and,
+ * like Alt+Shift+T, yields while typing. Plain Cmd+W stays the tab close.
+ */
+export const isCloseWindowChord = (e: ChordEvent, typing = false) => chord(e, "w") || (altChord(e, "w") && !typing);
 
 /**
  * Cmd/Ctrl+Shift+Z reopens whatever closed last — a tab, a tab group, or a

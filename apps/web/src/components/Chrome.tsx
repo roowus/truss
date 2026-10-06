@@ -4,7 +4,7 @@ import { desktops, useDesktops } from "@/lib/desktops";
 import { fmtCost, harnessStyle, shortPath } from "@/lib/format";
 import { harnessDisplay, hostAliases } from "@/lib/device";
 import { openDailyDriver, openFreeShell, openPanel } from "@/lib/workspace";
-import { describeClosed } from "@/lib/workspaceClose";
+import { canClose, describeClosed } from "@/lib/workspaceClose";
 import { HarnessMark, Icon, StateDot } from "./ui";
 import { cn } from "@/utils/cn";
 
@@ -139,14 +139,21 @@ export function CommandPalette({ onClose, onNew }: { onClose: () => void; onNew:
   const cmds: Cmd[] = useMemo(() => {
     /* Read at open time: the palette mounts fresh, so a non-reactive peek is
        always current. This is the guaranteed reopen path — browsers reserve
-       Ctrl/⌘ Shift+T in normal tabs, so the chord may never reach the page. */
+       Ctrl/⌘ Shift+T in normal tabs, so the chord may never reach the page.
+       Same story for close: Shift+W is browser-reserved too (issue #181), so
+       the palette carries the sure close path next to the reopen one. */
     const closedTop = desktops.peekClosed();
+    const liveNow = desktops.state.spaces.filter((s) => !s.archived);
+    const activeNow = liveNow.find((s) => s.id === desktops.state.activeId);
     const base: Cmd[] = [
       { id: "new", label: "New session…", icon: "plus", hint: "N", run: onNew },
       { id: "add-tab", label: "Add tab…", icon: "plus", hint: "Alt+Shift+T", run: () => window.dispatchEvent(new Event("truss:add-tab")) },
       { id: "shell", label: "New free shell", icon: "term", run: () => openFreeShell() },
       { id: "settings", label: "Settings", icon: "settings", hint: "Ctrl/⌘ ,", run: () => openPanel("settings") },
       { id: "new-workspace", label: "New workspace", icon: "desktop", run: () => desktops.create() },
+      ...(activeNow && canClose(liveNow, activeNow.id)
+        ? [{ id: "close-workspace", label: `Close workspace: ${activeNow.name}`, icon: "desktop", hint: "Alt+Shift+W", run: () => desktops.remove(activeNow.id) }]
+        : []),
       ...(closedTop ? [{ id: "reopen-closed", label: describeClosed(closedTop), icon: closedTop.type === "workspace" ? "desktop" : "layout", hint: "Ctrl/⌘ Shift+Z", run: () => desktops.reopenClosed() }] : []),
       { id: "welcome", label: "Open welcome", icon: "layout", run: () => openPanel("welcome") },
     ];

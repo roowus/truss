@@ -73,8 +73,11 @@ function Shell() {
     const key = (e: KeyboardEvent) => {
       const t = e.target as HTMLElement;
       const typing = t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.isContentEditable || t.closest(".xterm"));
-      /* Chrome's window chords are window-level: they fire even mid-typing. */
-      if (isCloseWindowChord(e)) {
+      /* The legacy Shift+W alias is Chrome's window chord: window-level, it
+         fires even mid-typing wherever a setup delivers it. The advertised
+         Alt+Shift+W yields while typing, like its Alt+Shift+<letter> strip
+         siblings (Alt+Shift+T adds a tab). */
+      if (isCloseWindowChord(e, !!typing)) {
         e.preventDefault();
         const live = desktops.state.spaces.filter((s) => !s.archived);
         if (canClose(live, desktops.state.activeId)) desktops.remove(desktops.state.activeId);
