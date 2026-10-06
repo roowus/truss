@@ -20,8 +20,8 @@ import http from "node:http";
    - /v1/models serves the aggregated catalog, /v1/messages/count_tokens
      passes through on Anthropic routes and estimates on OpenAI ones. */
 
-import { createModelRouterHandler, type ProviderRoute } from "../src/model-router.js";
-import { modelRouterBaseUrl, modelRouterEnabled, modelRouterPort, type RouteCatalogEntry } from "../src/router-resolve.js";
+import { assembleCatalog, createModelRouterHandler, type ProviderRoute } from "../src/model-router.js";
+import { modelRouterBaseUrl, modelRouterEnabled, modelRouterPort, resolveRoute, type RouteCatalogEntry } from "../src/router-resolve.js";
 
 interface FakeUpstream {
   url: string;
@@ -85,6 +85,32 @@ function anthropicReply(res: http.ServerResponse, text: string) {
     }),
   );
 }
+
+test("assembleCatalog orders by the provider table, not discovery order (z.ai first so GLM duplicates pass through)", () => {
+  /* discovery yields fireworks before zai (modelCatalog's ROUTES order) —
+     the resolution catalog must NOT inherit it */
+  const discovered = [
+    { provider: "fireworks", models: ["accounts/fireworks/models/kimi-k3", "glm-4.7"] },
+    { provider: "zai", models: ["glm-4.7", "glm-4.6"] },
+    { provider: "router", models: ["glm/glm-4.7"] },
+  ];
+  const entries = assembleCatalog(discovered);
+  assert.deepEqual(
+    entries.map((e) => [e.provider, e.model]),
+    [
+      ["zai", "glm-4.7"],
+      ["zai", "glm-4.6"],
+      ["fireworks", "accounts/fireworks/models/kimi-k3"],
+      ["fireworks", "glm-4.7"],
+      ["router", "glm/glm-4.7"],
+    ],
+  );
+  /* the pinned consequence: a bare GLM id resolves to z.ai's Anthropic
+     route (pass-through), never to a provider that would transform it */
+  assert.deepEqual(resolveRoute("glm-4.7", entries), { provider: "zai", protocol: "anthropic" });
+  /* unknown providers in discovery are dropped (no table row → no route) */
+  assert.deepEqual(assembleCatalog([{ provider: "mystery", models: ["m-1"] }]), []);
+});
 
 test("the rollout gate: TRUSS_MODEL_ROUTER switches claude's default base URL; an explicit TRUSS_CLAUDE_BASE_URL always wins", () => {
   const savedGate = process.env.TRUSS_MODEL_ROUTER;

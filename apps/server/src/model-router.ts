@@ -90,35 +90,47 @@ function routerRouteEnabled(): boolean {
 }
 
 /**
- * The aggregated catalog, in preference order: the direct provider routes
- * first (z.ai's Anthropic route leads, so GLM duplicates pass through
- * untransformed), the 9router aggregator last. Cache: per-request upstream
- * probes would multiply every completion into four catalog fetches.
+ * The aggregated catalog, in preference order — MODEL_ROUTER_PROVIDERS order,
+ * NOT the discovery order: z.ai's Anthropic route leads so GLM duplicates
+ * pass through untransformed, the 9router aggregator trails (a direct route
+ * always beats the aggregator's alias for the same id). Cache: per-request
+ * upstream probes would multiply every completion into four catalog fetches.
  */
 let catalogCache: { at: number; entries: RouteCatalogEntry[] } | null = null;
+
+/** pure: assemble the resolution catalog from per-provider model id lists,
+    in provider-table preference order */
+export function assembleCatalog(
+  discovered: { provider: string; models: string[] }[],
+  providers: ProviderRoute[] = MODEL_ROUTER_PROVIDERS,
+): RouteCatalogEntry[] {
+  const byId = new Map(discovered.map((d) => [d.provider, d.models]));
+  const entries: RouteCatalogEntry[] = [];
+  for (const p of providers) {
+    for (const id of byId.get(p.id) ?? []) entries.push({ provider: p.id, model: id, protocol: p.protocol });
+  }
+  return entries;
+}
 
 export async function routerCatalog(opts: { force?: boolean; fetchImpl?: typeof fetch } = {}): Promise<RouteCatalogEntry[]> {
   if (!opts.force && !opts.fetchImpl && catalogCache && Date.now() - catalogCache.at < CATALOG_TTL_MS) {
     return catalogCache.entries;
   }
   const fetchImpl = opts.fetchImpl ?? fetch;
-  const entries: RouteCatalogEntry[] = [];
+  const discovered: { provider: string; models: string[] }[] = [];
 
-  const protocolByProvider = new Map(MODEL_ROUTER_PROVIDERS.map((p) => [p.id, p.protocol]));
   const providers = await modelCatalog(opts.force).catch(() => [] as Awaited<ReturnType<typeof modelCatalog>>);
-  for (const p of providers) {
-    const protocol = protocolByProvider.get(p.id);
-    if (!protocol) continue;
-    for (const m of p.models) entries.push({ provider: p.id, model: m.id, protocol });
-  }
+  for (const p of providers) discovered.push({ provider: p.id, models: p.models.map((m) => m.id) });
 
   if (routerRouteEnabled()) {
     const live = await fetchJson(ROUTER_CATALOG_URL, fetchImpl);
-    for (const m of live?.data ?? []) {
-      if (typeof m?.id === "string" && m.id) entries.push({ provider: "router", model: m.id, protocol: "openai" });
-    }
+    discovered.push({
+      provider: "router",
+      models: (live?.data ?? []).map((m: any) => m?.id).filter((id: any) => typeof id === "string" && id.length > 0),
+    });
   }
 
+  const entries = assembleCatalog(discovered);
   if (!opts.fetchImpl) catalogCache = { at: Date.now(), entries };
   return entries;
 }
