@@ -62,6 +62,11 @@ body {
   --dv-activegroup-hiddenpanel-tab-color: var(--t-dim);
   --dv-inactivegroup-visiblepanel-tab-color: var(--t-mute);
   --dv-inactivegroup-hiddenpanel-tab-color: var(--t-dim);
+  /* the context menu must not fall back to the hidden-tab vars above (their
+     transparency and dimness are deliberate for the strip, wrong for a
+     popup) — it gets its own opaque surface and readable text (issue #172) */
+  --dv-context-menu-background-color: var(--t-bg2);
+  --dv-context-menu-color: var(--t-fg);
   --dv-tab-divider-color: transparent;
   --dv-separator-border: transparent;
   --dv-sash-color: transparent;
@@ -107,6 +112,14 @@ body {
    width + flex:none wins once chromeTabLayout has run */
 .truss-dock .dv-tab { flex-shrink: 1; min-width: 0; overflow: hidden; }
 .truss-dock .dv-watermark { background: var(--t-bg1); }
+
+/* the tab context menu pops over arbitrary panel content — dockview's own
+   rule ties its border to the (transparent) tab divider, so give the menu
+   chrome of its own: a real border separates it, a shadow lifts it */
+.truss-dock .dv-context-menu {
+  border: 1px solid var(--t-line2);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+}
 
 /* ── splitter junction handles (issue #148, components/SplitJunctions.tsx):
    where a vertical and a horizontal sash cross, the crossing is a grabbable
