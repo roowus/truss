@@ -47,6 +47,11 @@ test("the copy-command box cannot overflow (min-width:0 + scrollable code)", asy
   assert.ok(html, "pairingPage must exist (see logo test)");
   assert.ok(/\.cmd\s+code\s*\{[^}]*min-width:\s*0/.test(html), "the flex child carries min-width:0 — today it forces the box past the card edge");
   assert.ok(/\.cmd\s+code\s*\{[^}]*overflow-x:\s*auto/.test(html), "long commands scroll inside the box, never overflow it");
+  /* regression pin (audit round 2, B1): .cmd code shrinking is not enough —
+     the step wrapper div is itself a flex item, and with the default
+     min-width:auto it tracks the widest content, so the overflow just moves
+     up a level (found in a real browser with the code rule already green) */
+  assert.ok(/\.step\s*>\s*div\s*\{[^}]*min-width:\s*0/.test(html), "the step wrapper flex item also carries min-width:0 — without it the overflow moves up a level and the box still spills past the card");
 });
 
 test("the page stays self-contained + sane (viewport, dark, no external deps)", async () => {
