@@ -77,7 +77,7 @@ export function SettingsPanel() {
             <span className="text-[12px] text-[var(--t-fg2)]">{spaces.length} workspace{spaces.length === 1 ? "" : "s"}</span>
             <Btn variant="outline" icon="plus" className="ml-auto" onClick={() => desktops.create()}>New workspace</Btn>
           </div>
-          <p className="mt-2 text-[11.5px] text-[var(--t-dim)]">Switch in the bar above, or with Alt+1–9. Right-click a tab to copy or move it to another desktop.</p>
+          <p className="mt-2 text-[11.5px] text-[var(--t-dim)]">Switch in the bar above, or with Alt+1–9. Alt+N creates a workspace, Alt+Shift+W closes the active one, Alt+Shift+T reopens what you closed. Right-click a tab to copy or move it to another desktop.</p>
           {spaces.some((sp) => sp.archived) && (
             <div className="mt-3">
               <div className="text-[10.5px] font-medium uppercase tracking-[0.08em] text-[var(--t-dim)] mb-1.5">Archived</div>

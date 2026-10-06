@@ -85,7 +85,7 @@ export function DesktopStrip() {
               return (
                 <button
                   aria-label={`Close workspace ${space.name}`}
-                  title={`Close workspace ${space.name} and its tabs (Ctrl+Shift+Z reopens)`}
+                  title={`Close workspace ${space.name} and its tabs (Alt+Shift+W closes the active one; Alt+Shift+T reopens)`}
                   className={cn(
                     "w-[21px] h-6 grid place-items-center rounded hover:bg-white/[0.07] text-[var(--t-dim)] hover:text-[var(--t-red)]",
                     closeMode === "always" ? "opacity-70 hover:opacity-100" : "opacity-0 group-hover:opacity-100 focus:opacity-100",
@@ -107,7 +107,7 @@ export function DesktopStrip() {
           </div>
         ))}
       </div>
-      <IconBtn icon="plus" label="New workspace" onClick={() => {
+      <IconBtn icon="plus" label="New workspace (Alt+N)" onClick={() => {
         const id = desktops.create();
         setTimeout(() => beginRename(id), 80);
       }} className="w-7 h-7 shrink-0" />
@@ -115,7 +115,7 @@ export function DesktopStrip() {
       <button
         ref={addTabRef}
         onClick={() => setPicker((v) => !v)}
-        title="Add a tab to this workspace (Alt+Shift+T)"
+        title="Add a tab to this workspace (Alt+T)"
         className="shrink-0 inline-flex items-center gap-1.5 h-7 px-2 rounded-md text-[12px] text-[var(--t-fg2)] hover:text-[var(--t-fg)] hover:bg-white/[0.06]"
       >
         <Icon name="plus" size={13} /> Tab

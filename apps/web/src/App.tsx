@@ -8,7 +8,7 @@ import { StatusBar, Toasts, CommandPalette } from "@/components/Chrome";
 import { NewSessionDialog, type NewSessionPreset } from "@/components/NewSessionDialog";
 import { AddHostWizard } from "./components/AddHostWizard";
 import { openPanel } from "@/lib/workspace";
-import { canClose, isCloseWindowChord, isReopenClosedChord } from "@/lib/workspaceClose";
+import { canClose, isAddTabChord, isCloseTabChord, isCloseWindowChord, isNewWorkspaceChord, isReopenClosedChord } from "@/lib/workspaceClose";
 import { TrussLogo, Spinner } from "@/components/ui";
 import { cn } from "@/utils/cn";
 
@@ -73,8 +73,12 @@ function Shell() {
     const key = (e: KeyboardEvent) => {
       const t = e.target as HTMLElement;
       const typing = t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.isContentEditable || t.closest(".xterm"));
-      /* Chrome's window chords are window-level: they fire even mid-typing. */
-      if (isCloseWindowChord(e)) {
+      /* The Alt family carries Chrome's commands on modifiers browsers
+         actually deliver (predicates in lib/workspaceClose.ts; all yield
+         while typing). The legacy Cmd/Ctrl+Shift+W alias is Chrome's window
+         chord: window-level, it fires even mid-typing wherever a setup
+         delivers it. */
+      if (isCloseWindowChord(e, !!typing)) {
         e.preventDefault();
         const live = desktops.state.spaces.filter((s) => !s.archived);
         if (canClose(live, desktops.state.activeId)) desktops.remove(desktops.state.activeId);
@@ -85,10 +89,16 @@ function Shell() {
       } else if (isReopenClosedChord(e, !!typing)) {
         e.preventDefault();
         desktops.reopenClosed();
+      } else if (isCloseTabChord(e, !!typing)) {
+        e.preventDefault();
+        desktops.closeActivePanel();
+      } else if (isNewWorkspaceChord(e, !!typing)) {
+        e.preventDefault();
+        desktops.create();
       } else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
         e.preventDefault();
         setPalette((p) => !p);
-      } else if (!typing && e.altKey && e.shiftKey && e.key.toLowerCase() === "t") {
+      } else if (isAddTabChord(e, !!typing)) {
         e.preventDefault();
         window.dispatchEvent(new Event("truss:add-tab"));
       } else if ((e.metaKey || e.ctrlKey) && e.key === ",") {

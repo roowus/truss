@@ -2,6 +2,7 @@ import { useCallback, useRef, useSyncExternalStore } from "react";
 import type { DockviewApi, IDockviewPanel, SerializedDockview } from "dockview-react";
 import { normalizeLayoutSizes } from "./layoutSanitize";
 import {
+  activePanelToClose,
   canClose,
   canRestore,
   freshPanels,
@@ -65,7 +66,7 @@ interface DesktopState {
   activeId: string;
   hosts: Record<string, HostPreference>;
   settings: UiSettings;
-  /** Undo stack for "reopen what I closed" (Chrome's gesture; the chord here is Cmd/Ctrl+Shift+Z — browsers reserve Shift+T). Capped. Mixed: workspaces AND tabs. Lives in state so the Trash panel (issue #146) can browse it live; persisted with the layout doc. */
+  /** Undo stack for "reopen what I closed" (Chrome's gesture; the advertised chord is Alt+Shift+T — Chrome's own shape with Alt for Ctrl — with Cmd/Ctrl+Shift+Z as an "undo the close" alias; browsers reserve Cmd/Ctrl+Shift+T). Capped. Mixed: workspaces AND tabs. Lives in state so the Trash panel (issue #146) can browse it live; persisted with the layout doc. */
   closed: ClosedEntry[];
   /** Per-session "read up to here" marks (ms epoch) for the sidebar's
       unread badge (issue #173), persisted with the layout doc. undefined
@@ -462,7 +463,7 @@ class DesktopManager {
     for (const tid of terminals) this.cleanupTerminalLater(tid);
     this.queueSave();
     /* The chord is browser-reserved in some tabs, so name the sure path too. */
-    store.toast("info", `Closed workspace "${space.name}"`, "Reopen it from the command palette (Ctrl/⌘ K) or with Ctrl/⌘ Shift+Z.");
+    store.toast("info", `Closed workspace "${space.name}"`, "Reopen it from the command palette (Ctrl/⌘ K) or with Alt+Shift+T.");
   }
 
   /** The entry reopenClosed() would restore, or null when the undo stack is empty. */
@@ -574,6 +575,16 @@ class DesktopManager {
       this.suppressPanelClose(spaceId, p.id);
       p.api.close();
     }
+  }
+
+  /**
+   * The Alt+W chord (Chrome's Ctrl+W): close the active workspace's active
+   * tab. Goes through plain api.close() so the undo capture is the same one
+   * the tab's own X gets (recordPanelClose pushes the single-panel entry;
+   * machinery tabs like welcome close without one). No active tab, no-op.
+   */
+  closeActivePanel() {
+    activePanelToClose((id) => this.apis.get(id), this.state.activeId)?.api.close();
   }
 
   updateSettings(patch: Partial<UiSettings>) {
