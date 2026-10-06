@@ -77,6 +77,46 @@ gh pr list -R "$REPO" --state open --label audit --label ready-for-review \
     echo "$(date -Is) PR #$n: stripped premature ready-for-review (audit label still on)"
 done
 
+# needs-answer wake: a worker parked on a question polls NOTHING — this sweep
+# watches the PR/issue comments and prompts the owning session the moment a
+# new comment lands after its question. (Comments all share the repo owner's
+# login — worker and developer alike — so the trigger is "newest comment id
+# moved", baselined on first sight.)
+gh pr list -R "$REPO" --state open --label needs-answer --json number --jq '.[].number' 2>/dev/null > "$SPOOL/needs-answer.txt"
+while read -r n; do
+  [ -n "$n" ] || continue
+  LATEST=$(gh api "repos/$REPO/issues/$n/comments" --jq '.[-1].id // empty' 2>/dev/null | tail -1)
+  [ -n "$LATEST" ] || continue
+  KEY="needs-answer-$n"
+  BASELINE=$(python3 -c "
+import json
+try: print(json.load(open('$STATE')).get('$KEY', ''))
+except Exception: pass" 2>/dev/null)
+  if [ -z "$BASELINE" ]; then
+    python3 -c "
+import json
+try: d = json.load(open('$STATE'))
+except Exception: d = {}
+d['$KEY'] = '$LATEST'; json.dump(d, open('$STATE', 'w'))"
+    continue
+  fi
+  if [ "$LATEST" != "$BASELINE" ]; then
+    SID=$(python3 -c "
+import json
+try:
+    for e in json.load(open('$HOME/.local/state/truss-sessions.json')):
+        if str(e.get('pr')) == '$n': print(e['session']); break
+except Exception: pass" 2>/dev/null)
+    python3 -c "
+import json
+d = json.load(open('$STATE')); d['$KEY'] = '$LATEST'; json.dump(d, open('$STATE', 'w'))"
+    if [ -n "$SID" ]; then
+      curl -sS -m 8 -X POST http://127.0.0.1:3080/plugins/dsh-spawn/prompt -H 'content-type: application/json'         -d "{"sessionId": "$SID", "prompt": "A comment just landed on PR #$n — likely the developer's answer to your question. Read it (gh pr view $n --comments), and if it answers you: remove the needs-answer label, clear your unread badge, retitle [working], ledger working, continue. If it is not an answer, stay parked."}" >/dev/null 2>&1
+      echo "$(date -Is) PR #$n: answer landed — woke $SID"
+    fi
+  fi
+done < "$SPOOL/needs-answer.txt"
+
 # unpark CI: bot pushes park pull_request runs as action_required (GitHub's
 # bot approval gate). Approving as the local user clears them; without this
 # every automated fix push leaves the PR showing "workflow needs approval".
