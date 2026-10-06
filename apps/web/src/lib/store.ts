@@ -792,6 +792,19 @@ class Store {
       return { sessions: { ...s.sessions, [id]: { ...meta, title: next } } };
     });
   }
+  /* sidebar host rename (issue #147): the label is display-only (the id is
+     the identity), so the row patches in place like a pin */
+  async renameHost(id: string, label: string) {
+    const be = this.state.backend;
+    if (!be) return;
+    try {
+      await be.renameHost(id, label);
+    } catch (e: any) {
+      this.toast("error", "Couldn't rename host", e?.message ?? String(e));
+      return;
+    }
+    this.set((s) => ({ hosts: s.hosts.map((h) => (h.id === id ? { ...h, label: label.trim().slice(0, 64) } : h)) }));
+  }
   /* sidebar host delete (issue #85): a primary affordance must not fail
      silently — toast on error, refresh either way */
   async deleteHost(id: string) {

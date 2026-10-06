@@ -111,6 +111,8 @@ export interface Backend {
   rotateHostToken(id: string): Promise<{ token: string }>;
   revokeHost(id: string, revoked: boolean): Promise<unknown>;
   pinHost(id: string, pinned: boolean): Promise<unknown>;
+  /** relabel a remote host (issue #147): display-only — the id is the identity and never changes */
+  renameHost(id: string, label: string): Promise<unknown>;
   deleteHost(id: string): Promise<unknown>;
   /** installer delivery (issue #1): short single-use pairing command, or
      taildrop the standalone script to the picked tailnet device.
@@ -259,6 +261,7 @@ export function createLiveBackend(): Backend {
     rotateHostToken: (id) => req("POST", `/api/hosts/${encodeURIComponent(id)}/token`, {}),
     revokeHost: (id, revoked) => req("POST", `/api/hosts/${encodeURIComponent(id)}/revoke`, { revoked }),
     pinHost: (id, pinned) => req("POST", `/api/hosts/${encodeURIComponent(id)}/pin`, { pinned }),
+    renameHost: (id, label) => req("POST", `/api/hosts/${encodeURIComponent(id)}/rename`, { label }),
     deleteHost: (id) => req("DELETE", `/api/hosts/${encodeURIComponent(id)}`),
     pairHost: (id, token, serverUrl) => req("POST", `/api/hosts/${encodeURIComponent(id)}/pair`, { token, serverUrl }),
     taildropHost: (id, peer, token, serverUrl) => req("POST", `/api/hosts/${encodeURIComponent(id)}/taildrop`, { peer, token, serverUrl }),

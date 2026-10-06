@@ -216,13 +216,17 @@ worth ten stalled guesses, and ten noise questions is worse than guessing.
    session so the GUI sidebar shows the dot:
    `curl -sS -X POST http://127.0.0.1:3080/plugins/dsh-unread/mark -H 'content-type: application/json' -d "{\"sessionId\": \"$DSH_SESSION_ID\", \"unread\": true}"`
 4. Ledger: set your entry to `"state": "blocked"`.
-5. Self-wake every ~15 minutes: check for a reply (a comment newer than your
-   question is the answer; the developer may also message your session
-   directly — the deep link is in your PR body and your question comment).
-   On an answer: remove the `needs-answer` label, clear the unread mark (same
-   route with `"unread": false`), retitle back to `[working]`, ledger back to
-   `"working"`, and continue with the answer. No answer after several wakes is fine — stay parked; do
-   NOT proceed on a guess.
+5. **Then PARK — no self-wake polling.** Each poll is a turn in this chat,
+   and a dozen "still no answer" turns bury the question the developer
+   opened the session to read. The audit watcher already polls GitHub every
+   2 minutes and will prompt you the moment a reply lands on the PR/issue;
+   a direct message in this session wakes you too. So: no reminders, no
+   re-arms, silence until the answer arrives. On the answer: remove the
+   `needs-answer` label, clear the unread mark (same route with
+   `"unread": false`), retitle back to `[working]`, ledger back to
+   `"working"`, and continue. Never proceed on a guess — parked is a valid
+   state, and the label + badge + title keep the question visible without
+   chat noise.
 
 ## If the developer messages you (any state, any reason)
 

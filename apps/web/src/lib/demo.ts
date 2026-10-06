@@ -777,6 +777,15 @@ export function createDemoBackend(): Backend {
       demoHosts = demoHosts.filter((h) => h.id !== id);
       return { ok: true };
     },
+    renameHost: async (id, label) => {
+      await net(20);
+      const h = demoHosts.find((x) => x.id === id);
+      if (!h) throw new ApiError(404, `no such host: ${id}`);
+      const next = label.trim().slice(0, 64);
+      if (!next) throw new ApiError(400, "label must not be blank");
+      h.label = next;
+      return { ok: true };
+    },
     pairHost: async (_id, _t, serverUrl) => ({ code: "k3xm7q", expiresAt: Date.now() + 600_000, url: `${serverUrl}/i/k3xm7q`, command: `curl -fsSL ${serverUrl}/i/k3xm7q | sh` }),
     taildropHost: async (id) => {
       const file = demoDropName(id);
