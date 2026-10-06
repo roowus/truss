@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { IDockviewPanelProps } from "dockview-react";
 import { store, useApp, useNow, capsOf, type Agent, type SessionView } from "@/lib/store";
 import { baseHarness, fmtCost, fmtMs, fmtTokens, shortPath, ago } from "@/lib/format";
@@ -6,6 +6,7 @@ import { harnessDisplay, hostAliases } from "@/lib/device";
 import { useDesktops } from "@/lib/desktops";
 import { Btn, Empty, HarnessMark, Icon, Kbd, Select, Spinner, StateDot, TrussLogo } from "@/components/ui";
 import { openDailyDriver, openFreeShell } from "@/lib/workspace";
+import { sparkHoverIndex, sparkPointLabel, sparkScale } from "@/lib/sparkline";
 import type { SkillInfo } from "@/lib/proto";
 import { cn } from "@/utils/cn";
 
@@ -116,7 +117,7 @@ function ContextBody({ id, view }: { id: string; view: SessionView }) {
       {hist.length > 1 && (
         <div>
           <div className="font-mono text-[10px] uppercase tracking-wider text-[var(--t-dim)] mb-1.5">occupancy over turns</div>
-          <Spark points={hist.map((p) => p.used / p.total)} color={color} />
+          <Spark points={hist.map((p) => p.used / p.total)} color={color} unit="%" domain={[0, 1]} times={hist.map((p) => p.t)} />
         </div>
       )}
 
@@ -176,14 +177,72 @@ function Totals({ tin, tout, cost, hasTok, hasCost, calls }: { tin: number; tout
   );
 }
 
-export function Spark({ points, color }: { points: number[]; color: string }) {
+/**
+ * History sparkline with a real y-axis (issue #161): unit-labeled ticks on
+ * the side, a hover crosshair snapping to the nearest point, and a tooltip
+ * with the exact value and its time. Points are REAL values (fractions of 1
+ * for %, bytes/s for rates) — never pre-normalized.
+ */
+export function Spark({ points, color, unit, domain, times }: {
+  points: number[]; color: string; unit: string; domain?: [number, number]; times?: number[];
+}) {
   const W = 280, H = 48;
-  const d = points.map((p, i) => `${i === 0 ? "M" : "L"}${(i / (points.length - 1)) * W},${H - p * H}`).join(" ");
+  const [hover, setHover] = useState<number | null>(null);
+  const box = useRef<HTMLDivElement>(null);
+  const n = points.length;
+  const scale = sparkScale(points, { domain, unit });
+  const span = scale.max - scale.min;
+  const px = (i: number) => (n > 1 ? (i / (n - 1)) * W : W / 2);
+  const py = (v: number) => H - ((v - scale.min) / span) * H;
+  const d = points.map((p, i) => `${i === 0 ? "M" : "L"}${px(i)},${py(p)}`).join(" ");
+  const fx = hover == null ? 0 : hover / Math.max(1, n - 1);
+
+  const track = (e: React.PointerEvent) => {
+    const el = box.current;
+    if (!el || n === 0) return;
+    const r = el.getBoundingClientRect();
+    setHover(sparkHoverIndex(n, (e.clientX - r.left) / Math.max(1, r.width)));
+  };
+
   return (
-    <svg viewBox={`0 0 ${W} ${H}`} className="w-full h-12" preserveAspectRatio="none">
-      <path d={`${d} L${W},${H} L0,${H} Z`} fill={color} opacity=".12" />
-      <path d={d} fill="none" stroke={color} strokeWidth="1.5" vectorEffect="non-scaling-stroke" />
-    </svg>
+    <div className="flex items-stretch gap-1.5">
+      <div ref={box} className="relative min-w-0 flex-1" onPointerMove={track} onPointerDown={track} onPointerLeave={() => setHover(null)}>
+        <svg viewBox={`0 0 ${W} ${H}`} className="block h-12 w-full" preserveAspectRatio="none">
+          {scale.ticks.map((t) => (
+            <line key={t.value} x1="0" x2={W} y1={py(t.value)} y2={py(t.value)} stroke="var(--t-line)" strokeWidth="1" strokeDasharray="2 4" vectorEffect="non-scaling-stroke" />
+          ))}
+          {n > 1 && <path d={`${d} L${W},${H} L0,${H} Z`} fill={color} opacity=".12" />}
+          {n > 0 && <path d={d} fill="none" stroke={color} strokeWidth="1.5" vectorEffect="non-scaling-stroke" />}
+          {hover != null && (
+            <>
+              <line x1={px(hover)} x2={px(hover)} y1="0" y2={H} stroke="var(--t-line2)" strokeWidth="1" vectorEffect="non-scaling-stroke" />
+              <circle cx={px(hover)} cy={py(points[hover])} r="3" fill={color} stroke="var(--t-bg0)" strokeWidth="1.5" vectorEffect="non-scaling-stroke" />
+            </>
+          )}
+        </svg>
+        {hover != null && (
+          <div
+            className="pointer-events-none absolute z-10 whitespace-nowrap rounded border border-[var(--t-line2)] bg-[var(--t-bg2)] px-1.5 py-0.5 font-mono text-[10px] tabular-nums text-[var(--t-fg)] shadow-sm"
+            style={{
+              left: `${(px(hover) / W) * 100}%`,
+              bottom: `${((H - py(points[hover])) / H) * 100}%`,
+              marginBottom: 8,
+              transform: fx > 2 / 3 ? "translateX(-100%)" : fx < 1 / 3 ? "translateX(0)" : "translateX(-50%)",
+            }}
+          >
+            {sparkPointLabel(points[hover], { at: times?.[hover] ?? Date.now(), unit })}
+          </div>
+        )}
+      </div>
+      {/* the y-axis: unit-labeled ticks at their heights */}
+      <div aria-hidden className="relative w-11 shrink-0 font-mono text-[9px] leading-none text-[var(--t-dim)]">
+        {scale.ticks.map((t) => (
+          <span key={t.value} className="absolute right-0 tabular-nums" style={{ top: `${((scale.max - t.value) / span) * 100}%`, transform: "translateY(-50%)" }}>
+            {t.label}
+          </span>
+        ))}
+      </div>
+    </div>
   );
 }
 
