@@ -1,8 +1,10 @@
 /**
- * Splitter junctions (issue #148): where a vertical boundary crosses a
+ * Splitter junctions (issues #148, #187): where a vertical boundary crosses a
  * horizontal one, the crossing is a grabbable vertex. Dragging it moves both
- * boundaries, so the four adjacent groups resize together and everything
- * else stays put.
+ * boundaries, so the adjacent groups resize together and everything else
+ * stays put. A crossing with three or four adjacent panels is a junction: a
+ * T (one panel spans both quadrants on its side) drags like a four-way +,
+ * except the spanning panel resizes along the crossing axis only.
  *
  * Pure geometry over dockview's serialized grid (`api.toJSON().grid`): no
  * DOM, no dockview imports. The UI overlays a handle per junction, calls
@@ -36,7 +38,7 @@ export interface SplitLayout {
 export interface Junction {
   x: number;
   y: number;
-  /** the four adjacent groups, by their leaf data */
+  /** the adjacent groups, by their leaf data — three or four distinct (a T's spanning panel repeats) */
   quadrants: { tl: unknown; tr: unknown; bl: unknown; br: unknown };
 }
 
@@ -140,9 +142,11 @@ function survey(layout: SplitLayout | null | undefined): Survey {
 const EPS = 0.01;
 
 /**
- * Every crossing of a vertical and a horizontal boundary that has FOUR
- * distinct groups around it. A T or an L (one panel spanning the crossing)
- * is not a junction: the quadrant sample comes back with a repeat.
+ * Every crossing of a vertical and a horizontal boundary that has THREE OR
+ * FOUR distinct groups around it. Four is the classic +; three is a T, where
+ * one panel spans the crossing and covers both quadrants on its side (the
+ * quadrant sample names it twice). A true corner, where the boundaries only
+ * touch and just two panels meet, is not a junction.
  */
 export function splitJunctions(layout: SplitLayout): Junction[] {
   const s = survey(layout);
@@ -162,8 +166,10 @@ export function splitJunctions(layout: SplitLayout): Junction[] {
       const br = at(v.x + EPS, h.y + EPS);
       if (tl === undefined || tr === undefined || bl === undefined || br === undefined) continue;
       /* Set is SameValueZero: primitives by value, group objects by
-         reference — either way a spanning panel shows up as a repeat */
-      if (new Set([tl, tr, bl, br]).size !== 4) continue;
+         reference — either way a spanning panel shows up as a repeat.
+         Three distinct panels means a T (one spans two quadrants); fewer
+         than three means a corner, which is no junction. */
+      if (new Set([tl, tr, bl, br]).size < 3) continue;
       seen.add(key);
       out.push({ x: v.x, y: h.y, quadrants: { tl, tr, bl, br } });
     }

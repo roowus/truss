@@ -25,9 +25,9 @@ interface DragState {
 }
 
 /**
- * Grab handles at splitter junctions (issue #148): where a vertical and a
- * horizontal sash cross, the crossing is a vertex — dragging it moves both
- * boundaries and resizes the four adjacent groups together. All geometry is
+ * Grab handles at splitter junctions (issues #148, #187): where a vertical
+ * and a horizontal sash cross, the crossing is a vertex — dragging it moves
+ * both boundaries and resizes the adjacent groups together. All geometry is
  * pure (lib/splitJunction.ts) over the serialized grid; this overlay only
  * places handles and pushes the dragged sizes into the live groups.
  */
@@ -136,8 +136,8 @@ export function SplitJunctionHandles({ api, gap = 0 }: { api: DockviewApi; gap?:
           className="truss-junction"
           style={{ left: h.x, top: h.y }}
           role="separator"
-          aria-label="Drag to resize the four adjacent panels"
-          title="Drag to resize the four adjacent panels"
+          aria-label="Drag to resize the adjacent panels"
+          title="Drag to resize the adjacent panels"
           onPointerDown={(e) => onPointerDown(e, h.junction)}
           onPointerMove={onPointerMove}
           onPointerUp={endDrag}

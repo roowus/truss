@@ -70,6 +70,38 @@ test("changedGroupSizes: dockview-shaped leaves (group state objects) resolve by
   assert.deepEqual(changedGroupSizes(before, before), [], "no drag, no setSize calls");
 });
 
+/* Issue #187: a T-junction drag applies to the THREE adjacent groups — the
+   spanning panel's rect changes on the crossing axis only. */
+test("changedGroupSizes on a T drag: exactly the three adjacent groups, spanning panel's width untouched", () => {
+  const tee = {
+    width: 800,
+    height: 600,
+    orientation: "VERTICAL" as const,
+    root: {
+      type: "branch" as const,
+      data: [
+        { type: "leaf" as const, size: 380, data: "TOP-SPAN" },
+        {
+          type: "branch" as const,
+          size: 220,
+          data: [
+            { type: "leaf" as const, size: 500, data: "BL" },
+            { type: "leaf" as const, size: 300, data: "BR" },
+          ],
+        },
+      ],
+    },
+  };
+  const j = splitJunctions(tee).find((jj) => jj.x === 500 && jj.y === 380);
+  assert.ok(j, "the T crossing is a junction");
+  const changed = changedGroupSizes(tee, dragJunction(tee, j, 60, -40));
+  assert.deepEqual(
+    Object.fromEntries(changed.map((c) => [c.id, [c.width, c.height]])),
+    { "TOP-SPAN": [800, 340], BL: [560, 260], BR: [240, 260] },
+    "the split moved with dx, the full-width boundary with dy; the spanning panel kept its full width",
+  );
+});
+
 test("junctionCenter: the handle sits at the gap's center, half a gap down-right of the boundary", async () => {
   const { junctionCenter } = await import("../src/lib/splitJunction");
   const j = splitJunctions(grid2x2())[0];
