@@ -19,6 +19,10 @@ import { cn } from "@/utils/cn";
 
 const GAUGE_C = (pct: number) => (pct > 90 ? "var(--t-red)" : pct > 70 ? "var(--t-amber)" : "var(--t-teal)");
 
+/* counter rates (ctxt/intr/forks per second) run into the tens of thousands —
+   compact them the way load averages never need */
+const fmtCnt = (n: number) => (n >= 100_000 ? `${Math.round(n / 1000)}k` : n >= 10_000 ? `${(n / 1000).toFixed(1)}k` : String(Math.round(n)));
+
 export function MonitorPanel(_props: IDockviewPanelProps) {
   const be = useApp((s) => s.backend);
   const hosts = useApp((s) => s.hosts);
@@ -117,9 +121,27 @@ function MonitorBody({ m, hist }: { m: HostMetrics; hist: { t: number; cpu: numb
       <div className="flex items-center gap-3 flex-wrap">
         <div className="font-mono text-[14px] text-[var(--t-fg)]">{m.host.hostname}</div>
         <div className="font-mono text-[10.5px] text-[var(--t-dim)]">{m.host.os} · {m.host.kernel} · {m.host.arch}</div>
-        <div className="font-mono text-[10.5px] text-[var(--t-dim)]">{m.host.cpuModel} · {m.host.cores} cores</div>
-        <div className="ml-auto font-mono text-[10.5px] text-[var(--t-mute)]">up {fmtUptime(m.uptimeSec)}</div>
+        <div className="font-mono text-[10.5px] text-[var(--t-dim)]">
+          {m.host.cpuModel} · {m.host.cores} cores
+          {m.host.freqMhz ? ` · ${m.host.freqMhz} MHz` : ""}
+        </div>
+        <div className="ml-auto font-mono text-[10.5px] text-[var(--t-mute)]" title={m.host.bootAt ? `booted ${new Date(m.host.bootAt).toLocaleString()}` : undefined}>
+          up {fmtUptime(m.uptimeSec)}
+          {m.host.bootAt ? ` · since ${new Date(m.host.bootAt).toLocaleDateString(undefined, { month: "short", day: "numeric" })} ${new Date(m.host.bootAt).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })}` : ""}
+        </div>
       </div>
+
+      {/* users + pending updates (omitted by older agents) */}
+      {m.sys && (
+        <div className="flex items-center gap-3 flex-wrap -mt-2 font-mono text-[10.5px] text-[var(--t-dim)]">
+          <span>users: {m.sys.users.length ? m.sys.users.join(", ") : "none"}</span>
+          {m.sys.updatesPending != null && (
+            <span className={m.sys.updatesPending > 0 ? "text-[var(--t-amber)]" : undefined}>
+              {m.sys.updatesPending > 0 ? `${m.sys.updatesPending} updates pending` : "updates: none pending"}
+            </span>
+          )}
+        </div>
+      )}
 
       {/* gauges */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
@@ -149,7 +171,22 @@ function MonitorBody({ m, hist }: { m: HostMetrics; hist: { t: number; cpu: numb
               </div>
             ))}
           </div>
-          <div className="mt-2 font-mono text-[10px] text-[var(--t-dim)]">load {m.cpu.load.map((l) => l.toFixed(2)).join(" · ")} · {m.cpu.running} running · {m.cpu.blocked} blocked</div>
+          <div className="mt-2 font-mono text-[10px] text-[var(--t-dim)]">
+            load {m.cpu.load.map((l) => l.toFixed(2)).join(" · ")} · {m.cpu.running} running · {m.cpu.blocked} blocked
+            {m.cpu.zombies != null && (
+              <>
+                {" · "}
+                <span className={m.cpu.zombies > 0 ? "text-[var(--t-amber)]" : undefined} title="zombie processes (state Z)">
+                  {m.cpu.zombies} zombies
+                </span>
+              </>
+            )}
+          </div>
+          {m.cpu.ctxtPerSec != null && (
+            <div className="mt-1 font-mono text-[10px] text-[var(--t-dim)]" title="per-second rates from /proc/stat counters">
+              ctxt {fmtCnt(m.cpu.ctxtPerSec)}/s · intr {fmtCnt(m.cpu.intrPerSec ?? 0)}/s · forks {fmtCnt(m.cpu.forksPerSec ?? 0)}/s
+            </div>
+          )}
         </section>
         <section className="rounded-lg border border-[var(--t-line)] bg-[var(--t-bg0)]/60 p-3">
           <div className="font-mono text-[10px] uppercase tracking-wider text-[var(--t-dim)] mb-2">pressure (PSI, 10s avg)</div>
@@ -186,6 +223,18 @@ function MonitorBody({ m, hist }: { m: HostMetrics; hist: { t: number; cpu: numb
               <span className="w-10 text-right font-mono text-[10px] tabular-nums" style={{ color: GAUGE_C(d.pct) }}>{d.pct}%</span>
             </div>
           ))}
+          {m.diskIo && m.diskIo.length > 0 && (
+            <>
+              <div className="mt-2.5 pt-2 border-t border-[var(--t-line)]/60 font-mono text-[10px] uppercase tracking-wider text-[var(--t-dim)]">disk i/o</div>
+              {m.diskIo.map((d) => (
+                <div key={d.device} className="flex items-center gap-2 py-0.5 font-mono text-[11px]">
+                  <span className="w-20 truncate text-[var(--t-fg2)]">{d.device}</span>
+                  <span className="text-[var(--t-teal)]">read {fmtSize(d.readBps)}/s</span>
+                  <span className="text-[var(--t-sky)]">write {fmtSize(d.writeBps)}/s</span>
+                </div>
+              ))}
+            </>
+          )}
         </section>
         <section className="rounded-lg border border-[var(--t-line)] bg-[var(--t-bg0)]/60 p-3">
           <div className="font-mono text-[10px] uppercase tracking-wider text-[var(--t-dim)] mb-2">network</div>
@@ -197,8 +246,56 @@ function MonitorBody({ m, hist }: { m: HostMetrics; hist: { t: number; cpu: numb
               <span className="text-[var(--t-sky)]">↑ {fmtSize(n.txBps)}/s</span>
             </div>
           ))}
+          {m.sock && (
+            <div className="mt-2.5 pt-2 border-t border-[var(--t-line)]/60 font-mono text-[10px] text-[var(--t-dim)]" title={`established ${m.sock.established} · time-wait ${m.sock.tcpTw} · listen ${m.sock.listen} · close-wait ${m.sock.closeWait} · other ${m.sock.otherTcp} · raw ${m.sock.raw}`}>
+              sockets {m.sock.used} · tcp {m.sock.tcp} (est {m.sock.established} · tw {m.sock.tcpTw} · listen {m.sock.listen}) · udp {m.sock.udp}
+            </div>
+          )}
         </section>
       </div>
+
+      {/* services + logs (omitted by older agents; sections self-hide) */}
+      {((m.services && m.services.length > 0) || m.logs) && (
+        <div className="grid sm:grid-cols-2 gap-2">
+          {m.services && m.services.length > 0 && (
+            <section className="rounded-lg border border-[var(--t-line)] bg-[var(--t-bg0)]/60 p-3">
+              <div className="font-mono text-[10px] uppercase tracking-wider text-[var(--t-dim)] mb-2">services (top systemd)</div>
+              {m.services.map((s) => (
+                <div key={s.name} className="flex items-center gap-2 py-0.5 font-mono text-[11px]">
+                  <span className="flex-1 min-w-0 truncate text-[var(--t-fg2)]" title={`${s.name}.service`}>{s.name}</span>
+                  <span className="w-14 text-right tabular-nums" style={{ color: GAUGE_C(s.cpu) }}>{s.cpu}%</span>
+                  <span className="w-16 text-right text-[var(--t-mute)] tabular-nums">{s.rssMb} MB</span>
+                </div>
+              ))}
+            </section>
+          )}
+          {m.logs && (
+            <section className="rounded-lg border border-[var(--t-line)] bg-[var(--t-bg0)]/60 p-3">
+              <div className="font-mono text-[10px] uppercase tracking-wider text-[var(--t-dim)] mb-2">logs</div>
+              <div className="font-mono text-[11px] text-[var(--t-fg2)]">
+                failed units:{" "}
+                {m.logs.failedUnits.length ? (
+                  <span className="text-[var(--t-amber)]">{m.logs.failedUnits.join(", ")}</span>
+                ) : (
+                  <span className="text-[var(--t-dim)]">none</span>
+                )}
+              </div>
+              <div className="mt-0.5 font-mono text-[11px] text-[var(--t-fg2)]">
+                coredumps: <span className={m.logs.coredumps ? "text-[var(--t-amber)]" : "text-[var(--t-dim)]"}>{m.logs.coredumps ?? "—"}</span>
+              </div>
+              {m.logs.lines.length > 0 && (
+                <div className="mt-2 pt-2 border-t border-[var(--t-line)]/60 space-y-0.5">
+                  {m.logs.lines.map((l, i) => (
+                    <div key={i} className="font-mono text-[9.5px] leading-snug text-[var(--t-dim)] truncate" title={l}>
+                      {l}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </section>
+          )}
+        </div>
+      )}
 
       {/* top processes (top-25 like the reference monitor; narrow panes
           shed the least-vital columns first) */}

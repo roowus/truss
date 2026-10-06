@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync, statfsSync } from "node:fs";
+import { readdirSync, readFileSync, statfsSync, type Dirent } from "node:fs";
 import { hostname as osHostname, arch as osArch } from "node:os";
 
 /**
@@ -10,13 +10,59 @@ import { hostname as osHostname, arch as osArch } from "node:os";
 
 export interface HostMetrics {
   at: number;
-  host: { hostname: string; os: string; kernel: string; arch: string; cpuModel: string; cores: number };
+  host: {
+    hostname: string;
+    os: string;
+    kernel: string;
+    arch: string;
+    cpuModel: string;
+    cores: number;
+    /** mean current clock across cores (0 when the host exposes neither
+        cpufreq nor cpuinfo MHz — VMs often have neither) */
+    freqMhz?: number;
+    /** boot time as ms epoch (from /proc/stat btime) */
+    bootAt?: number;
+  };
   uptimeSec: number;
-  cpu: { usage: number; perCore: number[]; load: [number, number, number]; procs: number; threads: number; running: number; blocked: number };
+  cpu: {
+    usage: number;
+    perCore: number[];
+    load: [number, number, number];
+    procs: number;
+    threads: number;
+    running: number;
+    blocked: number;
+    zombies?: number;
+    /** rates per second from /proc/stat counters (0 on the first sample) */
+    ctxtPerSec?: number;
+    intrPerSec?: number;
+    forksPerSec?: number;
+  };
   pressure: { cpu: number; io: number; mem: number };
   mem: { total: number; used: number; available: number; cached: number; swapTotal: number; swapUsed: number };
   disks: { device: string; mount: string; fs: string; total: number; used: number; pct: number }[];
+  /** whole-disk I/O rates from /proc/diskstats (partitions and virtual
+      devices filtered out); 0 on the first sample */
+  diskIo?: { device: string; readBps: number; writeBps: number }[];
   net: { iface: string; rxBps: number; txBps: number }[];
+  /** socket-state counts: inuse totals from /proc/net/sockstat, per-state
+      counts from walking /proc/net/tcp{,6} */
+  sock?: {
+    tcp: number;
+    tcpTw: number;
+    established: number;
+    listen: number;
+    closeWait: number;
+    otherTcp: number;
+    udp: number;
+    raw: number;
+    used: number;
+  };
+  /** top systemd services by cpu then rss, from the cgroup v2 tree */
+  services?: { name: string; cpu: number; rssMb: number }[];
+  /** refreshed at most once a minute (subprocesses; see logsSlow) */
+  logs?: { failedUnits: string[]; coredumps: number | null; lines: string[] };
+  sys?: { users: string[]; updatesPending: number | null };
   temps: { label: string; c: number }[];
   procs: {
     pid: number;
@@ -81,7 +127,7 @@ function osName(): string {
   return m?.[1] ?? "Linux";
 }
 
-import { execFileSync } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 
 function cpuModel(): string {
   const f = read("/proc/cpuinfo");
@@ -149,6 +195,259 @@ function temps(): HostMetrics["temps"] {
     /* no thermal zones */
   }
   return out;
+}
+
+/** mean scaling_cur_freq across cores (kHz → MHz); VMs without cpufreq fall
+    back to /proc/cpuinfo "cpu MHz", then 0 (unknown) */
+function cpuFreqMhz(): number {
+  const vals: number[] = [];
+  try {
+    for (const c of readdirSync("/sys/devices/system/cpu")) {
+      if (!/^cpu\d+$/.test(c)) continue;
+      const v = Number(read(`/sys/devices/system/cpu/${c}/cpufreq/scaling_cur_freq`).trim());
+      if (v > 0) vals.push(v / 1000);
+    }
+  } catch {
+    /* no cpufreq */
+  }
+  if (vals.length) return Math.round(vals.reduce((a, b) => a + b, 0) / vals.length);
+  const mhzs = [...read("/proc/cpuinfo").matchAll(/cpu MHz\s*:\s*([\d.]+)/g)].map((m) => Number(m[1])).filter((v) => v > 0);
+  return mhzs.length ? Math.round(mhzs.reduce((a, b) => a + b, 0) / mhzs.length) : 0;
+}
+
+/* partition suffixes by name — the pure diskIoRates can't stat /sys, so
+   sda1 / nvme0n1p2 / mmcblk0p1 are recognized by shape (whole disks only) */
+const isDiskPart = (n: string) => /^(?:sd[a-z]+|vd[a-z]+|xvd[a-z]+|hd[a-z]+|md\d+|nbd\d+|zd\d+)\d+$/.test(n) || /\d+p\d+$/.test(n);
+const SKIP_DISK = /^(loop|ram|sr|dm-)/;
+
+/** two /proc/diskstats snapshots → per-device B/s rates. Pure: no fs, no
+    module state. Counter resets and zero dt yield 0, never negatives/NaN. */
+export function diskIoRates(prev: string | null, cur: string, dtMs: number): { device: string; readBps: number; writeBps: number }[] {
+  const parse = (text: string | null): Map<string, { rSec: number; wSec: number }> => {
+    const m = new Map<string, { rSec: number; wSec: number }>();
+    if (!text) return m;
+    for (const ln of text.split("\n")) {
+      const f = ln.trim().split(/\s+/);
+      /* fields per proc(5): 3=name, 6=sectors read, 10=sectors written */
+      if (f.length < 10) continue;
+      const name = f[2];
+      if (!name || SKIP_DISK.test(name) || isDiskPart(name)) continue;
+      const rSec = Number(f[5]);
+      const wSec = Number(f[9]);
+      if (!Number.isFinite(rSec) || !Number.isFinite(wSec)) continue;
+      m.set(name, { rSec, wSec });
+    }
+    return m;
+  };
+  const before = parse(prev);
+  const after = parse(cur);
+  const dtSec = dtMs / 1000;
+  const out: { device: string; readBps: number; writeBps: number }[] = [];
+  for (const [device, c] of after) {
+    const p = before.get(device);
+    let readBps = 0;
+    let writeBps = 0;
+    if (p && dtSec > 0) {
+      readBps = Math.max(0, ((c.rSec - p.rSec) * 512) / dtSec);
+      writeBps = Math.max(0, ((c.wSec - p.wSec) * 512) / dtSec);
+    }
+    out.push({ device, readBps: Math.round(readBps), writeBps: Math.round(writeBps) });
+  }
+  return out.sort((a, b) => b.readBps + b.writeBps - (a.readBps + a.writeBps));
+}
+
+/** /proc/net/sockstat → inuse totals (the file's own counters) */
+export function parseSockstat(text: string): { used: number; tcp: number; udp: number; raw: number } {
+  const out = { used: 0, tcp: 0, udp: 0, raw: 0 };
+  for (const ln of text.split("\n")) {
+    const f = ln.replace(":", "").split(/\s+/);
+    if (f[0] === "sockets" && f[1] === "used") out.used = Number(f[2]) || 0;
+    else if (f[0] === "TCP" && f[1] === "inuse") out.tcp = Number(f[2]) || 0;
+    else if (f[0] === "UDP" && f[1] === "inuse") out.udp = Number(f[2]) || 0;
+    else if (f[0] === "RAW" && f[1] === "inuse") out.raw = Number(f[2]) || 0;
+  }
+  return out;
+}
+
+/* /proc/net/tcp{,6} state hex → bucket (tcp(7)): 01 established, 06
+   time_wait, 08 close_wait, 0A listen; everything else lands in other */
+const TCP_STATES: Record<string, "established" | "timeWait" | "closeWait" | "listen"> = {
+  "01": "established",
+  "06": "timeWait",
+  "08": "closeWait",
+  "0A": "listen",
+};
+
+/** one /proc/net/tcp-family file → per-state connection counts */
+export function parseNetTcp(text: string): { established: number; timeWait: number; closeWait: number; listen: number; other: number } {
+  const out = { established: 0, timeWait: 0, closeWait: 0, listen: 0, other: 0 };
+  for (const ln of text.split("\n").slice(1)) {
+    const f = ln.trim().split(/\s+/);
+    if (f.length < 4) continue;
+    const st = f[3].toUpperCase();
+    const bucket = TCP_STATES[st];
+    if (bucket) out[bucket]++;
+    else if (/^[0-9A-F]{2}$/.test(st)) out.other++;
+  }
+  return out;
+}
+
+function sockCounts(): NonNullable<HostMetrics["sock"]> {
+  const v4 = parseNetTcp(read("/proc/net/tcp"));
+  const v6 = parseNetTcp(read("/proc/net/tcp6"));
+  const ss = parseSockstat(read("/proc/net/sockstat"));
+  return {
+    tcp: ss.tcp,
+    tcpTw: v4.timeWait + v6.timeWait,
+    established: v4.established + v6.established,
+    listen: v4.listen + v6.listen,
+    closeWait: v4.closeWait + v6.closeWait,
+    otherTcp: v4.other + v6.other,
+    udp: ss.udp,
+    raw: ss.raw,
+    used: ss.used,
+  };
+}
+
+/* cgroup v2 service walk: memory.current + cpu.stat usage_usec per .service
+   dir; cpu% needs a previous sample per unit (module state is per-process).
+    Depth cap matches the reference monitor's (whole tree is sysfs, so cheap) */
+const SVC_LIMIT = 12;
+let prevSvc = new Map<string, { usec: number; at: number }>();
+
+function services(nowMs: number, cores: number): NonNullable<HostMetrics["services"]> {
+  const out: NonNullable<HostMetrics["services"]> = [];
+  const seen = new Set<string>();
+  const walk = (dir: string, depth: number) => {
+    if (depth > 4) return;
+    let ents: Dirent[];
+    try {
+      ents = readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const e of ents) {
+      if (!e.isDirectory()) continue;
+      if (!e.name.endsWith(".service")) {
+        walk(`${dir}/${e.name}`, depth + 1);
+        continue;
+      }
+      const name = e.name.slice(0, -".service".length);
+      if (seen.has(name)) continue;
+      const p = `${dir}/${e.name}`;
+      const memRaw = read(`${p}/memory.current`).trim();
+      const mem = memRaw === "" || memRaw === "max" ? NaN : Number(memRaw);
+      let usec = NaN;
+      for (const ln of read(`${p}/cpu.stat`).split("\n")) {
+        if (ln.startsWith("usage_usec ")) {
+          usec = Number(ln.slice("usage_usec ".length));
+          break;
+        }
+      }
+      if (Number.isNaN(mem) && Number.isNaN(usec)) continue;
+      seen.add(name);
+      let cpu = 0;
+      if (!Number.isNaN(usec)) {
+        const prev = prevSvc.get(name);
+        const dt = (nowMs - (prev?.at ?? nowMs)) / 1000;
+        if (prev && dt > 0) cpu = Math.max(0, (((usec - prev.usec) / 1e6) * 100) / dt / Math.max(1, cores));
+        prevSvc.set(name, { usec, at: nowMs });
+      }
+      out.push({ name, cpu: Math.round(cpu * 10) / 10, rssMb: Number.isNaN(mem) ? 0 : Math.round(mem / 1048576) });
+    }
+  };
+  walk("/sys/fs/cgroup", 0);
+  /* dead units leave the map so it can't grow unbounded across unit churn */
+  for (const k of prevSvc.keys()) if (!seen.has(k)) prevSvc.delete(k);
+  out.sort((a, b) => b.cpu - a.cpu || b.rssMb - a.rssMb);
+  return out.slice(0, SVC_LIMIT);
+}
+
+/** /var/run/utmp binary → logged-in user names (USER_PROCESS records,
+    deduped). Record layout per utmp(5): 384 bytes, type int16 at 0,
+    user char[32] at 44. */
+export function parseUtmpUsers(buf: Uint8Array): string[] {
+  const users: string[] = [];
+  const seen = new Set<string>();
+  for (let off = 0; off + 384 <= buf.length; off += 384) {
+    if ((buf[off] | (buf[off + 1] << 8)) !== 7) continue;
+    const nameBytes = buf.subarray(off + 44, off + 76);
+    const nul = nameBytes.indexOf(0);
+    const name = Buffer.from(nameBytes.subarray(0, nul === -1 ? undefined : nul)).toString("utf8");
+    if (name && !seen.has(name)) {
+      seen.add(name);
+      users.push(name);
+    }
+  }
+  return users;
+}
+
+function sysInfo(): NonNullable<HostMetrics["sys"]> {
+  let utmp: Buffer | null = null;
+  try {
+    utmp = readFileSync("/var/run/utmp");
+  } catch {
+    /* no utmp */
+  }
+  let updatesPending: number | null = null;
+  for (const tok of read("/var/lib/update-notifier/updates-available").split(/\s+/)) {
+    if (/^\d+$/.test(tok)) {
+      updatesPending = Number(tok);
+      break;
+    }
+  }
+  return { users: utmp ? parseUtmpUsers(utmp) : [], updatesPending };
+}
+
+/* execFile that never rejects — a missing/slow probe yields "" so the
+   section degrades to empty instead of killing the whole snapshot */
+function execText(cmd: string, args: string[], timeoutMs: number): Promise<string> {
+  return new Promise((resolve) => {
+    execFile(cmd, args, { timeout: timeoutMs, maxBuffer: 1024 * 1024 }, (_err, stdout) => {
+      resolve(stdout?.toString() ?? "");
+    });
+  });
+}
+
+/* failed units + coredumps + journal tail are subprocess probes (systemctl,
+   journalctl) — far too heavy for every 3s poll, so they refresh at most
+   once a minute and every snapshot in between reuses the last result. The
+   in-flight promise is shared so overlapping polls never double-spawn. */
+const LOGS_TTL_MS = 60_000;
+type Logs = NonNullable<HostMetrics["logs"]>;
+let logsCache: { at: number; logs: Logs } | null = null;
+let logsPending: Promise<Logs> | null = null;
+
+async function logsSlow(): Promise<Logs> {
+  if (logsCache && Date.now() - logsCache.at < LOGS_TTL_MS) return logsCache.logs;
+  if (logsPending) return logsPending;
+  logsPending = (async (): Promise<Logs> => {
+    const [failedOut, journal] = await Promise.all([
+      execText("systemctl", ["--failed", "--no-legend", "--plain"], 3000),
+      execText("journalctl", ["-b", "-p", "warning..emerg", "--no-pager", "-n", "20", "-o", "short-iso"], 4000),
+    ]);
+    const failedUnits = failedOut
+      .split("\n")
+      .map((l) => l.trim().split(/\s+/)[0] ?? "")
+      .filter((l) => l.includes("."))
+      .slice(0, 12);
+    let coredumps: number | null = null;
+    try {
+      coredumps = readdirSync("/var/lib/systemd/coredump").length;
+    } catch {
+      /* no coredump dir / unreadable */
+    }
+    const lines = journal
+      .split("\n")
+      .filter((l) => l.trim().length > 0 && !l.startsWith("-- "))
+      .slice(-20);
+    const logs = { failedUnits, coredumps, lines };
+    logsCache = { at: Date.now(), logs };
+    return logs;
+  })().finally(() => {
+    logsPending = null;
+  });
+  return logsPending;
 }
 
 interface ProcSnap {
@@ -245,15 +544,18 @@ function passwdMap(): Map<number, string> {
 
 /* one sample of every live process. Only the map is wanted here: the CPU
    rates come from the collector's own cpuTimes() sample, so a second
-   /proc/stat read inside procSnap would feed nothing. */
-function procSnap(): { map: Map<number, ProcSnap> } {
+   /proc/stat read inside procSnap would feed nothing. Zombies stay in the
+   map (they render as state Z) and are counted on the side. */
+function procSnap(): { map: Map<number, ProcSnap>; zombies: number } {
   const map = new Map<number, ProcSnap>();
+  let zombies = 0;
   const passwd = passwdMap();
   for (const d of readdirSync("/proc")) {
     if (!/^\d+$/.test(d)) continue;
     try {
       const st = parseProcPidStat(read(`/proc/${d}/stat`));
       if (!st) continue;
+      if (st.state === "Z") zombies++;
       const status = read(`/proc/${d}/status`);
       const rss = Number(status.match(/VmRSS:\s+(\d+)/)?.[1] ?? 0) * 1024;
       const uid = Number(status.match(/Uid:\s+(\d+)/)?.[1] ?? 0);
@@ -272,7 +574,7 @@ function procSnap(): { map: Map<number, ProcSnap> } {
       /* raced exit */
     }
   }
-  return { map };
+  return { map, zombies };
 }
 
 /* rate sampling needs two points — the collector keeps the previous sample
@@ -280,6 +582,8 @@ function procSnap(): { map: Map<number, ProcSnap> } {
 let prevCpu: { perCore: number[][]; total: number[] } | null = null;
 let prevNet: Record<string, [number, number]> | null = null;
 let prevProcs: { map: Map<number, ProcSnap>; totalAll: number } | null = null;
+let prevStatX: { ctxt: number; intr: number; forks: number } | null = null;
+let prevDisk: string | null = null;
 let prevAt = 0;
 
 export async function collectMetrics(): Promise<HostMetrics> {
@@ -326,9 +630,29 @@ export async function collectMetrics(): Promise<HostMetrics> {
   const procsBlocked = Number(stat.match(/procs_blocked (\d+)/)?.[1] ?? 0);
   const threads = Number(stat.match(/processes \d+/) ? read("/proc/loadavg").split(" ")[3]?.split("/")[1] : 0) || 0;
 
+  /* cumulative counters from the same /proc/stat read — rates vs the
+     previous sample (0 on the first call, clamped against counter resets) */
+  const statX = {
+    ctxt: Number(stat.match(/^ctxt (\d+)$/m)?.[1] ?? 0),
+    intr: Number(stat.match(/^intr (\d+)/m)?.[1] ?? 0),
+    forks: Number(stat.match(/^processes (\d+)$/m)?.[1] ?? 0),
+    btime: Number(stat.match(/^btime (\d+)$/m)?.[1] ?? 0),
+  };
+  const rate = (cur: number, prev: number | undefined) => (prev === undefined ? 0 : Math.max(0, Math.round((cur - prev) / dt)));
+  const ctxtPerSec = rate(statX.ctxt, prevStatX?.ctxt);
+  const intrPerSec = rate(statX.intr, prevStatX?.intr);
+  const forksPerSec = rate(statX.forks, prevStatX?.forks);
+
+  const diskText = read("/proc/diskstats");
+  const diskIo = diskIoRates(prevDisk, diskText, dt * 1000);
+
+  const logsPromise = logsSlow(); // cached a minute — the subprocess probes don't run per poll
+
   prevCpu = cpu;
   prevNet = net.cur;
   prevProcs = { map: procsNow.map, totalAll: allOf(cpu.total) };
+  prevStatX = { ctxt: statX.ctxt, intr: statX.intr, forks: statX.forks };
+  prevDisk = diskText;
   prevAt = now;
 
   return {
@@ -340,9 +664,11 @@ export async function collectMetrics(): Promise<HostMetrics> {
       arch: osArch(),
       cpuModel: cpuModel(),
       cores: cpu.perCore.length,
+      freqMhz: cpuFreqMhz(),
+      bootAt: statX.btime > 0 ? statX.btime * 1000 : Math.round(now - uptimeNow * 1000),
     },
     uptimeSec: uptimeNow, // the read the proc loop already did, not a second one
-    cpu: { usage, perCore, load, procs: procsNow.map.size, threads, running: procsTotal, blocked: procsBlocked },
+    cpu: { usage, perCore, load, procs: procsNow.map.size, threads, running: procsTotal, blocked: procsBlocked, zombies: procsNow.zombies, ctxtPerSec, intrPerSec, forksPerSec },
     pressure: pressure(),
     mem: {
       total: mem.MemTotal ?? 0,
@@ -353,7 +679,12 @@ export async function collectMetrics(): Promise<HostMetrics> {
       swapUsed: (mem.SwapTotal ?? 0) - (mem.SwapFree ?? 0),
     },
     disks: disks(),
+    diskIo,
     net: net.list,
+    sock: sockCounts(),
+    services: services(now, cpu.perCore.length),
+    logs: await logsPromise,
+    sys: sysInfo(),
     temps: temps(),
     procs: top.slice(0, 25), // the reference monitor's top-25
   };

@@ -179,13 +179,31 @@ export interface FeedItem {
 /* ── Monitor (host vitals; shape mirrors packages/proto/src/metrics.ts) ── */
 export interface HostMetrics {
   at: number;
-  host: { hostname: string; os: string; kernel: string; arch: string; cpuModel: string; cores: number };
+  host: { hostname: string; os: string; kernel: string; arch: string; cpuModel: string; cores: number; freqMhz?: number; bootAt?: number };
   uptimeSec: number;
-  cpu: { usage: number; perCore: number[]; load: [number, number, number]; procs: number; threads: number; running: number; blocked: number };
+  cpu: {
+    usage: number;
+    perCore: number[];
+    load: [number, number, number];
+    procs: number;
+    threads: number;
+    running: number;
+    blocked: number;
+    /* optional below: additive protocol (issue #168) — older agents omit */
+    zombies?: number;
+    ctxtPerSec?: number;
+    intrPerSec?: number;
+    forksPerSec?: number;
+  };
   pressure: { cpu: number; io: number; mem: number };
   mem: { total: number; used: number; available: number; cached: number; swapTotal: number; swapUsed: number };
   disks: { device: string; mount: string; fs: string; total: number; used: number; pct: number }[];
+  diskIo?: { device: string; readBps: number; writeBps: number }[];
   net: { iface: string; rxBps: number; txBps: number }[];
+  sock?: { tcp: number; tcpTw: number; established: number; listen: number; closeWait: number; otherTcp: number; udp: number; raw: number; used: number };
+  services?: { name: string; cpu: number; rssMb: number }[];
+  logs?: { failedUnits: string[]; coredumps: number | null; lines: string[] };
+  sys?: { users: string[]; updatesPending: number | null };
   temps: { label: string; c: number }[];
   procs: { pid: number; cmd: string; cpu: number; rssMb: number; state: string; user?: string; memPct?: number; threads?: number; ageSec?: number }[];
 }
