@@ -104,9 +104,8 @@ function Row({ e, now }: { e: TrashEntry; now: number }) {
           )}
         </div>
       </div>
-      <Btn size="xs" variant="outline" disabled={restoring} onClick={restore} title={e.kind === "session" ? "Restore this chat with its full history" : "Restore it back onto a workspace"}>
-        {restoring ? "Restoring…" : "Restore"}
-      </Btn>
+      {/* purge leads Restore on chat rows so Restore is always the rightmost
+          button and the column lines up across row kinds (developer feedback) */}
       {e.kind === "session" && (
         <Btn
           size="xs"
@@ -123,6 +122,9 @@ function Row({ e, now }: { e: TrashEntry; now: number }) {
           {confirmPurge ? "Sure?" : ""}
         </Btn>
       )}
+      <Btn size="xs" variant="outline" disabled={restoring} onClick={restore} title={e.kind === "session" ? "Restore this chat with its full history" : "Restore it back onto a workspace"}>
+        {restoring ? "Restoring…" : "Restore"}
+      </Btn>
     </div>
   );
 }
