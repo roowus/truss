@@ -15,8 +15,10 @@ git fetch origin -q || exit 0
 [ "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)" ] && exit 0   # current
 [ "$(git branch --show-current)" = "main" ] || { echo "$(date -Is) skip: on $(git branch --show-current)"; exit 0; }
 git diff --quiet && git diff --cached --quiet || { echo "$(date -Is) skip: dirty tree"; exit 0; }
-# untracked work files can block a ff merge that writes the same paths
-[ -z "$(git status --porcelain --untracked-files=normal -- . ':!*.log' | head -1)" ] || { echo "$(date -Is) skip: untracked files present"; exit 0; }
+# only skip when an untracked leftover would actually be overwritten by the
+# incoming merge — workers dropping stray files must not stall deploys
+COLLISIONS=$(comm -12   <(git status --porcelain --untracked-files=normal | awk '{print $2}' | sort)   <(git diff --name-only HEAD origin/main | sort))
+[ -z "$COLLISIONS" ] || { echo "$(date -Is) skip: untracked files collide with incoming: $COLLISIONS"; exit 0; }
 [ ! -d .git/rebase-merge ] && [ ! -f .git/MERGE_HEAD ] || { echo "$(date -Is) skip: rebase/merge in flight"; exit 0; }
 
 OLD=$(git rev-parse --short HEAD)
