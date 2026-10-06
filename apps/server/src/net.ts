@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { connect } from "node:net";
 import { networkInterfaces, userInfo } from "node:os";
 import { assertSafeServerUrl } from "./agentbundle.js";
 
@@ -49,6 +50,10 @@ export interface NetInfo {
     serveUrl?: string;
     /** can this process write the serve config? (operator/root — issue #37) */
     canServe?: boolean;
+    /** what the serve toggle WILL do if clicked now (issue #171): present
+       while serve is off and clickable, so the UI can show plan.warning
+       BEFORE the click instead of shadowing whoever owns 443 */
+    servePlan?: ServePlan;
   };
   lan: string[]; // private IPv4s of this host
 }
@@ -158,6 +163,12 @@ export async function netInfo(port: number, bindHost?: string): Promise<NetInfo>
     } catch {
       /* prefs unreadable — report nothing */
     }
+    /* the collision plan (issue #171): while serve is off and clickable,
+       probe 443 NOW so the UI can warn about the alternate port before the
+       click — never after tailscaled has taken the port over */
+    if (!out.tailscale.serveOn && out.tailscale.canServe !== false) {
+      out.tailscale.servePlan = planServe({ port, port443Busy: await webServerPresent(443) });
+    }
   } catch {
     /* tailscale not installed */
   }
@@ -191,15 +202,103 @@ export function serveErrorHint(stderr: string, user: string): string {
   return `${stderr} — this server's user (${user}) can't write tailscale's serve config. Run \`sudo tailscale set --operator=${user}\` once (or run Truss as root), then retry Settings → Network.`;
 }
 
-/** expose Truss on the tailnet at https://<machine>.<tailnet>.ts.net */
+/* ── the 443 collision (issue #171) ─────────────────────────────────────
+   The serve toggle used to run `tailscale serve --bg --https=443` blind.
+   On a machine where another web server owns 443, tailscaled takes TLS on
+   443 machine-wide and that server is shadowed (one click took down every
+   site a Caddy was fronting, until `tailscale serve reset`). So the toggle
+   now PLANS first: probe 443, and when something answers, serve on an
+   alternate tailnet port and warn about it in the UI before the click. */
+
+export interface ServePlan {
+  httpsPort: number;
+  /** null when serving on 443 is safe; otherwise the sentence the UI shows
+     BEFORE the toggle is clicked */
+  warning: string | null;
+}
+
+/** the alternate tailnet https port for when something else owns 443 */
+export const SERVE_ALT_PORT = 8443;
+
+/** pure: decide what tailscale serve should claim. A busy 443 is NEVER
+   claimed (that was the outage) — the plan moves to the alternate port and
+   carries a warning that names the conflict. */
+export function planServe(input: { port: number; port443Busy: boolean }): ServePlan {
+  if (!input.port443Busy) return { httpsPort: 443, warning: null };
+  return {
+    httpsPort: SERVE_ALT_PORT,
+    warning: `Port 443 is already in use by another server on this machine. Truss will serve on tailnet port ${SERVE_ALT_PORT} instead, so your other sites keep working; Truss lives at :${SERVE_ALT_PORT}.`,
+  };
+}
+
+/** pure: the exact CLI lines the toggle runs for a plan. ON and OFF ride
+   the SAME planned port, so off tears down what on set up (never a stale
+   443). Full command lines (not argv) so the UI can show what will run. */
+export function serveCommands(plan: ServePlan, port: number): { on: string[]; off: string[] } {
+  return {
+    on: [`tailscale serve --bg --https=${plan.httpsPort} http://127.0.0.1:${port}`],
+    off: [`tailscale serve --https=${plan.httpsPort} off`],
+  };
+}
+
+/** does something already answer on this local TCP port? A refused
+   connection means free; a connect means busy; a timeout is treated as
+   busy — the plan must never claim a port it is unsure about. Never
+   rejects. */
+export function webServerPresent(port: number, host = "127.0.0.1", timeoutMs = 1500): Promise<boolean> {
+  return new Promise((res) => {
+    const sock = connect({ host, port, timeout: timeoutMs });
+    const done = (busy: boolean) => {
+      sock.removeAllListeners();
+      sock.destroy();
+      res(busy);
+    };
+    sock.on("connect", () => done(true));
+    sock.on("timeout", () => done(true));
+    sock.on("error", () => done(false));
+  });
+}
+
+/* run one serveCommands line. The lines are built by serveCommands from
+   numbers only, so splitting on spaces is safe — and the plan's text stays
+   the single source of truth for what runs. */
+async function runServeLine(line: string): Promise<void> {
+  const [cmd, ...args] = line.split(" ");
+  await sh(cmd, args);
+}
+
+/** the https port tailscale is ACTUALLY serving on for this machine (null
+   when nothing serves or the status can't be read). OFF targets this, not
+   a fresh plan — the plan can change between on and off, the status can't
+   lie about what is up. */
+async function servingHttpsPort(port: number): Promise<number | null> {
+  try {
+    const sv = await sh("tailscale", ["serve", "status", "--json"]);
+    const sj = JSON.parse(sv);
+    const web: string[] = sj?.Web && typeof sj.Web === "object" ? Object.keys(sj.Web) : [];
+    if (web.length === 0) return null;
+    /* a machine can serve several things — prefer the config that proxies
+       to OUR port; off tears down Truss's own, not a neighbor's */
+    const ours = web.find((k) => JSON.stringify(sj.Web[k]).includes(`127.0.0.1:${port}`));
+    const m = (ours ?? web[0]).match(/:(\d+)$/);
+    return m ? Number(m[1]) : 443;
+  } catch {
+    return null;
+  }
+}
+
+/** expose Truss on the tailnet at https://<machine>.<tailnet>.ts.net
+   (at :8443 instead when something else already owns 443 — issue #171) */
 export async function tailscaleServe(on: boolean, port: number): Promise<NetInfo["tailscale"]> {
   try {
     if (on) {
-      /* serve https on the tailnet's 443 → local http port (flags vary a bit
-         across CLIs; this is the stable modern form) */
-      await sh("tailscale", ["serve", "--bg", "--https=443", `http://127.0.0.1:${port}`]);
+      /* plan FIRST: a busy 443 is never claimed; the UI already warned
+         about the alternate port before the click */
+      const plan = planServe({ port, port443Busy: await webServerPresent(443) });
+      for (const line of serveCommands(plan, port).on) await runServeLine(line);
     } else {
-      await sh("tailscale", ["serve", "--https=443", "off"]);
+      const httpsPort = (await servingHttpsPort(port)) ?? planServe({ port, port443Busy: await webServerPresent(443) }).httpsPort;
+      for (const line of serveCommands({ httpsPort, warning: null }, port).off) await runServeLine(line);
     }
   } catch (err) {
     /* denials name the fix (issue #37): the operator one-liner, not a bare 400 */
@@ -238,7 +337,8 @@ export function assertDialableServerUrl(
   assertSafeServerUrl(serverUrl);
 
   /* bind-independent answers (audit B2): tailscale serve proxies the
-     tailnet's 443 into the local port; TRUSS_PUBLIC_URL is the operator's
+     tailnet's planned https port (443, or 8443 on a busy-443 machine —
+     issue #171) into the local port; TRUSS_PUBLIC_URL is the operator's
      word that a proxy/DNS name forwards here — without it, proxied
      deployments couldn't pair at all */
   const serve = net.tailscale.serveOn ? net.tailscale.serveUrl?.replace(/\/+$/, "") : undefined;

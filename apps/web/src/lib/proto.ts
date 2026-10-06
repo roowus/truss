@@ -236,7 +236,17 @@ export interface NetInfo {
   bind?: string;
   /** operator-declared front door (TRUSS_PUBLIC_URL) — a proxy/DNS name that forwards to the server (audit B2) */
   publicUrl?: string;
-  tailscale: { installed: boolean; ip4?: string; dnsName?: string; serveOn?: boolean; serveUrl?: string; canServe?: boolean };
+  tailscale: {
+    installed: boolean;
+    ip4?: string;
+    dnsName?: string;
+    serveOn?: boolean;
+    serveUrl?: string;
+    canServe?: boolean;
+    /** what the serve toggle will do if clicked now (issue #171) — while serve
+       is off and clickable; show servePlan.warning BEFORE the click */
+    servePlan?: { httpsPort: number; warning: string | null };
+  };
   lan: string[];
 }
 

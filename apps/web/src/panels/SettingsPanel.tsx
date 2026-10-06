@@ -244,6 +244,11 @@ function NetworkSection() {
           }}>{net.tailscale.serveOn ? "Turn off" : "Turn on"}</Btn>
         </Row>
       )}
+      {/* issue #171: a busy 443 moves serve to the alternate port — say so
+          BEFORE the click, never after the other sites go dark */}
+      {net.tailscale.installed && !net.tailscale.serveOn && net.tailscale.servePlan?.warning && (
+        <p className="text-[11.5px] text-[var(--t-amber)] leading-relaxed -mt-1 mb-2">{net.tailscale.servePlan.warning}</p>
+      )}
       {net.tailscale.serveOn && net.tailscale.serveUrl && (
         <p className="text-[11.5px] text-[var(--t-teal)] font-mono -mt-1 mb-2">serving at {net.tailscale.serveUrl}</p>
       )}

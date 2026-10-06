@@ -1,5 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { createServer } from "node:net";
+import type { AddressInfo } from "node:net";
 import { freshServer } from "./helpers.js";
 
 /* net.ts — reachability probe for the add-host wizard. netInfo() only runs
@@ -55,6 +57,46 @@ test("tailscaleServe rejects cleanly when tailscale is unavailable (never flips 
     // no usable tailscale: both directions must reject (Error), not throw sync
     await assert.rejects(() => net.tailscaleServe(true, 4099));
     await assert.rejects(() => net.tailscaleServe(false, 4099));
+  } finally {
+    cleanup();
+  }
+});
+
+/* issue #171: the serve toggle plans around a busy 443, and the probe behind
+   the plan is webServerPresent — a live listener must read busy, a closed
+   port must read free, and the promise must never reject */
+
+test("webServerPresent: a live listener reads busy, a closed port reads free", async () => {
+  const { cleanup } = await freshServer("net-probe");
+  try {
+    const net = await import("../src/net.js");
+    const srv = createServer();
+    await new Promise<void>((r) => srv.listen(0, "127.0.0.1", r));
+    const port = (srv.address() as AddressInfo).port;
+
+    assert.equal(await net.webServerPresent(port), true, "something answers → busy (the plan must move off it)");
+
+    await new Promise<void>((r) => srv.close(() => r()));
+    assert.equal(await net.webServerPresent(port), false, "refused → free (the plan may claim it)");
+  } finally {
+    cleanup();
+  }
+});
+
+test("netInfo surfaces tailscale.servePlan while serve is off and clickable (the pre-click warning)", async () => {
+  const { cleanup } = await freshServer("net-plan");
+  try {
+    const net = await import("../src/net.js");
+    const info = await net.netInfo(4040);
+    if (!info.tailscale.installed || info.tailscale.serveOn || info.tailscale.canServe === false) return; // nothing to plan on this box
+    const plan = info.tailscale.servePlan;
+    assert.ok(plan, "serve off + clickable → the plan rides along so the UI warns BEFORE the click");
+    assert.ok(Number.isInteger(plan.httpsPort) && plan.httpsPort > 0 && plan.httpsPort <= 65535);
+    if (plan.httpsPort === 443) {
+      assert.equal(plan.warning, null, "443 free → the standard plan, no noise");
+    } else {
+      assert.match(plan.warning ?? "", /443/, "the alternate-port plan names the conflict");
+    }
   } finally {
     cleanup();
   }
