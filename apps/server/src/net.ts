@@ -165,9 +165,11 @@ export async function netInfo(port: number, bindHost?: string): Promise<NetInfo>
     }
     /* the collision plan (issue #171): while serve is off and clickable,
        probe 443 NOW so the UI can warn about the alternate port before the
-       click — never after tailscaled has taken the port over */
+       click — never after tailscaled has taken the port over. Probe every
+       local address: the incident's Caddy owned 443 on the TAILNET ip,
+       which a loopback-only probe calls free. */
     if (!out.tailscale.serveOn && out.tailscale.canServe !== false) {
-      out.tailscale.servePlan = planServe({ port, port443Busy: await webServerPresent(443) });
+      out.tailscale.servePlan = planServe({ port, port443Busy: await webServerPresent(443, serveCollisionHosts()) });
     }
   } catch {
     /* tailscale not installed */
@@ -241,22 +243,38 @@ export function serveCommands(plan: ServePlan, port: number): { on: string[]; of
   };
 }
 
-/** does something already answer on this local TCP port? A refused
-   connection means free; a connect means busy; a timeout is treated as
-   busy — the plan must never claim a port it is unsure about. Never
-   rejects. */
-export function webServerPresent(port: number, host = "127.0.0.1", timeoutMs = 1500): Promise<boolean> {
-  return new Promise((res) => {
-    const sock = connect({ host, port, timeout: timeoutMs });
-    const done = (busy: boolean) => {
-      sock.removeAllListeners();
-      sock.destroy();
-      res(busy);
-    };
-    sock.on("connect", () => done(true));
-    sock.on("timeout", () => done(true));
-    sock.on("error", () => done(false));
-  });
+/** the local addresses a 443-serving neighbour could live on: loopback plus
+   every IPv4 this machine has. The tailnet address MATTERS most — tailscale
+   serve answers on the tailnet path (netstack), so a server bound to the
+   tailnet ip:443 (the incident box's Caddy did exactly that) is precisely
+   who gets shadowed, and a loopback-only probe would miss it. */
+function serveCollisionHosts(): string[] {
+  const hosts = new Set<string>(["127.0.0.1"]);
+  for (const addrs of Object.values(networkInterfaces())) {
+    for (const a of addrs ?? []) {
+      if (a.family === "IPv4") hosts.add(a.address);
+    }
+  }
+  return [...hosts];
+}
+
+/** does a web server ANSWER on this port at any of the given local
+   addresses? A completed connect is the collision tailscaled serve would
+   shadow; refused, timed-out, or errored all read as free. Never rejects. */
+export function webServerPresent(port: number, hosts: string[] = ["127.0.0.1"], timeoutMs = 1500): Promise<boolean> {
+  const one = (host: string) =>
+    new Promise<boolean>((res) => {
+      const sock = connect({ host, port, timeout: timeoutMs });
+      const done = (hit: boolean) => {
+        sock.removeAllListeners();
+        sock.destroy();
+        res(hit);
+      };
+      sock.on("connect", () => done(true));
+      sock.on("timeout", () => done(false));
+      sock.on("error", () => done(false));
+    });
+  return Promise.all(hosts.map(one)).then((r) => r.some(Boolean));
 }
 
 /* run one serveCommands line. The lines are built by serveCommands from
@@ -294,10 +312,10 @@ export async function tailscaleServe(on: boolean, port: number): Promise<NetInfo
     if (on) {
       /* plan FIRST: a busy 443 is never claimed; the UI already warned
          about the alternate port before the click */
-      const plan = planServe({ port, port443Busy: await webServerPresent(443) });
+      const plan = planServe({ port, port443Busy: await webServerPresent(443, serveCollisionHosts()) });
       for (const line of serveCommands(plan, port).on) await runServeLine(line);
     } else {
-      const httpsPort = (await servingHttpsPort(port)) ?? planServe({ port, port443Busy: await webServerPresent(443) }).httpsPort;
+      const httpsPort = (await servingHttpsPort(port)) ?? planServe({ port, port443Busy: await webServerPresent(443, serveCollisionHosts()) }).httpsPort;
       for (const line of serveCommands({ httpsPort, warning: null }, port).off) await runServeLine(line);
     }
   } catch (err) {

@@ -64,7 +64,10 @@ test("tailscaleServe rejects cleanly when tailscale is unavailable (never flips 
 
 /* issue #171: the serve toggle plans around a busy 443, and the probe behind
    the plan is webServerPresent — a live listener must read busy, a closed
-   port must read free, and the promise must never reject */
+   port must read free, and the promise must never reject. The plan probes
+   EVERY local address (the incident's Caddy owned 443 on the tailnet ip,
+   invisible to a loopback-only check), so the multi-host form gets its own
+   assertion: a listener on ANY one address reads busy. */
 
 test("webServerPresent: a live listener reads busy, a closed port reads free", async () => {
   const { cleanup } = await freshServer("net-probe");
@@ -74,10 +77,14 @@ test("webServerPresent: a live listener reads busy, a closed port reads free", a
     await new Promise<void>((r) => srv.listen(0, "127.0.0.1", r));
     const port = (srv.address() as AddressInfo).port;
 
-    assert.equal(await net.webServerPresent(port), true, "something answers → busy (the plan must move off it)");
+    assert.equal(await net.webServerPresent(port, ["127.0.0.1"]), true, "something answers → busy (the plan must move off it)");
+    /* the incident shape: the listener sits on ONE address of several — the
+       probe must still find it (127.0.0.2 answers nothing on this port) */
+    assert.equal(await net.webServerPresent(port, ["127.0.0.2", "127.0.0.1"]), true, "busy on any probed address → busy");
 
     await new Promise<void>((r) => srv.close(() => r()));
-    assert.equal(await net.webServerPresent(port), false, "refused → free (the plan may claim it)");
+    assert.equal(await net.webServerPresent(port, ["127.0.0.1"]), false, "refused → free (the plan may claim it)");
+    assert.equal(await net.webServerPresent(port, ["127.0.0.2", "127.0.0.1"]), false, "refused everywhere → free");
   } finally {
     cleanup();
   }
