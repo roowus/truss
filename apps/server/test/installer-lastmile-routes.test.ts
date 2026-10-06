@@ -111,14 +111,17 @@ test("delivery options: ssh probe ok → the zero-typing option leads, sorted by
   assert.equal(drop.command, `sh ~/Downloads/t-${host.id.slice(0, 4)}.sh`, "the short, host-tagged run command");
 
   assert.ok(opts.find((o: { kind: string }) => o.kind === "pairing"), "the pairing floor is always present");
+  /* issue #111: the interactive variant (script prompts for the code) sits
+     between taildrop and the inline pairing command */
+  assert.ok(opts.find((o: { kind: string }) => o.kind === "interactive"), "the interactive /i option is always present");
 });
 
-test("delivery options: peer off the tailnet (or none picked) → pairing alone", async () => {
+test("delivery options: peer off the tailnet (or none picked) → the pairing floor alone", async () => {
   const ghost = await post(`/api/hosts/${host.id}/delivery`, { peer: "ghost.tail-example.ts.net", token, serverUrl: srv.base });
-  assert.deepEqual(ghost.body.options.map((o: { kind: string }) => o.kind), ["pairing"], "an unknown peer gets no taildrop/ssh offers");
+  assert.deepEqual(ghost.body.options.map((o: { kind: string }) => o.kind), ["interactive", "pairing"], "an unknown peer gets no taildrop/ssh offers");
 
   const none = await post(`/api/hosts/${host.id}/delivery`, { token, serverUrl: srv.base });
-  assert.deepEqual(none.body.options.map((o: { kind: string }) => o.kind), ["pairing"], "no peer picked — the floor remains");
+  assert.deepEqual(none.body.options.map((o: { kind: string }) => o.kind), ["interactive", "pairing"], "no peer picked — the floor remains");
 });
 
 test("POST /api/hosts/:id/taildrop: the drop lands under the short, typeable name", async () => {

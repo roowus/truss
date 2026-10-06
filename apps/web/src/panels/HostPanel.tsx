@@ -107,6 +107,7 @@ export function HostPanel({ params }: IDockviewPanelProps<{ hostId: string }>) {
             Offline. On the host: <span className="font-mono text-[var(--t-fg2)]">{agentRunCommand(hostId)}</span>
             {host.revoked && <span className="text-[var(--t-red)]"> — its token is revoked; rotate it below to allow reconnection.</span>}
             {" If the agent's log loops connection refused, the env file's frozen address is one this server can't answer — re-copy a fresh install command from the add-host wizard instead of re-running the old env."}
+            {" If it exits instantly with an error instead of looping, the installed bundle itself is stale or broken: re-run the installer from the wizard (re-send the drop or the short command), not just the agent; the run command alone keeps the old bundle on disk."}
           </div>
         )}
         {!host && !error && <div className="mt-5 text-[12px] text-[var(--t-amber)]">This host is not registered. Add it from the sidebar's remote hosts section.</div>}
