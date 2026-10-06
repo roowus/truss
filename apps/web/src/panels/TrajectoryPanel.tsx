@@ -211,7 +211,11 @@ function TimelineView({ view, hasCalls }: { view: SessionView; hasCalls: boolean
    link clears the zoom. The search box filters the feed to matching turns
    and dims everything else on the strip. */
 const LANE_TOP = [4, 17, 30]; // px within the 42px track; spans are h-2
-const LANE_COLOR = ["var(--t-sky)", "var(--t-teal)", "var(--t-violet)"] as const;
+/* lane hues are chosen for maximum separation on the dark theme — a neutral
+   near-white, a saturated blue, a green — keeping red/amber reserved for
+   failure/in-flight (developer feedback: the first palette read as shades) */
+const LANE_COLOR = ["var(--t-fg2)", "var(--t-sky)", "var(--t-teal)"] as const;
+const LANE_LABEL = ["you", "model", "tools"] as const;
 
 function OverviewStrip({ ov, zoom, zoomCount, matched, searching, query, onQuery, onZoom, onFocus }: {
   ov: TimelineOverview;
@@ -243,7 +247,7 @@ function OverviewStrip({ ov, zoom, zoomCount, matched, searching, query, onQuery
 
   return (
     <div className="shrink-0 px-3 pt-2 pb-1.5 border-b border-[var(--t-line)]">
-      {/* search + legend */}
+      {/* search (the lane legend is the gutter beside the track) */}
       <div className="flex items-center gap-3 mb-1.5">
         <div className="relative">
           <Icon name="search" size={11} className="absolute left-1.5 top-1/2 -translate-y-1/2 text-[var(--t-dim)]" />
@@ -263,83 +267,89 @@ function OverviewStrip({ ov, zoom, zoomCount, matched, searching, query, onQuery
             {matched.filter(Boolean).length} of {turnCount} turns
           </span>
         )}
-        <div className="ml-auto flex items-center gap-2.5 font-mono text-[9.5px] text-[var(--t-dim)]">
-          {(["you", "model", "tools"] as const).map((label, lane) => (
-            <span key={label} className="flex items-center gap-1">
-              <span className="inline-block w-2 h-2 rounded-[2px]" style={{ background: LANE_COLOR[lane] }} />
+      </div>
+
+      {/* the three-lane track, with the legend as a left gutter whose rows
+          align with the lanes they name */}
+      <div className="flex items-stretch gap-1.5">
+        <div className="relative w-9 shrink-0" aria-hidden>
+          {LANE_LABEL.map((label, lane) => (
+            <span
+              key={label}
+              className="absolute right-0 font-mono text-[9px] uppercase tracking-wider -translate-y-1/2"
+              style={{ top: LANE_TOP[lane] + 4, color: LANE_COLOR[lane] }}
+            >
               {label}
             </span>
           ))}
         </div>
-      </div>
-
-      {/* the three-lane track */}
-      <div
-        className="relative h-[42px] rounded border border-[var(--t-line)] bg-[var(--t-bg0)] overflow-hidden cursor-crosshair select-none touch-none outline-none focus-visible:ring-1 focus-visible:ring-[var(--t-sky)]"
-        role="group"
-        tabIndex={0}
-        aria-label={`Session overview timeline, ${zoom ? `zoomed to ${fmtMs(zoom.end - zoom.start)} of ${fmtMs(span)}` : `full span ${fmtMs(span)}`}`}
-        onKeyDown={(e) => {
-          if (e.key === "Escape") onZoom(null);
-        }}
-        onPointerDown={(e) => {
-          e.currentTarget.setPointerCapture(e.pointerId);
-          anchor.current = timeAt(e);
-          setDraft(null);
-        }}
-        onPointerMove={(e) => {
-          if (anchor.current != null) setDraft([anchor.current, timeAt(e)]);
-        }}
-        onPointerCancel={cancelDrag}
-        onPointerUp={(e) => {
-          if (anchor.current == null) return;
-          const a = anchor.current;
-          anchor.current = null;
-          setDraft(null);
-          const b = timeAt(e);
-          const lo = Math.min(a, b), hi = Math.max(a, b);
-          if (hi - lo < span * 0.02) {
-            // a click: jump the feed to the nearest record's turn
-            let best = 0, bestD = Infinity;
-            for (const s of ov.spans) {
-              const d = Math.min(Math.abs(s.start - b), Math.abs(s.end - b));
-              if (d < bestD) { bestD = d; best = s.turnIndex; }
+        <div
+          className="relative h-[42px] flex-1 rounded border border-[var(--t-line)] bg-[var(--t-bg0)] overflow-hidden cursor-crosshair select-none touch-none outline-none focus-visible:ring-1 focus-visible:ring-[var(--t-sky)]"
+          role="group"
+          tabIndex={0}
+          aria-label={`Session overview timeline, ${zoom ? `zoomed to ${fmtMs(zoom.end - zoom.start)} of ${fmtMs(span)}` : `full span ${fmtMs(span)}`}`}
+          onKeyDown={(e) => {
+            if (e.key === "Escape") onZoom(null);
+          }}
+          onPointerDown={(e) => {
+            e.currentTarget.setPointerCapture(e.pointerId);
+            anchor.current = timeAt(e);
+            setDraft(null);
+          }}
+          onPointerMove={(e) => {
+            if (anchor.current != null) setDraft([anchor.current, timeAt(e)]);
+          }}
+          onPointerCancel={cancelDrag}
+          onPointerUp={(e) => {
+            if (anchor.current == null) return;
+            const a = anchor.current;
+            anchor.current = null;
+            setDraft(null);
+            const b = timeAt(e);
+            const lo = Math.min(a, b), hi = Math.max(a, b);
+            if (hi - lo < span * 0.02) {
+              // a click: jump the feed to the nearest record's turn
+              let best = 0, bestD = Infinity;
+              for (const s of ov.spans) {
+                const d = Math.min(Math.abs(s.start - b), Math.abs(s.end - b));
+                if (d < bestD) { bestD = d; best = s.turnIndex; }
+              }
+              onFocus(best);
+            } else {
+              onZoom({ start: lo, end: hi });
             }
-            onFocus(best);
-          } else {
-            onZoom({ start: lo, end: hi });
-          }
-        }}
-      >
-        {/* lane separators */}
-        {[13, 26].map((y) => (
-          <span key={y} className="absolute left-0 right-0 h-px bg-[var(--t-line)]/40 pointer-events-none" style={{ top: y }} />
-        ))}
-        {ov.spans.map((s, n) => {
-          const left = pct(s.start);
-          const width = Math.max(0.5, pct(s.end) - left);
-          const dim = searching && !matched[s.turnIndex];
-          return (
+          }}
+        >
+          {/* lane separators */}
+          {[13, 26].map((y) => (
+            <span key={y} className="absolute left-0 right-0 h-px bg-[var(--t-line)]/40 pointer-events-none" style={{ top: y }} />
+          ))}
+          {ov.spans.map((s, n) => {
+            const left = pct(s.start);
+            const width = Math.max(0.5, pct(s.end) - left);
+            const dim = searching && !matched[s.turnIndex];
+            return (
+              <span
+                key={`${s.turnIndex}-${s.lane}-${n}`}
+                className={cn("absolute h-2 rounded-[2px]", s.inFlight && "t-stripes")}
+                style={{
+                  top: LANE_TOP[s.lane],
+                  left: `${left}%`,
+                  width: `${Math.min(width, 100 - left)}%`,
+                  background: s.failed ? "var(--t-red)" : s.inFlight ? "var(--t-amber)" : LANE_COLOR[s.lane],
+                  opacity: dim ? 0.15 : 0.85,
+                  ...(searching && matched[s.turnIndex] ? { boxShadow: "0 0 0 1px var(--t-sky)" } : {}),
+                }}
+              />
+            );
+          })}
+          {sel && (
             <span
-              key={`${s.turnIndex}-${s.lane}-${n}`}
-              className={cn("absolute h-2 rounded-[2px]", s.inFlight && "t-stripes")}
-              style={{
-                top: LANE_TOP[s.lane],
-                left: `${left}%`,
-                width: `${Math.min(width, 100 - left)}%`,
-                background: s.failed ? "var(--t-red)" : s.inFlight ? "var(--t-amber)" : LANE_COLOR[s.lane],
-                opacity: dim ? 0.15 : 0.85,
-                ...(searching && matched[s.turnIndex] ? { boxShadow: "0 0 0 1px var(--t-sky)" } : {}),
-              }}
+              className="absolute inset-y-0 border-x border-[var(--t-sky)] bg-[color-mix(in_oklab,var(--t-sky)_14%,transparent)] pointer-events-none"
+              style={{ left: `${pct(sel.start)}%`, width: `${Math.max(0.4, pct(sel.end) - pct(sel.start))}%` }}
             />
-          );
-        })}
-        {sel && (
-          <span
-            className="absolute inset-y-0 border-x border-[var(--t-sky)] bg-[color-mix(in_oklab,var(--t-sky)_14%,transparent)] pointer-events-none"
-            style={{ left: `${pct(sel.start)}%`, width: `${Math.max(0.4, pct(sel.end) - pct(sel.start))}%` }}
-          />
-        )}
+          )}
+        </div>
       </div>
       <div className="flex items-center justify-between mt-1 font-mono text-[9.5px] text-[var(--t-dim)] tabular-nums">
         <span>{new Date(ov.start).toLocaleTimeString()}</span>
@@ -365,12 +375,13 @@ function TurnRow({ turn, now, first, flash }: { turn: TimelineTurn; now: number;
       !first && "mt-2",
       flash && "ring-1 ring-[var(--t-sky)]",
     )}>
-      {/* turn header: time + the user's message */}
+      {/* turn header: time + the user's message (lane-colored to match the overview strip) */}
       <div className="flex items-baseline gap-2 px-2.5 pt-2">
         <span className="shrink-0 font-mono text-[10px] text-[var(--t-dim)] tabular-nums">{new Date(turn.at).toLocaleTimeString()}</span>
         {turn.user ? (
-          <span className="min-w-0 text-[12px] text-[var(--t-fg)] line-clamp-2 break-words" title={turn.user.text}>
-            {turn.user.text}
+          <span className="min-w-0 flex items-baseline gap-1.5 text-[12px] text-[var(--t-fg)]" title={turn.user.text}>
+            <span className="inline-block w-1.5 h-1.5 rounded-[2px] shrink-0 self-center" style={{ background: LANE_COLOR[0] }} />
+            <span className="line-clamp-2 break-words">{turn.user.text}</span>
           </span>
         ) : (
           <span className="text-[11px] italic text-[var(--t-dim)]">{a ? "assistant" : "tools"} · no user message in this part of the log</span>
@@ -382,11 +393,11 @@ function TurnRow({ turn, now, first, flash }: { turn: TimelineTurn; now: number;
         )}
       </div>
 
-      {/* assistant span */}
+      {/* assistant span (model lane color) */}
       {a && (
         <div className="flex items-center gap-2 px-2.5 py-1.5 font-mono text-[11.5px]">
-          {aOpen ? <Spinner size={11} /> : <Icon name="wave" size={11} className="text-[var(--t-teal)]" />}
-          <span className="text-[var(--t-fg2)] truncate">{a.model ?? "assistant"}</span>
+          {aOpen ? <Spinner size={11} /> : <Icon name="wave" size={11} className="text-[var(--t-sky)]" />}
+          <span className="text-[var(--t-sky)] truncate">{a.model ?? "assistant"}</span>
           <span className={cn("ml-auto shrink-0 tabular-nums", aOpen ? "text-[var(--t-amber)]" : "text-[var(--t-dim)]")}>
             {aOpen ? `${fmtMs(now - a.at)}…` : fmtMs(a.durationMs)}
           </span>
@@ -405,7 +416,7 @@ function TurnRow({ turn, now, first, flash }: { turn: TimelineTurn; now: number;
                 ) : (
                   <Icon name={t.ok === false ? "x" : "check"} size={11} className={t.ok === false ? "text-[var(--t-red)]" : "text-[var(--t-teal)]"} />
                 )}
-                <span className="text-[var(--t-fg2)] truncate">{t.name}</span>
+                <span className={cn("truncate", t.ok === false ? "text-[var(--t-red)]" : "text-[var(--t-teal)]")}>{t.name}</span>
                 <span className={cn("ml-auto shrink-0 tabular-nums", open ? "text-[var(--t-amber)]" : t.ok === false ? "text-[var(--t-red)]" : "text-[var(--t-dim)]")}>
                   {open ? `${fmtMs(now - t.at)}…` : fmtMs(t.durationMs)}
                 </span>
