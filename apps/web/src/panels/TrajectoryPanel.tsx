@@ -118,8 +118,8 @@ function TimelineView({ view, hasCalls }: { view: SessionView; hasCalls: boolean
     return (
       <Empty icon="wave" title="Nothing on the timeline yet">
         {hasCalls
-          ? "This session reported LLM calls without messages or tools — the raw calls are in the calls view."
-          : "Once the session gets going, each turn lands here — your message, the model's answer, and the tools it ran, with real durations."}
+          ? "This session reported LLM calls but no messages or tools. The raw calls are in the calls view."
+          : "Once the session gets going, each turn lands here: your message, the model's answer, and the tools it ran, with real durations."}
       </Empty>
     );
   }

@@ -116,14 +116,16 @@ export function reduce(v: SessionView, ev: ProtoEvent, frameTime: number): Sessi
     case "msg.done": {
       const m = v.msgs[ev.messageId];
       if (!m) return v;
-      /* doneAt feeds the trajectory timeline's assistant span (issue #142):
-         durations come from real start→done pairs, and frameTime is the
-         real done time (event `at` live, replay clock on hydrate) */
-      return { ...v, msgs: { ...v.msgs, [m.id]: { ...m, done: true, doneAt: frameTime, stopReason: ev.stopReason } } };
+      /* doneAt feeds the trajectory timeline's assistant span (issue #142).
+         Prefer the event's own stamp (server clock, like msg.start's at) so
+         the span never mixes two clocks; frameTime stays the fallback for
+         payloads that predate sink-side stamping. */
+      const doneAt = ev.at !== undefined ? toMs(ev.at) : frameTime;
+      return { ...v, msgs: { ...v.msgs, [m.id]: { ...m, done: true, doneAt, stopReason: ev.stopReason } } };
     }
     case "tool.call": {
       if (v.tools[ev.toolCallId]) return v;
-      const t: ToolRun = { id: ev.toolCallId, name: ev.name, args: ev.args, callId: ev.callId, status: "running", startedAt: frameTime };
+      const t: ToolRun = { id: ev.toolCallId, name: ev.name, args: ev.args, callId: ev.callId, status: "running", startedAt: ev.at !== undefined ? toMs(ev.at) : frameTime };
       let calls = v.calls;
       let cid = ev.callId && v.calls[ev.callId] ? ev.callId : undefined;
       if (!cid) {
@@ -146,7 +148,7 @@ export function reduce(v: SessionView, ev: ProtoEvent, frameTime: number): Sessi
         ...v,
         tools: {
           ...v.tools,
-          [t.id]: { ...t, status: ev.ok ? "ok" : "fail", durationMs: ev.durationMs ?? frameTime - t.startedAt, output: ev.output ?? t.output },
+          [t.id]: { ...t, status: ev.ok ? "ok" : "fail", durationMs: ev.durationMs ?? (ev.at !== undefined ? toMs(ev.at) : frameTime) - t.startedAt, output: ev.output ?? t.output },
         },
       };
     }

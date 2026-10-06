@@ -191,10 +191,18 @@ export function trajectoryTimeline(events: RawEvent[]): TimelineTurn[] {
     return out;
   };
 
-  // turn windows: [anchor at, next anchor at). Anchors are user messages;
-  // with no user messages at all, assistant messages anchor instead, so a
-  // session opened by the harness still gets a story.
-  const anchors = users.length > 0 ? users : assistants;
+  // turn windows: [anchor at, next anchor at). Anchors are user messages —
+  // plus any assistant message that precedes the first user message (a
+  // resumed or harness-initiated session can open with one; it gets its own
+  // turn rather than being dropped). With no user messages at all, assistant
+  // messages anchor instead, so such a session still gets a story.
+  const anchors: { msg: MsgAcc; withUser: boolean }[] =
+    users.length > 0
+      ? [
+          ...assistants.filter((m) => m.at < users[0].at).map((msg) => ({ msg, withUser: false })),
+          ...users.map((msg) => ({ msg, withUser: true })),
+        ].sort((a, b) => a.msg.at - b.msg.at)
+      : assistants.map((msg) => ({ msg, withUser: false }));
   const turns: TimelineTurn[] = [];
 
   const buildTurn = (anchor: MsgAcc, nextAt: number, withUser: boolean): TimelineTurn => {
@@ -234,17 +242,17 @@ export function trajectoryTimeline(events: RawEvent[]): TimelineTurn[] {
     return turn;
   };
 
-  // orphan tools: before the first anchor there is no turn to carry them —
-  // give them their own instead of dropping them
+  // orphan tools: before the first anchor there is no turn to carry them,
+  // so they get their own instead of being dropped
   const firstAnchor = anchors[0];
-  const orphans = firstAnchor ? allTools.filter((t) => t.at < firstAnchor.at) : allTools;
+  const orphans = firstAnchor ? allTools.filter((t) => t.at < firstAnchor.msg.at) : allTools;
   if (orphans.length > 0) {
     turns.push({ at: orphans[0].at, tools: orphans.map(toTool) });
   }
 
   for (let i = 0; i < anchors.length; i++) {
-    const next = anchors[i + 1]?.at ?? Number.POSITIVE_INFINITY;
-    turns.push(buildTurn(anchors[i], next, users.length > 0));
+    const next = anchors[i + 1]?.msg.at ?? Number.POSITIVE_INFINITY;
+    turns.push(buildTurn(anchors[i].msg, next, anchors[i].withUser));
   }
 
   turns.sort(byAt);

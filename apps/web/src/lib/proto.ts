@@ -289,11 +289,13 @@ export type ProtoEvent =
   | (Base & { type: "agents.changed" })
   | (Base & { type: "models.updated"; harness: HarnessId })
   | (Base & { type: "msg.start"; messageId: string; role: "user" | "assistant" | "system"; at: At; attachments?: PromptAttachment[] })
-  | (Base & { type: "msg.chunk"; messageId: string; text: string; channel?: string })
-  | (Base & { type: "msg.done"; messageId: string; stopReason?: string })
-  | (Base & { type: "tool.call"; toolCallId: string; name: string; args: unknown; callId?: string })
-  | (Base & { type: "tool.update"; toolCallId: string; output?: string })
-  | (Base & { type: "tool.done"; toolCallId: string; ok: boolean; durationMs?: number; output?: string })
+  /* the server sink stamps `at` on every event that lacks one (issue #142
+     audit) — optional here only because older payloads and imports predate it */
+  | (Base & { type: "msg.chunk"; messageId: string; text: string; channel?: string; at?: At })
+  | (Base & { type: "msg.done"; messageId: string; stopReason?: string; at?: At })
+  | (Base & { type: "tool.call"; toolCallId: string; name: string; args: unknown; callId?: string; at?: At })
+  | (Base & { type: "tool.update"; toolCallId: string; output?: string; at?: At })
+  | (Base & { type: "tool.done"; toolCallId: string; ok: boolean; durationMs?: number; output?: string; at?: At })
   | (Base & { type: "perm.request"; requestId: string; tool: string; reason: string; options: string[] })
   | (Base & { type: "perm.resolve"; requestId: string; choice: string })
   | (Base & { type: "llm.call.start"; callId: string; model: string; at: At })
@@ -308,6 +310,7 @@ export type ProtoEvent =
       cacheRead?: number;
       cacheWrite?: number;
       retryOf?: string;
+      at?: At;
     })
   | (Base & { type: "subagent.spawn"; agentId: string; label: string; parentAgentId?: string })
   | (Base & { type: "subagent.done"; agentId: string; ok: boolean })

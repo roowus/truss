@@ -91,6 +91,17 @@ test("create → prompt → assistant reply streams live over WS AND persists in
        no TRUSS.md — so the bare prompt goes out unwrapped) */
     const userEcho = ev.body.events.find((f: { ev: { type: string; role?: string } }) => f.ev.type === "msg.start" && f.ev.role === "user");
     assert.ok(userEcho, "local user echo persisted before the adapter speaks");
+
+    /* issue #142 audit: every persisted event carries the sink's wall-clock
+       `at` — an unstamped msg.done used to replay with its own message's
+       start time, collapsing every hydrated assistant span to a fake 0ms */
+    const all = ev.body.events.map((f: { ev: Ev }) => f.ev);
+    assert.ok(all.length > 0);
+    for (const e of all) assert.ok(typeof e.at === "number" && e.at > 0, `${e.type} carries at`);
+    const aStart = all.find((e: Ev) => e.type === "msg.start" && e.role === "assistant");
+    const aDone = all.find((e: Ev) => e.type === "msg.done" && e.messageId === aStart?.messageId);
+    assert.ok(aStart && aDone, "assistant start+done persisted");
+    assert.ok(aDone.at >= aStart.at, "the assistant span is a real start→done pair on one clock");
   } finally {
     ws.close();
   }

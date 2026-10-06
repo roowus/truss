@@ -123,3 +123,26 @@ test("orphan tools still appear; replay is identical; junk never throws", async 
   assert.doesNotThrow(() => mod.trajectoryTimeline([{ type: "mystery" } as never, null as never].filter(Boolean) as never[]));
   assert.deepEqual(mod.trajectoryTimeline([]), []);
 });
+
+/* regression for the round-1 audit (B3): an assistant message that precedes
+   the first user message (a resumed or harness-initiated session can open
+   with one) must get its own turn, not be silently dropped */
+test("an assistant message before the first user message gets its own turn", async () => {
+  const mod = await load();
+  assert.ok(mod, "trajectoryTimeline module must exist (see module test)");
+
+  const turns = mod.trajectoryTimeline([
+    ev("msg.start", 0, { messageId: "a0", role: "assistant" }),
+    ev("msg.chunk", 1, { messageId: "a0", text: "session resumed" }),
+    ev("msg.done", 50, { messageId: "a0" }),
+    ev("msg.start", 100, { messageId: "u1", role: "user" }),
+    ev("msg.chunk", 101, { messageId: "u1", text: "hi" }),
+    ev("msg.done", 102, { messageId: "u1" }),
+  ]);
+
+  assert.equal(turns.length, 2, "the leading assistant message is its own turn");
+  assert.ok(!turns[0].user && turns[0].assistant, "assistant-only turn");
+  assert.equal(turns[0].assistant!.durationMs, 50, "its span still measured from the real pair");
+  assert.equal(turns[1].user?.text, "hi");
+  assert.ok(turns[1].at > turns[0].at, "chronological");
+});

@@ -58,6 +58,16 @@ export function onEvent(fn: EventListener) {
 
 /** Persist + fan out one event. The single sink every adapter event flows through. */
 function sink(ev: ProtoEvent) {
+  /* Stamp the wall-clock time on events that don't carry one (msg.chunk,
+     msg.done, tool.*, llm.call.done, …). The row's `at` column was never
+     returned by listEvents, so on replay an unstamped done inherited its
+     own message's start time and every hydrated span collapsed to 0ms —
+     and live, done-times came from the client's clock while starts were
+     server-stamped, so skew could bend or negate a span (issue #142 audit).
+     Stamping here, before persist AND broadcast, gives live and replayed
+     frames the same server clock. The DSH importer bypasses the sink
+     (store.appendEvent directly), so historical timestamps stay its own. */
+  if ((ev as { at?: unknown }).at === undefined) (ev as { at?: unknown }).at = Date.now();
   let seq = 0;
   try {
     seq = store.appendEvent(ev);
