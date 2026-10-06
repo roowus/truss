@@ -23,7 +23,7 @@ export const toMs = (at: string | number | undefined): number => {
 
 /* ---------------- view model ---------------- */
 export interface Segment { channel: string; text: string }
-export interface Msg { id: string; role: "user" | "assistant" | "system"; segments: Segment[]; done: boolean; stopReason?: string; at: number; attachments?: import("./proto").PromptAttachment[] }
+export interface Msg { id: string; role: "user" | "assistant" | "system"; segments: Segment[]; done: boolean; stopReason?: string; at: number; doneAt?: number; attachments?: import("./proto").PromptAttachment[] }
 export interface ToolRun { id: string; name: string; args: unknown; callId?: string; output?: string; status: "running" | "ok" | "fail"; durationMs?: number; startedAt: number }
 export interface Perm { requestId: string; tool: string; reason: string; options: string[]; choice?: string; at: number }
 export interface Call {
@@ -116,7 +116,10 @@ export function reduce(v: SessionView, ev: ProtoEvent, frameTime: number): Sessi
     case "msg.done": {
       const m = v.msgs[ev.messageId];
       if (!m) return v;
-      return { ...v, msgs: { ...v.msgs, [m.id]: { ...m, done: true, stopReason: ev.stopReason } } };
+      /* doneAt feeds the trajectory timeline's assistant span (issue #142):
+         durations come from real start→done pairs, and frameTime is the
+         real done time (event `at` live, replay clock on hydrate) */
+      return { ...v, msgs: { ...v.msgs, [m.id]: { ...m, done: true, doneAt: frameTime, stopReason: ev.stopReason } } };
     }
     case "tool.call": {
       if (v.tools[ev.toolCallId]) return v;

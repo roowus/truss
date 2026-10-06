@@ -4,12 +4,40 @@ import { store, useApp, useNow, type Call, type SessionView } from "@/lib/store"
 import { argSummary, fmtCost, fmtMs, fmtTokens, harnessStyle } from "@/lib/format";
 import { harnessDisplay, hostAliases } from "@/lib/device";
 import { useDesktops } from "@/lib/desktops";
+import { trajectoryTimeline, type TimelineTurn } from "@/lib/trajectoryTimeline";
 import { Empty, HarnessMark, Icon, Spinner } from "@/components/ui";
 import { cn } from "@/utils/cn";
 
 type P = { sessionId: string };
 const isErr = (c: Call) => c.done && c.status != null && (c.status < 200 || c.status >= 300);
 const COLS = "grid-cols-[34px_22px_minmax(90px,1.2fr)_48px_62px_64px_54px_54px_62px_minmax(120px,2fr)]";
+
+/* The timeline is a pure projection of the event log (issue #142). The
+   store keeps the reduced view, so the panel re-synthesizes flat events
+   from it and runs the same tested projection the spec pins — one code
+   path, exercised by apps/web/test/trajectoryTimeline.test.ts. */
+function viewEvents(view: SessionView): { type: string; at?: number; [k: string]: unknown }[] {
+  const evs: { type: string; at?: number; [k: string]: unknown }[] = [];
+  for (const m of Object.values(view.msgs)) {
+    evs.push({ type: "msg.start", at: m.at, messageId: m.id, role: m.role });
+    const text = m.segments.filter((s) => s.channel !== "thinking").map((s) => s.text).join("");
+    if (text) evs.push({ type: "msg.chunk", at: m.at, messageId: m.id, text });
+    if (m.done) evs.push({ type: "msg.done", at: m.doneAt ?? m.at, messageId: m.id });
+  }
+  for (const t of Object.values(view.tools)) {
+    evs.push({ type: "tool.start", at: t.startedAt, callId: t.id, name: t.name });
+    if (t.status !== "running") {
+      evs.push({ type: "tool.done", at: t.durationMs != null ? t.startedAt + t.durationMs : t.startedAt, callId: t.id, ok: t.status === "ok" });
+    }
+  }
+  for (const c of Object.values(view.calls)) {
+    evs.push({ type: "llm.call.start", at: c.at, callId: c.callId, model: c.model });
+    if (c.done) {
+      evs.push({ type: "llm.call.done", at: c.at + (c.latencyMs ?? 0), callId: c.callId, status: c.status, tokensIn: c.tokensIn, tokensOut: c.tokensOut });
+    }
+  }
+  return evs;
+}
 
 export function TrajectoryPanel({ params }: IDockviewPanelProps<P>) {
   const id = params.sessionId;
@@ -30,11 +58,8 @@ function Trajectory({ id, view }: { id: string; view: SessionView }) {
   const hosts = useApp((s) => s.hosts);
   const hostPrefs = useDesktops((s) => s.hosts);
   const harnessName = harnessDisplay(meta.harness, hosts, hostAliases(hostPrefs));
-  const [filter, setFilter] = useState<"all" | "errors" | "retries">("all");
-  const [open, setOpen] = useState<Record<string, boolean>>({});
+  const [tab, setTab] = useState<"timeline" | "calls">("timeline");
   const calls = useMemo(() => view.callOrder.map((c) => view.calls[c]), [view.callOrder, view.calls]);
-  const anyOpen = calls.some((c) => !c.done);
-  const now = useNow(250, anyOpen);
 
   const stats = useMemo(() => {
     let lat = 0, tin = 0, tout = 0, cost = 0, hasTok = false, hasCost = false, errs = 0, retries = 0;
@@ -49,13 +74,6 @@ function Trajectory({ id, view }: { id: string; view: SessionView }) {
     }
     return { lat, tin, tout, cost, hasTok, hasCost, errs, retries };
   }, [calls]);
-
-  const t0 = calls[0]?.at ?? now;
-  const tEnd = Math.max(t0 + 1000, ...calls.map((c) => (c.done ? c.at + (c.latencyMs ?? 0) : now)));
-  const span = tEnd - t0;
-  const byId = view.calls;
-  const shown = calls.filter((c) => (filter === "errors" ? isErr(c) : filter === "retries" ? !!c.retryOf || calls.some((x) => x.retryOf === c.callId) : true));
-  const h = harnessStyle(meta.harness);
 
   return (
     <div className="h-full flex flex-col bg-[var(--t-bg1)] t-panel">
@@ -72,6 +90,130 @@ function Trajectory({ id, view }: { id: string; view: SessionView }) {
         <Stat label="tokens in/out" value={stats.hasTok ? `${fmtTokens(stats.tin)} / ${fmtTokens(stats.tout)}` : "—"} title={stats.hasTok ? undefined : `${harnessName} reports tokens per turn, not per call`} />
         <Stat label="cost" value={stats.hasCost ? fmtCost(stats.cost) : "—"} />
         <div className="ml-auto flex items-center gap-0.5 shrink-0 p-0.5 rounded-md bg-[var(--t-bg0)] border border-[var(--t-line)]">
+          {(["timeline", "calls"] as const).map((t) => (
+            <button key={t} onClick={() => setTab(t)} className={cn("h-6 px-2 rounded text-[11px] font-mono", tab === t ? "bg-[var(--t-bg3)] text-[var(--t-fg)]" : "text-[var(--t-mute)] hover:text-[var(--t-fg)]")}>
+              {t}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {tab === "timeline" ? (
+        <TimelineView view={view} hasCalls={calls.length > 0} />
+      ) : (
+        <CallsView view={view} calls={calls} harness={meta.harness} harnessName={harnessName} />
+      )}
+    </div>
+  );
+}
+
+/* ---------------- timeline (primary, issue #142) ---------------- */
+
+function TimelineView({ view, hasCalls }: { view: SessionView; hasCalls: boolean }) {
+  const turns = useMemo(() => trajectoryTimeline(viewEvents(view)), [view]);
+  const anyOpen = turns.some((t) => (t.assistant && t.assistant.doneAt === undefined) || t.tools.some((x) => x.doneAt === undefined));
+  const now = useNow(500, anyOpen);
+
+  if (turns.length === 0) {
+    return (
+      <Empty icon="wave" title="Nothing on the timeline yet">
+        {hasCalls
+          ? "This session reported LLM calls without messages or tools — the raw calls are in the calls view."
+          : "Once the session gets going, each turn lands here — your message, the model's answer, and the tools it ran, with real durations."}
+      </Empty>
+    );
+  }
+
+  return (
+    <div className="flex-1 min-h-0 overflow-auto t-scroll">
+      <div className="px-3 py-2 space-y-1.5 min-w-[420px]">
+        {turns.map((t, i) => (
+          <TurnRow key={`${t.at}-${i}`} turn={t} now={now} first={i === 0} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function TurnRow({ turn, now, first }: { turn: TimelineTurn; now: number; first: boolean }) {
+  const a = turn.assistant;
+  const aOpen = !!a && a.doneAt === undefined;
+  return (
+    <div className={cn("rounded-md border border-[var(--t-line)]/70 bg-[var(--t-bg2)]/40", !first && "mt-2")}>
+      {/* turn header: time + the user's message */}
+      <div className="flex items-baseline gap-2 px-2.5 pt-2">
+        <span className="shrink-0 font-mono text-[10px] text-[var(--t-dim)] tabular-nums">{new Date(turn.at).toLocaleTimeString()}</span>
+        {turn.user ? (
+          <span className="min-w-0 text-[12px] text-[var(--t-fg)] line-clamp-2 break-words" title={turn.user.text}>
+            {turn.user.text}
+          </span>
+        ) : (
+          <span className="text-[11px] italic text-[var(--t-dim)]">{a ? "assistant" : "tools"} · no user message in this part of the log</span>
+        )}
+        {(turn.tokensIn !== undefined || turn.tokensOut !== undefined) && (
+          <span className="ml-auto shrink-0 font-mono text-[10px] text-[var(--t-mute)] tabular-nums" title="tokens this turn (in / out)">
+            {fmtTokens(turn.tokensIn)} in · {fmtTokens(turn.tokensOut)} out
+          </span>
+        )}
+      </div>
+
+      {/* assistant span */}
+      {a && (
+        <div className="flex items-center gap-2 px-2.5 py-1.5 font-mono text-[11.5px]">
+          {aOpen ? <Spinner size={11} /> : <Icon name="wave" size={11} className="text-[var(--t-teal)]" />}
+          <span className="text-[var(--t-fg2)] truncate">{a.model ?? "assistant"}</span>
+          <span className={cn("ml-auto shrink-0 tabular-nums", aOpen ? "text-[var(--t-amber)]" : "text-[var(--t-dim)]")}>
+            {aOpen ? `${fmtMs(now - a.at)}…` : fmtMs(a.durationMs)}
+          </span>
+        </div>
+      )}
+
+      {/* tools inline, chronological */}
+      {turn.tools.length > 0 && (
+        <div className={cn("px-2.5 pb-2", a && "pt-0.5", "space-y-0.5")}>
+          {turn.tools.map((t, i) => {
+            const open = t.doneAt === undefined;
+            return (
+              <div key={`${t.at}-${i}`} className="flex items-center gap-2 pl-4 font-mono text-[11.5px] h-6">
+                {open ? (
+                  <Spinner size={10} />
+                ) : (
+                  <Icon name={t.ok === false ? "x" : "check"} size={11} className={t.ok === false ? "text-[var(--t-red)]" : "text-[var(--t-teal)]"} />
+                )}
+                <span className="text-[var(--t-fg2)] truncate">{t.name}</span>
+                <span className={cn("ml-auto shrink-0 tabular-nums", open ? "text-[var(--t-amber)]" : t.ok === false ? "text-[var(--t-red)]" : "text-[var(--t-dim)]")}>
+                  {open ? `${fmtMs(now - t.at)}…` : fmtMs(t.durationMs)}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+      {!a && turn.tools.length === 0 && <div className="px-2.5 pb-2" />}
+    </div>
+  );
+}
+
+/* ---------------- calls table (the #20 view, secondary) ---------------- */
+
+function CallsView({ view, calls, harness, harnessName }: { view: SessionView; calls: Call[]; harness: string; harnessName: string }) {
+  const [filter, setFilter] = useState<"all" | "errors" | "retries">("all");
+  const [open, setOpen] = useState<Record<string, boolean>>({});
+  const anyOpen = calls.some((c) => !c.done);
+  const now = useNow(250, anyOpen);
+
+  const t0 = calls[0]?.at ?? now;
+  const tEnd = Math.max(t0 + 1000, ...calls.map((c) => (c.done ? c.at + (c.latencyMs ?? 0) : now)));
+  const span = tEnd - t0;
+  const byId = view.calls;
+  const shown = calls.filter((c) => (filter === "errors" ? isErr(c) : filter === "retries" ? !!c.retryOf || calls.some((x) => x.retryOf === c.callId) : true));
+  const h = harnessStyle(harness);
+
+  return (
+    <>
+      <div className="shrink-0 flex items-center gap-2 px-3 h-8 border-b border-[var(--t-line)]">
+        <span className="text-[10.5px] text-[var(--t-dim)]">raw LLM calls</span>
+        <div className="ml-auto flex items-center gap-0.5 shrink-0 p-0.5 rounded-md bg-[var(--t-bg0)] border border-[var(--t-line)]">
           {(["all", "errors", "retries"] as const).map((f) => (
             <button key={f} onClick={() => setFilter(f)} className={cn("h-6 px-2 rounded text-[11px] font-mono", filter === f ? "bg-[var(--t-bg3)] text-[var(--t-fg)]" : "text-[var(--t-mute)] hover:text-[var(--t-fg)]")}>
               {f}
@@ -79,7 +221,6 @@ function Trajectory({ id, view }: { id: string; view: SessionView }) {
           ))}
         </div>
       </div>
-
       {calls.length === 0 ? (
         <Empty icon="wave" title="No LLM calls yet">Every model request this session makes appears here as a row — latency, tokens, cost, and the tools it triggered.</Empty>
       ) : (
@@ -143,12 +284,12 @@ function Trajectory({ id, view }: { id: string; view: SessionView }) {
           </div>
         </div>
       )}
-      {!stats.hasTok && calls.length > 0 && (
+      {calls.length > 0 && calls.every((c) => c.tokensIn === undefined && c.tokensOut === undefined) && (
         <div className="shrink-0 px-3 py-1.5 border-t border-[var(--t-line)] text-[11px] text-[var(--t-dim)]">
           <span className="font-mono">—</span> = not reported. {harnessName} emits token counts per turn, not per call; Truss shows the absence instead of inventing zeros.
         </div>
       )}
-    </div>
+    </>
   );
 }
 

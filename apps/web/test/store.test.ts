@@ -68,9 +68,10 @@ test("msg.chunk: implicit create, same-channel chunks merge, thinking splits seg
 test("msg.done: marks done and preserves stopReason verbatim (provider errors survive to the UI pill)", () => {
   let v = emptyView();
   v = reduce(v, { sessionId: "s", type: "msg.start", messageId: "m1", role: "assistant", at: 0 }, T0);
-  v = reduce(v, { sessionId: "s", type: "msg.done", messageId: "m1", stopReason: "error: 400 Unknown Model" }, T0);
+  v = reduce(v, { sessionId: "s", type: "msg.done", messageId: "m1", stopReason: "error: 400 Unknown Model" }, T0 + 250);
   const m = v.msgs.m1;
   assert.equal(m.done, true);
+  assert.equal(m.doneAt, T0 + 250); // issue #142: the trajectory timeline measures the real assistant span
   assert.equal(m.stopReason, "error: 400 Unknown Model"); // regression: must not be mangled/dropped
   // msg.done for an unknown message is a no-op (no implicit creation)
   const v2 = reduce(v, { sessionId: "s", type: "msg.done", messageId: "ghost", stopReason: "x" }, T0);
