@@ -211,14 +211,14 @@ function TimelineView({ view, hasCalls }: { view: SessionView; hasCalls: boolean
    link clears the zoom. The search box filters the feed to matching turns
    and dims everything else on the strip. */
 const LANE_TOP = [4, 17, 30]; // px within the 42px track; spans are h-2
-/* Lane hues are deliberately VIBRANT, not the theme pastels (developer
-   feedback, twice: the accents read as shades): vivid violet / azure /
-   green, far apart in hue and luminance, with vivid red and amber reserved
-   for failure and in-flight so no lane hue approaches a state color. */
-const LANE_COLOR = ["#b26bff", "#2f9eff", "#23d18b"] as const;
+/* Lane hues follow DSH's contrast scheme (developer feedback): vivid blue
+   for you, vivid violet for the model, vivid yellow for tools — hue
+   opposites, no two adjacent. Red alone signals failure; in-flight keeps
+   its lane color and shows the animated stripes (t-stripes is an overlay,
+   so it composes). Deliberately not the theme's pastel accents. */
+const LANE_COLOR = ["#3b9eff", "#b26bff", "#ffd60a"] as const;
 const LANE_LABEL = ["you", "model", "tools"] as const;
-const VIVID_FAIL = "#ff5252";
-const VIVID_LIVE = "#ffb224";
+const VIVID_FAIL = "#ff4545";
 
 function OverviewStrip({ ov, zoom, zoomCount, matched, searching, query, onQuery, onZoom, onFocus }: {
   ov: TimelineOverview;
@@ -339,7 +339,7 @@ function OverviewStrip({ ov, zoom, zoomCount, matched, searching, query, onQuery
                   top: LANE_TOP[s.lane],
                   left: `${left}%`,
                   width: `${Math.min(width, 100 - left)}%`,
-                  background: s.failed ? VIVID_FAIL : s.inFlight ? VIVID_LIVE : LANE_COLOR[s.lane],
+                  background: s.failed ? VIVID_FAIL : LANE_COLOR[s.lane],
                   opacity: dim ? 0.15 : 0.85,
                   ...(searching && matched[s.turnIndex] ? { boxShadow: "0 0 0 1px var(--t-sky)" } : {}),
                 }}
@@ -399,9 +399,9 @@ function TurnRow({ turn, now, first, flash }: { turn: TimelineTurn; now: number;
       {/* assistant span (model lane color) */}
       {a && (
         <div className="flex items-center gap-2 px-2.5 py-1.5 font-mono text-[11.5px]">
-          {aOpen ? <Spinner size={11} /> : <Icon name="wave" size={11} className="text-[#2f9eff]" />}
-          <span className="truncate text-[#2f9eff]">{a.model ?? "assistant"}</span>
-          <span className={cn("ml-auto shrink-0 tabular-nums", aOpen ? "text-[#ffb224]" : "text-[var(--t-dim)]")}>
+          {aOpen ? <Spinner size={11} /> : <Icon name="wave" size={11} className="text-[#b26bff]" />}
+          <span className="truncate text-[#b26bff]">{a.model ?? "assistant"}</span>
+          <span className={cn("ml-auto shrink-0 tabular-nums", aOpen ? "text-[var(--t-fg2)] t-pulse" : "text-[var(--t-dim)]")}>
             {aOpen ? `${fmtMs(now - a.at)}…` : fmtMs(a.durationMs)}
           </span>
         </div>
@@ -417,10 +417,10 @@ function TurnRow({ turn, now, first, flash }: { turn: TimelineTurn; now: number;
                 {open ? (
                   <Spinner size={10} />
                 ) : (
-                  <Icon name={t.ok === false ? "x" : "check"} size={11} className={t.ok === false ? "text-[#ff5252]" : "text-[#23d18b]"} />
+                  <Icon name={t.ok === false ? "x" : "check"} size={11} className={t.ok === false ? "text-[#ff4545]" : "text-[#ffd60a]"} />
                 )}
-                <span className={cn("truncate", t.ok === false ? "text-[#ff5252]" : "text-[#23d18b]")}>{t.name}</span>
-                <span className={cn("ml-auto shrink-0 tabular-nums", open ? "text-[#ffb224]" : t.ok === false ? "text-[#ff5252]" : "text-[var(--t-dim)]")}>
+                <span className={cn("truncate", t.ok === false ? "text-[#ff4545]" : "text-[#ffd60a]")}>{t.name}</span>
+                <span className={cn("ml-auto shrink-0 tabular-nums", open ? "text-[var(--t-fg2)] t-pulse" : t.ok === false ? "text-[#ff4545]" : "text-[var(--t-dim)]")}>
                   {open ? `${fmtMs(now - t.at)}…` : fmtMs(t.durationMs)}
                 </span>
               </div>
