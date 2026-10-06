@@ -4,7 +4,7 @@ import { store, useApp, useNow, type Call, type SessionView } from "@/lib/store"
 import { argSummary, fmtCost, fmtMs, fmtTokens, harnessStyle } from "@/lib/format";
 import { harnessDisplay, hostAliases } from "@/lib/device";
 import { useDesktops } from "@/lib/desktops";
-import { trajectoryTimeline, timelineOverview, type TimelineOverview, type TimelineTurn } from "@/lib/trajectoryTimeline";
+import { trajectoryTimeline, timelineOverview, matchTurns, type TimelineOverview, type TimelineTurn } from "@/lib/trajectoryTimeline";
 import { Empty, HarnessMark, Icon, Spinner } from "@/components/ui";
 import { cn } from "@/utils/cn";
 
@@ -115,6 +115,7 @@ function TimelineView({ view, hasCalls }: { view: SessionView; hasCalls: boolean
   const now = useNow(500, anyOpen);
   const ov = useMemo(() => timelineOverview(turns, now), [turns, now]);
   const [zoom, setZoom] = useState<{ start: number; end: number } | null>(null);
+  const [query, setQuery] = useState("");
   const [flash, setFlash] = useState<number | null>(null);
   const feedRef = useRef<HTMLDivElement | null>(null);
 
@@ -123,15 +124,18 @@ function TimelineView({ view, hasCalls }: { view: SessionView; hasCalls: boolean
     if (ov && zoom && (zoom.end < ov.start || zoom.start > ov.end)) setZoom(null);
   }, [ov, zoom]);
 
-  const shown = useMemo(() => {
-    const all = turns.map((t, i) => ({ t, i }));
-    if (!zoom || !ov) return all;
-    return ov.segments.filter((s) => s.end >= zoom.start && s.start <= zoom.end).map((s) => ({ t: turns[s.turnIndex], i: s.turnIndex }));
-  }, [turns, ov, zoom]);
+  const matched = useMemo(() => matchTurns(turns, query), [turns, query]);
+  const searching = query.trim().length > 0;
 
-  /* click-to-jump on the overview. A turn outside the active zoom is not
-     rendered, so the zoom clears first and the jump runs after the feed
-     re-renders — otherwise the click silently does nothing (audit B1) */
+  const shown = useMemo(() => {
+    const inWindow = (i: number) =>
+      !zoom || !ov || ov.spans.some((s) => s.turnIndex === i && s.end >= zoom.start && s.start <= zoom.end);
+    return turns.map((t, i) => ({ t, i })).filter(({ i }) => matched[i] && inWindow(i));
+  }, [turns, matched, ov, zoom]);
+
+  /* click-to-jump on the overview. A turn filtered out (zoom or search) is
+     not rendered, so the filters clear first and the jump runs after the
+     feed re-renders — otherwise the click silently does nothing (audit B1) */
   const pendingFocus = useRef<number | null>(null);
   const doFocus = (i: number) => {
     feedRef.current?.querySelector(`[data-turn="${i}"]`)?.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -139,20 +143,21 @@ function TimelineView({ view, hasCalls }: { view: SessionView; hasCalls: boolean
     window.setTimeout(() => setFlash((f) => (f === i ? null : f)), 1200);
   };
   const focusTurn = (i: number) => {
-    if (zoom && !shown.some((s) => s.i === i)) {
+    if (!shown.some((s) => s.i === i)) {
       pendingFocus.current = i;
-      setZoom(null);
+      if (zoom) setZoom(null);
+      if (searching) setQuery("");
       return;
     }
     doFocus(i);
   };
   useEffect(() => {
-    if (pendingFocus.current != null && !zoom) {
+    if (pendingFocus.current != null && shown.some((s) => s.i === pendingFocus.current)) {
       const i = pendingFocus.current;
       pendingFocus.current = null;
       doFocus(i);
     }
-  }, [zoom, shown]);
+  }, [zoom, query, shown]);
 
   if (turns.length === 0) {
     return (
@@ -166,11 +171,25 @@ function TimelineView({ view, hasCalls }: { view: SessionView; hasCalls: boolean
 
   return (
     <>
-      {ov && <OverviewStrip ov={ov} zoom={zoom} zoomCount={shown.length} onZoom={setZoom} onFocus={focusTurn} />}
+      {ov && (
+        <OverviewStrip
+          ov={ov}
+          zoom={zoom}
+          zoomCount={shown.length}
+          matched={matched}
+          searching={searching}
+          query={query}
+          onQuery={setQuery}
+          onZoom={setZoom}
+          onFocus={focusTurn}
+        />
+      )}
       <div ref={feedRef} className="flex-1 min-h-0 overflow-auto t-scroll">
         <div className="px-3 py-2 space-y-1.5 min-w-[420px]">
           {shown.length === 0 ? (
-            <div className="py-8 text-center text-[11.5px] text-[var(--t-dim)]">No turns in the zoomed window.</div>
+            <div className="py-8 text-center text-[11.5px] text-[var(--t-dim)]">
+              {searching ? "No turns match." : "No turns in the zoomed window."}
+            </div>
           ) : (
             shown.map(({ t, i }, n) => (
               <div key={`${t.at}-${i}`} data-turn={i}>
@@ -184,15 +203,26 @@ function TimelineView({ view, hasCalls }: { view: SessionView; hasCalls: boolean
   );
 }
 
-/* Chrome-Network-style overview above the feed: one segment per turn over
-   the session's full span (teal, red when a tool failed, striped amber while
-   in flight). Drag-select zooms the feed to a window; a click jumps the feed
-   to the nearest turn; Escape or the reset link clears the zoom. */
-function OverviewStrip({ ov, zoom, zoomCount, onZoom, onFocus }: {
+/* Chrome-Network-style overview above the feed, layered like DSH's: three
+   lanes (you / model / tools), each record its own span across the full
+   session domain, color-coded per lane (sky / teal / violet; red on a failed
+   tool, striped amber while in flight). Drag-select zooms the feed to a
+   window; a click jumps the feed to the nearest turn; Escape or the reset
+   link clears the zoom. The search box filters the feed to matching turns
+   and dims everything else on the strip. */
+const LANE_TOP = [4, 17, 30]; // px within the 42px track; spans are h-2
+const LANE_COLOR = ["var(--t-sky)", "var(--t-teal)", "var(--t-violet)"] as const;
+
+function OverviewStrip({ ov, zoom, zoomCount, matched, searching, query, onQuery, onZoom, onFocus }: {
   ov: TimelineOverview;
   zoom: { start: number; end: number } | null;
-  /** turns rendered under the active zoom (the feed's own count, not a recompute) */
+  /** turns rendered under the active filters (the feed's own count, not a recompute) */
   zoomCount: number;
+  /** one flag per turn from matchTurns */
+  matched: boolean[];
+  searching: boolean;
+  query: string;
+  onQuery: (q: string) => void;
   onZoom: (z: { start: number; end: number } | null) => void;
   onFocus: (turnIndex: number) => void;
 }) {
@@ -209,11 +239,43 @@ function OverviewStrip({ ov, zoom, zoomCount, onZoom, onFocus }: {
     anchor.current = null;
     setDraft(null);
   };
+  const turnCount = matched.length;
 
   return (
     <div className="shrink-0 px-3 pt-2 pb-1.5 border-b border-[var(--t-line)]">
+      {/* search + legend */}
+      <div className="flex items-center gap-3 mb-1.5">
+        <div className="relative">
+          <Icon name="search" size={11} className="absolute left-1.5 top-1/2 -translate-y-1/2 text-[var(--t-dim)]" />
+          <input
+            value={query}
+            onChange={(e) => onQuery(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Escape" && searching) onQuery("");
+            }}
+            placeholder="search turns"
+            aria-label="Search turns"
+            className="h-6 w-44 pl-6 pr-2 rounded border border-[var(--t-line)] bg-[var(--t-bg0)] text-[11px] text-[var(--t-fg)] placeholder:text-[var(--t-dim)] outline-none focus:border-[var(--t-sky)]"
+          />
+        </div>
+        {searching && (
+          <span className="font-mono text-[10px] text-[var(--t-sky)] tabular-nums">
+            {matched.filter(Boolean).length} of {turnCount} turns
+          </span>
+        )}
+        <div className="ml-auto flex items-center gap-2.5 font-mono text-[9.5px] text-[var(--t-dim)]">
+          {(["you", "model", "tools"] as const).map((label, lane) => (
+            <span key={label} className="flex items-center gap-1">
+              <span className="inline-block w-2 h-2 rounded-[2px]" style={{ background: LANE_COLOR[lane] }} />
+              {label}
+            </span>
+          ))}
+        </div>
+      </div>
+
+      {/* the three-lane track */}
       <div
-        className="relative h-7 rounded border border-[var(--t-line)] bg-[var(--t-bg0)] overflow-hidden cursor-crosshair select-none touch-none outline-none focus-visible:ring-1 focus-visible:ring-[var(--t-sky)]"
+        className="relative h-[42px] rounded border border-[var(--t-line)] bg-[var(--t-bg0)] overflow-hidden cursor-crosshair select-none touch-none outline-none focus-visible:ring-1 focus-visible:ring-[var(--t-sky)]"
         role="group"
         tabIndex={0}
         aria-label={`Session overview timeline, ${zoom ? `zoomed to ${fmtMs(zoom.end - zoom.start)} of ${fmtMs(span)}` : `full span ${fmtMs(span)}`}`}
@@ -237,9 +299,9 @@ function OverviewStrip({ ov, zoom, zoomCount, onZoom, onFocus }: {
           const b = timeAt(e);
           const lo = Math.min(a, b), hi = Math.max(a, b);
           if (hi - lo < span * 0.02) {
-            // a click: jump the feed to the nearest turn
+            // a click: jump the feed to the nearest record's turn
             let best = 0, bestD = Infinity;
-            for (const s of ov.segments) {
+            for (const s of ov.spans) {
               const d = Math.min(Math.abs(s.start - b), Math.abs(s.end - b));
               if (d < bestD) { bestD = d; best = s.turnIndex; }
             }
@@ -249,18 +311,25 @@ function OverviewStrip({ ov, zoom, zoomCount, onZoom, onFocus }: {
           }
         }}
       >
-        {ov.segments.map((s) => {
+        {/* lane separators */}
+        {[13, 26].map((y) => (
+          <span key={y} className="absolute left-0 right-0 h-px bg-[var(--t-line)]/40 pointer-events-none" style={{ top: y }} />
+        ))}
+        {ov.spans.map((s, n) => {
           const left = pct(s.start);
-          const width = Math.max(0.8, pct(s.end) - left);
+          const width = Math.max(0.5, pct(s.end) - left);
+          const dim = searching && !matched[s.turnIndex];
           return (
             <span
-              key={s.turnIndex}
-              className={cn("absolute inset-y-1 rounded-[3px]", s.inFlight && "t-stripes")}
+              key={`${s.turnIndex}-${s.lane}-${n}`}
+              className={cn("absolute h-2 rounded-[2px]", s.inFlight && "t-stripes")}
               style={{
+                top: LANE_TOP[s.lane],
                 left: `${left}%`,
                 width: `${Math.min(width, 100 - left)}%`,
-                background: s.failed ? "var(--t-red)" : s.inFlight ? "var(--t-amber)" : "var(--t-teal)",
-                opacity: 0.8,
+                background: s.failed ? "var(--t-red)" : s.inFlight ? "var(--t-amber)" : LANE_COLOR[s.lane],
+                opacity: dim ? 0.15 : 0.85,
+                ...(searching && matched[s.turnIndex] ? { boxShadow: "0 0 0 1px var(--t-sky)" } : {}),
               }}
             />
           );
@@ -279,7 +348,7 @@ function OverviewStrip({ ov, zoom, zoomCount, onZoom, onFocus }: {
             zoomed to {fmtMs(zoom.end - zoom.start)} ({zoomCount} turns) · reset
           </button>
         ) : (
-          <span>{ov.segments.length} turns · drag to zoom · click to jump</span>
+          <span>{turnCount} turns · drag to zoom · click to jump</span>
         )}
         <span>{new Date(ov.end).toLocaleTimeString()} · {fmtMs(span)}</span>
       </div>

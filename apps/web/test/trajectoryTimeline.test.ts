@@ -56,13 +56,23 @@ async function load(): Promise<TrajectoryTimelineModule | null> {
 }
 
 /* overview-strip geometry — the Chrome-Network-style strip above the feed
-   (developer feedback on PR #151): one segment per turn over the full span */
+   (developer feedback on PR #151): layered lanes (you / model / tools),
+   each record its own span over the full session domain */
+interface OverviewSpan {
+  turnIndex: number;
+  lane: 0 | 1 | 2;
+  start: number;
+  end: number;
+  inFlight: boolean;
+  failed: boolean;
+}
 interface TimelineOverviewModule {
   timelineOverview(turns: TimelineTurn[], now: number): {
     start: number;
     end: number;
-    segments: { turnIndex: number; start: number; end: number; inFlight: boolean; failed: boolean }[];
+    spans: OverviewSpan[];
   } | null;
+  matchTurns(turns: TimelineTurn[], query: string): boolean[];
 }
 
 const T0 = 1_000_000;
@@ -157,7 +167,7 @@ test("an assistant message before the first user message gets its own turn", asy
   assert.ok(turns[1].at > turns[0].at, "chronological");
 });
 
-test("timelineOverview: one segment per turn over the full span, in-flight ends move with the caller's clock", async () => {
+test("timelineOverview: layered lanes over the full span, in-flight ends move with the caller's clock", async () => {
   const mod = (await load()) as (TrajectoryTimelineModule & TimelineOverviewModule) | null;
   assert.ok(mod, "trajectoryTimeline module must exist (see module test)");
 
@@ -165,28 +175,52 @@ test("timelineOverview: one segment per turn over the full span, in-flight ends 
   const NOW = T0 + 10_000;
   const ov = mod.timelineOverview(turns, NOW);
   assert.ok(ov, "an overview for a non-empty timeline");
-  assert.equal(ov.start, T0, "span starts at the first turn");
-  assert.equal(ov.segments.length, 2, "one segment per turn");
+  assert.equal(ov.start, T0, "the domain starts at the first record");
 
-  const settled = ov.segments[0];
-  assert.equal(settled.start, T0);
-  assert.equal(settled.end, T0 + 400, "a settled turn ends at its real last done (assistant done, after the tool's)");
-  assert.equal(settled.inFlight, false);
-  assert.equal(settled.failed, false);
+  /* turn 1 = user point + model span + tool span, each on its own lane */
+  const t0 = ov.spans.filter((s) => s.turnIndex === 0);
+  assert.deepEqual(t0.map((s) => s.lane), [0, 1, 2], "you, model, tools");
+  assert.equal(t0[0].start, T0, "the user message sits at the turn's start");
+  assert.equal(t0[0].end, T0, "a prompt is a point, not a span");
+  const model = t0[1];
+  assert.equal(model.start, T0 + 4);
+  assert.equal(model.end, T0 + 400, "the model span ends at its real done");
+  assert.equal(model.inFlight, false);
+  const tool = t0[2];
+  assert.equal(tool.start, T0 + 5);
+  assert.equal(tool.end, T0 + 350, "the tool span ends at its own done");
+  assert.equal(tool.failed, false);
 
-  const live = ov.segments[1];
-  assert.equal(live.inFlight, true, "the unclosed tool marks the turn in flight");
-  assert.equal(live.end, NOW, "an in-flight turn's end is the caller's clock, never a fabricated done");
-  assert.equal(ov.end, NOW, "the span grows with the live session");
+  /* turn 2's unclosed tool: in flight, its end is the caller's clock */
+  const live = ov.spans.find((s) => s.turnIndex === 1 && s.lane === 2);
+  assert.ok(live);
+  assert.equal(live.inFlight, true);
+  assert.equal(live.end, NOW, "never a fabricated done");
+  assert.equal(ov.end, NOW, "the domain grows with the live session");
   assert.ok(ov.end > ov.start);
 
-  /* a failed tool flags its segment */
+  /* a failed tool flags its span */
   const failed = mod.timelineOverview(mod.trajectoryTimeline([ev("tool.start", 10, { callId: "tc9", name: "orphan" }), ev("tool.done", 60, { callId: "tc9", ok: false })]), NOW);
-  assert.equal(failed!.segments[0].failed, true);
-  assert.equal(failed!.segments[0].end, T0 + 60, "orphan tool turn ends at its done");
+  const ftool = failed!.spans.find((s) => s.lane === 2);
+  assert.equal(ftool!.failed, true);
+  assert.equal(ftool!.end, T0 + 60, "the orphan tool's span ends at its done");
 
   /* degenerate and empty inputs */
   assert.equal(mod.timelineOverview([], NOW), null);
   const point = mod.timelineOverview(mod.trajectoryTimeline([ev("msg.start", 0, { messageId: "u", role: "user" })]), NOW);
   assert.ok(point!.end > point!.start, "a zero-width session still gets a positive span (no divide-by-zero)");
+});
+
+test("matchTurns: user text, model, and tool names; empty query matches everything", async () => {
+  const mod = (await load()) as (TrajectoryTimelineModule & TimelineOverviewModule) | null;
+  assert.ok(mod, "trajectoryTimeline module must exist (see module test)");
+
+  const turns = mod.trajectoryTimeline(EVENTS);
+  assert.deepEqual(mod.matchTurns(turns, ""), [true, true], "no query, no filter");
+  assert.deepEqual(mod.matchTurns(turns, "   "), [true, true], "whitespace is no query");
+  assert.deepEqual(mod.matchTurns(turns, "files"), [true, false], "user text");
+  assert.deepEqual(mod.matchTurns(turns, "GLM"), [true, false], "model, case-insensitive");
+  assert.deepEqual(mod.matchTurns(turns, "read"), [false, true], "tool name");
+  assert.deepEqual(mod.matchTurns(turns, "bash"), [true, false], "tool name, first turn");
+  assert.deepEqual(mod.matchTurns(turns, "nonexistent"), [false, false], "no match anywhere");
 });

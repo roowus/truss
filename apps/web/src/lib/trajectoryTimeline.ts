@@ -261,19 +261,23 @@ export function trajectoryTimeline(events: RawEvent[]): TimelineTurn[] {
 
 /* ---------------- overview strip ----------------
 
-   The Chrome-Network-style overview above the feed: one segment per turn
-   over the session's full span, so the whole session reads at a glance and
-   a drag-select can zoom the feed to a window. Pure geometry — the panel
-   positions the segments by percentage. */
+   The Chrome-Network-style overview above the feed, layered like DSH's:
+   three lanes — your messages, the model's spans, the tools — each record
+   its own span across the session's full time domain. Pure geometry; the
+   panel positions spans by percentage. */
 
-export interface OverviewSegment {
+/** 0 = your messages, 1 = the model, 2 = tools */
+export type OverviewLane = 0 | 1 | 2;
+
+export interface OverviewSpan {
   /** index into the turns array the overview was derived from */
   turnIndex: number;
+  lane: OverviewLane;
   start: number;
   end: number;
-  /** some part of the turn is still open — the end moves with the caller's clock */
+  /** the record is still open — its end moves with the caller's clock */
   inFlight: boolean;
-  /** any tool in the turn failed */
+  /** a tool that reported failure */
   failed: boolean;
 }
 
@@ -281,26 +285,50 @@ export interface TimelineOverview {
   /** full session span (end > start always, so fractions never divide by zero) */
   start: number;
   end: number;
-  segments: OverviewSegment[];
+  spans: OverviewSpan[];
 }
 
 /**
- * Derive overview segments from the timeline. `now` is the caller's clock,
- * used only as the moving end of in-flight turns — pass it explicitly so
- * the function stays replay-stable. Returns null for an empty timeline.
+ * Derive the lane-projected overview from the timeline. `now` is the
+ * caller's clock, used only as the moving end of in-flight records — pass
+ * it explicitly so the function stays replay-stable. Returns null for an
+ * empty timeline.
  */
 export function timelineOverview(turns: TimelineTurn[], now: number): TimelineOverview | null {
   if (!Array.isArray(turns) || turns.length === 0) return null;
-  const start = turns[0].at;
-  let end = start;
-  const segments = turns.map((t, turnIndex) => {
-    const inFlight = (!!t.assistant && t.assistant.doneAt === undefined) || t.tools.some((x) => x.doneAt === undefined);
-    let e = t.at;
-    if (t.assistant) e = Math.max(e, t.assistant.doneAt ?? (inFlight ? now : t.assistant.at));
-    for (const tool of t.tools) e = Math.max(e, tool.doneAt ?? (inFlight ? now : tool.at));
-    end = Math.max(end, e);
-    return { turnIndex, start: t.at, end: e, inFlight, failed: t.tools.some((x) => x.ok === false) };
+  let start = Number.POSITIVE_INFINITY;
+  let end = Number.NEGATIVE_INFINITY;
+  const spans: OverviewSpan[] = [];
+  const push = (turnIndex: number, lane: OverviewLane, at: number, doneAt: number | undefined, failed: boolean) => {
+    const inFlight = doneAt === undefined;
+    const e = doneAt ?? (inFlight ? now : at);
+    spans.push({ turnIndex, lane, start: at, end: Math.max(at, e), inFlight, failed });
+    start = Math.min(start, at);
+    end = Math.max(end, at, e);
+  };
+  turns.forEach((t, i) => {
+    if (t.user) push(i, 0, t.at, t.at, false); // a prompt is a point, not a span
+    if (t.assistant) push(i, 1, t.assistant.at, t.assistant.doneAt, false);
+    for (const tool of t.tools) push(i, 2, tool.at, tool.doneAt, tool.ok === false);
   });
+  if (spans.length === 0) return null; // turns exist but carried nothing (defensive)
   if (end <= start) end = start + 1;
-  return { start, end, segments };
+  return { start, end, spans };
+}
+
+/**
+ * Case-insensitive turn search across the fields the feed shows: the user's
+ * text, the model, and tool names. Returns one flag per turn; an empty
+ * query matches everything (the strip undims, the feed unfilters).
+ */
+export function matchTurns(turns: TimelineTurn[], query: string): boolean[] {
+  if (!Array.isArray(turns)) return [];
+  const q = query.trim().toLowerCase();
+  if (!q) return turns.map(() => true);
+  return turns.map(
+    (t) =>
+      !!t.user?.text.toLowerCase().includes(q) ||
+      !!t.assistant?.model?.toLowerCase().includes(q) ||
+      t.tools.some((x) => x.name.toLowerCase().includes(q)),
+  );
 }
