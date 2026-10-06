@@ -9,6 +9,7 @@ import { planHeaderFit, HEADER_CLUSTER, HEADER_GAP } from "@/lib/headerFit";
 import { CHAT_WIDTH_DEFAULT, chatHandleGeometry, commitChatWidth, dragDisplayWidth, readChatWidthPref, resolveChatWidth, writeChatWidthPref } from "@/lib/chatWidth";
 import { filesFromTransfer, isFileDrag } from "@/lib/attach";
 import { composerAlign, composerTextareaHeight } from "@/lib/composerFit";
+import { composerActions } from "@/lib/composerActions";
 import { formatSessionRef } from "@/lib/sessionRef";
 import { resumeCommand } from "@/lib/resumeCommand";
 import { RAIL_INSET, activeRailIndex, railIndexAtOffset, railMarkTop, railNaturalHeight, turnRailItems } from "@/lib/turnRail";
@@ -92,13 +93,15 @@ function ChatHeader({ id }: { id: string }) {
 
   /* overflow planning (issue #3): the right cluster must never get clipped
      by the pane edge. The planner (lib/headerFit) collapses rightmost-first
-     into the ⋯ menu; Stop and the menu trigger never collapse. Measured:
+     into the ⋯ menu; the menu trigger never collapses. (Stop planned here
+     until issue #179 moved the interrupt into the composer — Send becomes
+     Stop while running, so the header no longer carries one.) Measured:
      header width via ResizeObserver, left cluster via a ref (the device chip
      caps at 8rem, so a long remote label cannot inflate the measurement),
      the title gets a 56px reservation (it truncates beyond that). */
   const headerRef = useRef<HTMLDivElement>(null);
   const leftRef = useRef<HTMLSpanElement>(null);
-  const [plan, setPlan] = useState<{ visible: string[]; overflow: string[] }>({ visible: ["stop", "trajectory", "context", "team", "skills", "shell", "more"], overflow: [] });
+  const [plan, setPlan] = useState<{ visible: string[]; overflow: string[] }>({ visible: ["trajectory", "context", "team", "skills", "shell", "more"], overflow: [] });
 
   /* which device this session runs on: bare harness id = this server,
      harness@hostId = that remote host (the user's alias wins, then the
@@ -122,10 +125,9 @@ function ChatHeader({ id }: { id: string }) {
   useLayoutEffect(() => {
     const el = headerRef.current;
     if (!el) return;
-    /* Stop only while running, the team shortcut only when the harness
-       runs subagents (issue #145: the panel shortcuts are cluster members
-       now) */
-    const items = HEADER_CLUSTER.filter((it) => (it.id === "stop" ? busy : it.id === "team" ? !!caps?.subagents : true));
+    /* the team shortcut only when the harness runs subagents (issue #145:
+       the panel shortcuts are cluster members now) */
+    const items = HEADER_CLUSTER.filter((it) => it.id !== "team" || !!caps?.subagents);
     const measure = () => {
       const leftW = leftRef.current?.getBoundingClientRect().width ?? 200;
       const available = el.clientWidth - leftW - 56 /* title reservation */ - 24 /* paddings */;
@@ -160,9 +162,6 @@ function ChatHeader({ id }: { id: string }) {
       </span>
       <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-[var(--t-fg)]" title={tooltip}>{meta.title}</span>
       <div className="ml-auto flex items-center gap-1.5 shrink-0">
-        {busy && (
-          <Btn variant="danger" size="xs" icon="stop" onClick={() => store.interrupt(id)} title="Interrupt (Esc in composer)">Stop</Btn>
-        )}
         {plan.visible.includes("trajectory") && (
           <IconBtn icon="wave" label="Trajectory" onClick={() => openPanel("trajectory", { sessionId: id })} />
         )}
@@ -171,9 +170,9 @@ function ChatHeader({ id }: { id: string }) {
         {plan.visible.includes("context") && (
           <IconBtn icon="gauge" label="Context usage" onClick={() => openPanel("context", { sessionId: id })} />
         )}
-        {/* double-gated like select/stop: the initial plan names team
-            visible, so without the capability check it would flash for one
-            paint on harnesses that never run subagents */}
+        {/* double-gated like the model select was: the initial plan names
+            team visible, so without the capability check it would flash for
+            one paint on harnesses that never run subagents */}
         {!!caps?.subagents && plan.visible.includes("team") && (
           <IconBtn icon="tree" label="Subagent team" onClick={() => openPanel("team", { sessionId: id })} />
         )}
@@ -743,7 +742,7 @@ function Composer({ id, active }: { id: string; active: boolean }) {
     hint = <><Icon name="bolt" size={12} /> Messages queue after the current step.</>;
   } else if (running) {
     tone = "amber";
-    hint = <><Icon name="lock" size={12} /> {harnessName} can't take input mid-run — draft is held, or <button className="underline" onClick={() => store.interrupt(id)}>interrupt</button>.</>;
+    hint = <><Icon name="lock" size={12} /> {harnessName} can't take input mid-run — draft is held, or hit Stop.</>;
   }
   /* an active voice take no longer touches the hint line (review feedback:
      the hint pushed the composer bar up) — the recording state lives
@@ -780,7 +779,7 @@ function Composer({ id, active }: { id: string; active: boolean }) {
         </div>
       )}
       <div
-        className={cn("flex gap-1.5 rounded-xl border bg-[var(--t-bg0)] transition-colors focus-within:border-[var(--t-mute)] px-2 py-1.5", taAlignEnd ? "items-end" : "items-center", dead ? "border-dashed border-[var(--t-line2)]" : "border-[var(--t-line2)]")}
+        className={cn("flex items-end gap-1.5 rounded-xl border bg-[var(--t-bg0)] transition-colors focus-within:border-[var(--t-mute)] px-2 py-1.5", !taAlignEnd && "items-center", dead ? "border-dashed border-[var(--t-line2)]" : "border-[var(--t-line2)]")}
         onDragOver={(e) => {
           if (isFileDrag(e.dataTransfer)) e.preventDefault();
         }}
@@ -884,13 +883,7 @@ function Composer({ id, active }: { id: string; active: boolean }) {
             className={cn("!h-7 !px-2 !py-0 !text-[11px] font-mono text-[var(--t-mute)] w-auto max-w-[160px] shrink-0", taAlignEnd && "mb-0.5")}
           />
         )}
-        {running && !queues ? (
-          <Btn size="sm" variant="danger" icon="stop" onClick={() => store.interrupt(id)} title="Interrupt (Esc)" className={cn(taAlignEnd && "mb-0.5")}>Stop</Btn>
-        ) : (
-          <Btn size="sm" variant={dead ? "outline" : "amber"} icon={dead ? "power" : "send"} disabled={!canSend} onClick={send} className={cn(taAlignEnd && "mb-0.5")} title={dead ? "Resume the harness and send" : running ? "Queue after current step" : "Send (Enter)"}>
-            {sending ? "…" : dead ? "Resume" : running ? "Queue" : "Send"}
-          </Btn>
-        )}
+        <ComposerButtons running={running} queues={queues} dead={dead} sending={sending} canSend={canSend} alignEnd={taAlignEnd} onSend={() => void send()} onInterrupt={() => store.interrupt(id)} />
       </div>
       {hint && (
         <div className={cn("mt-1.5 px-1 flex items-center gap-1.5 text-[11.5px] leading-tight", tone === "amber" ? "text-[var(--t-amber)]" : tone === "red" ? "text-[var(--t-red)]" : "text-[var(--t-mute)]")}>
@@ -899,6 +892,40 @@ function Composer({ id, active }: { id: string; active: boolean }) {
       )}
       </div>
     </div>
+  );
+}
+
+/* ---------------- the composer's action buttons (issue #179) ---------------- */
+
+/* Stop belongs in the composer: while the session runs, Send becomes Stop;
+   queue-capable harnesses keep Queue as the primary with Stop beside it, so
+   the interrupt is never stranded; a dead session resumes (wake-and-send).
+   The buttons come straight from composerActions — the header carries no
+   Stop of its own, and Esc still interrupts from the textarea. */
+function ComposerButtons({ running, queues, dead, sending, canSend, alignEnd, onSend, onInterrupt }: {
+  running: boolean;
+  queues: boolean;
+  dead: boolean;
+  sending: boolean;
+  canSend: boolean;
+  alignEnd: boolean;
+  onSend: () => void;
+  onInterrupt: () => void;
+}) {
+  const acts = composerActions({ running, queues, dead, sending });
+  const stopBtn = (
+    <Btn size="sm" variant="danger" icon="stop" onClick={onInterrupt} title="Interrupt (Esc)" className={cn(alignEnd && "mb-0.5")}>Stop</Btn>
+  );
+  if (acts.primary === "stop") return stopBtn;
+  return (
+    <>
+      {/* Stop sits left of the primary so Send/Queue/Resume never moves
+          from the row's end slot */}
+      {acts.stop && stopBtn}
+      <Btn size="sm" variant={acts.primary === "resume" ? "outline" : "amber"} icon={acts.primary === "resume" ? "power" : "send"} disabled={!canSend} onClick={onSend} className={cn(alignEnd && "mb-0.5")} title={acts.primary === "resume" ? "Resume the harness and send" : acts.primary === "queue" ? "Queue after current step" : "Send (Enter)"}>
+        {sending ? "…" : acts.primary === "resume" ? "Resume" : acts.primary === "queue" ? "Queue" : "Send"}
+      </Btn>
+    </>
   );
 }
 
