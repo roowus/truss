@@ -26,6 +26,7 @@ import { FeedPanel } from "@/panels/FeedPanel";
 import { MonitorPanel } from "@/panels/MonitorPanel";
 import { HostPanel } from "@/panels/HostPanel";
 import { SettingsPanel } from "@/panels/SettingsPanel";
+import { TrashPanel } from "@/panels/TrashPanel";
 import { DesktopStrip } from "./DesktopStrip";
 import { chromeTabLayout, chromeTabsAvailableWidth, tabTrailingReserve, type ChromeTabView } from "@/lib/chromeTabs";
 import { tabClosePlacement } from "@/lib/tabClose";
@@ -53,12 +54,14 @@ const components = {
   cost: CostPanel,
   credentials: CredentialsPanel,
   router: RouterPanel,
+  trash: TrashPanel,
 } as any;
 
 const KIND_ICON: Record<string, string> = {
   chat: "chat", trajectory: "wave", terminal: "term", context: "gauge",
   team: "tree", skills: "spark", files: "folder", git: "tree", tasks: "check", todos: "check", feed: "bolt", monitor: "gauge",
   welcome: "layout", host: "host", settings: "settings", cost: "cost", credentials: "lock", router: "host",
+  trash: "trash",
 };
 
 const theme: DockviewTheme = { ...themeDark, name: "truss", className: "dockview-theme-dark", gap: 6, dndTabIndicator: "line" };

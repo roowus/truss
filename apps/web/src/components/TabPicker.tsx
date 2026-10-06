@@ -11,6 +11,7 @@ const ICONS: Record<string, string> = {
   chat: "chat", trajectory: "wave", context: "gauge", team: "tree",
   skills: "spark", files: "folder", git: "tree", tasks: "check", todos: "check", feed: "bolt", monitor: "gauge",
   terminal: "term", host: "host", settings: "settings", welcome: "layout",
+  trash: "trash",
 };
 
 interface Props {
@@ -86,6 +87,9 @@ export function TabPicker({ anchor, spaceId, groupId, onClose }: Props) {
           )}
           {(!q || match("settings preferences")) && (
             <Row icon="settings" label="Settings" onClick={() => run(() => openPanel("settings", { spaceId, groupId: targetGroupId }))} />
+          )}
+          {(!q || match("trash deleted restore recover closed")) && (
+            <Row icon="trash" label="Trash" onClick={() => run(() => openPanel("trash", { spaceId, groupId: targetGroupId }))} />
           )}
           {(!q || match("todos checklist tasks user")) && (
             <Row icon="check" label="Todos" onClick={() => run(() => openPanel("todos", { spaceId, groupId: targetGroupId }))} />
