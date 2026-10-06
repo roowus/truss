@@ -34,9 +34,12 @@ test("headerFit's HEADER_CLUSTER drops the model select", async () => {
 
 test("read-through: the Select renders in the composer, never the header", () => {
   /* the header row: the h-10 bordered strip; the composer: the rounded-xl
-     border container with the textarea */
+     border container with the textarea. The composer anchor is the stable
+     prefix of its class list — #144 made the items-end/items-center part
+     conditional (composerAlign), so anchoring on it would pin #144's
+     internals, not this issue's contract */
   const headerStart = PANEL.indexOf('className="relative shrink-0 flex items-center gap-2 px-3 h-10 border-b');
-  const composerStart = PANEL.indexOf("flex items-end gap-1.5 rounded-xl border");
+  const composerStart = PANEL.indexOf("flex gap-1.5 rounded-xl border");
   assert.ok(headerStart > 0 && composerStart > headerStart, "both regions found");
 
   const headerRegion = PANEL.slice(headerStart, composerStart);
@@ -47,7 +50,7 @@ test("read-through: the Select renders in the composer, never the header", () =>
 });
 
 test("the composer select isn't chained to the input lock", () => {
-  const composerStart = PANEL.indexOf("flex items-end gap-1.5 rounded-xl border");
+  const composerStart = PANEL.indexOf("flex gap-1.5 rounded-xl border");
   const composerRegion = PANEL.slice(composerStart);
   const sel = composerRegion.indexOf('ariaLabel="Switch model"');
   assert.ok(sel > 0, "the select is there (see the placement test)");

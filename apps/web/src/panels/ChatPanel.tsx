@@ -847,7 +847,7 @@ function Composer({ id, active }: { id: string; active: boolean }) {
             options={modelOptions}
             onChange={onModelPick}
             ariaLabel="Switch model"
-            className="mb-0.5 !h-7 !px-2 !py-0 !text-[11px] font-mono text-[var(--t-mute)] w-auto max-w-[160px] shrink-0"
+            className={cn("!h-7 !px-2 !py-0 !text-[11px] font-mono text-[var(--t-mute)] w-auto max-w-[160px] shrink-0", taAlignEnd && "mb-0.5")}
           />
         )}
         {running && !queues ? (
