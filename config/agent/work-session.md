@@ -168,7 +168,11 @@ never asked for? When you judge it done:
       `verify` pass. Pending → self-wake and wait (the label must never beat
       CI); failing → that is a round, not a handoff — fix it first.
    a. Retitle: `#<pr> [ready] — <slug>` via the title route.
-   b. Apply the review label: `gh pr edit <pr> --add-label ready-for-review`.
+   b. Apply the review label: `gh pr edit <pr> --add-label ready-for-review`,
+      and mirror the issue's priority onto the PR so the developer's review
+      queue sorts by urgency: read it from the issue
+      (`gh issue view <issue> --json labels`) and `--add-label` the matching
+      `priority: *` on the PR (skip when the issue has none).
    c. Say it in this session too — the developer may be watching the chat,
       not the PR. Your final message must carry, every time:
       - the GitHub PR link (`https://github.com/roowus/truss/pull/<N>`)
