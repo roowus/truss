@@ -187,9 +187,13 @@ export function Spark({ points, color, unit, domain, times }: {
   points: number[]; color: string; unit: string; domain?: [number, number]; times?: number[];
 }) {
   const W = 280, H = 48;
-  const [hover, setHover] = useState<number | null>(null);
+  /* hover is stored as the pointer's x FRACTION (the stable intent), and the
+     index is derived per render via sparkHoverIndex — so a shrunken history
+     (device switch) re-clamps instead of pointing past the array (audit B1) */
+  const [hoverFx, setHoverFx] = useState<number | null>(null);
   const box = useRef<HTMLDivElement>(null);
   const n = points.length;
+  const hover = hoverFx == null || n === 0 ? null : sparkHoverIndex(n, hoverFx);
   const scale = sparkScale(points, { domain, unit });
   const span = scale.max - scale.min;
   const px = (i: number) => (n > 1 ? (i / (n - 1)) * W : W / 2);
@@ -201,12 +205,12 @@ export function Spark({ points, color, unit, domain, times }: {
     const el = box.current;
     if (!el || n === 0) return;
     const r = el.getBoundingClientRect();
-    setHover(sparkHoverIndex(n, (e.clientX - r.left) / Math.max(1, r.width)));
+    setHoverFx((e.clientX - r.left) / Math.max(1, r.width));
   };
 
   return (
     <div className="flex items-stretch gap-1.5">
-      <div ref={box} className="relative min-w-0 flex-1" onPointerMove={track} onPointerDown={track} onPointerLeave={() => setHover(null)}>
+      <div ref={box} className="relative min-w-0 flex-1" onPointerMove={track} onPointerDown={track} onPointerLeave={() => setHoverFx(null)}>
         <svg viewBox={`0 0 ${W} ${H}`} className="block h-12 w-full" preserveAspectRatio="none">
           {scale.ticks.map((t) => (
             <line key={t.value} x1="0" x2={W} y1={py(t.value)} y2={py(t.value)} stroke="var(--t-line)" strokeWidth="1" strokeDasharray="2 4" vectorEffect="non-scaling-stroke" />
