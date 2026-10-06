@@ -60,6 +60,7 @@ interface WorkspaceCloseModule {
   isCloseTabChord(e: ChordEv, typing?: boolean): boolean;
   isCloseWindowChord(e: ChordEv, typing?: boolean): boolean;
   isReopenClosedChord(e: ChordEv, typing?: boolean): boolean;
+  activePanelToClose(get: (spaceId: string) => { activePanel?: { id: string } | null } | undefined, activeId: string): { id: string } | null;
   pushClosed(stack: unknown[], snapshot: unknown, cap?: number): unknown[];
   popClosed(stack: unknown[]): { snapshot: unknown; rest: unknown[] } | null;
 }
@@ -102,11 +103,19 @@ test("the chords: Alt+Shift+W closes, Cmd/Ctrl+Shift+Z reopens — and only thos
   assert.ok(mod.isCloseWindowChord({ key: "w", altKey: true, shiftKey: true }), "the advertised close chord (issue #181)");
   assert.ok(mod.isCloseWindowChord({ key: "W", altKey: true, shiftKey: true }), "caps-tolerant");
   /* macOS: Option is a composer — Option+Shift+W reports a composed glyph as
-     e.key („ on US layouts), so the chord also matches the physical e.code;
-     that same OR covers AZERTY, where the physical W cap is labeled Z */
+     e.key („ on US layouts), so a glyph falls back to the physical e.code;
+     that same fallback covers a dead-key shape */
   assert.ok(mod.isCloseWindowChord({ key: "„", code: "KeyW", altKey: true, shiftKey: true }), "mac-composed glyph still fires via e.code (audit B1)");
   assert.ok(!mod.isCloseWindowChord({ key: "„", code: "KeyW", altKey: true, shiftKey: true }, true), "the mac chord yields while typing too");
-  assert.ok(mod.isCloseWindowChord({ key: "z", code: "KeyW", altKey: true, shiftKey: true }), "AZERTY: the physical W cap is labeled Z");
+  /* AZERTY swaps Z/W vs QWERTY: the printed letter rules — the Z-labeled key
+     (physical code KeyW) REOPENS and the W-labeled key (code KeyZ) CLOSES.
+     A plain key|code OR double-fires those shapes and the wrong action wins
+     by dispatch order (round-3 audit, B1) — pin both shapes against BOTH
+     predicates */
+  assert.ok(!mod.isCloseWindowChord({ key: "z", code: "KeyW", altKey: true, shiftKey: true }), "AZERTY: the Z-labeled key is NOT close");
+  assert.ok(mod.isReopenClosedChord({ key: "z", code: "KeyW", altKey: true, shiftKey: true }), "AZERTY: the Z-labeled key reopens");
+  assert.ok(mod.isCloseWindowChord({ key: "w", code: "KeyZ", altKey: true, shiftKey: true }), "AZERTY: the W-labeled key closes");
+  assert.ok(!mod.isReopenClosedChord({ key: "w", code: "KeyZ", altKey: true, shiftKey: true }), "AZERTY: the W-labeled key is NOT reopen");
   assert.ok(!mod.isCloseWindowChord({ key: "x", code: "KeyX", altKey: true, shiftKey: true }), "neither letter nor code, no fire");
   assert.ok(!mod.isCloseWindowChord({ key: "w", altKey: true, shiftKey: true }, true), "Alt+Shift+W yields while typing, like Alt+Shift+T");
   assert.ok(mod.isCloseWindowChord({ key: "w", metaKey: true, shiftKey: true }), "legacy mac chord");
@@ -172,6 +181,23 @@ test("the Alt family: Chrome's N/T/W commands on modifiers browsers deliver (PR 
   assert.ok(!mod.isReopenClosedChord({ key: "n", altKey: true, shiftKey: true }));
   assert.ok(!mod.isCloseTabChord({ key: "z", altKey: true, shiftKey: true }), "Alt+Shift+Z is reopen, not close-tab");
   assert.ok(!mod.isCloseTabChord({ key: "n", altKey: true }));
+});
+
+test("activePanelToClose: the ACTIVE workspace's active tab, or a no-op (round-3 audit, B3)", async () => {
+  const mod = await load();
+  assert.ok(mod, "workspaceClose module must exist (see module test)");
+
+  const apis = new Map<string, { activePanel?: { id: string } | null }>([
+    ["a", { activePanel: { id: "chat:1" } }],
+    ["b", { activePanel: { id: "chat:2" } }],
+    ["empty", { activePanel: null }],
+  ]);
+  const get = (id: string) => apis.get(id);
+
+  assert.equal(mod.activePanelToClose(get, "b")?.id, "chat:2", "the active workspace's active tab — not another workspace's");
+  assert.equal(mod.activePanelToClose(get, "a")?.id, "chat:1");
+  assert.equal(mod.activePanelToClose(get, "empty"), null, "no active panel → the chord does nothing");
+  assert.equal(mod.activePanelToClose(get, "ghost"), null, "no live dockview api → the chord does nothing");
 });
 
 test("the undo stack: LIFO, capped, snapshots carry name + layout", async () => {

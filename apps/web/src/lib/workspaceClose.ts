@@ -137,6 +137,17 @@ export function freshPanels(panels: PanelDescriptor[], exists: (id: string) => b
   return panels.filter((p) => !exists(p.id));
 }
 
+/**
+ * Which tab the Alt+W chord closes: the ACTIVE workspace's active panel, or
+ * null when that workspace has no live dockview api or shows no active panel
+ * (an empty workspace's chord is a no-op). The api lookup is injected so the
+ * pin stays DOM-free (PR #184 audit, B3); the close itself goes through
+ * api.close(), the same path as the tab's own X.
+ */
+export function activePanelToClose<T>(get: (spaceId: string) => { activePanel?: T | null } | undefined, activeId: string): T | null {
+  return get(activeId)?.activePanel ?? null;
+}
+
 export interface ChordEvent {
   key: string;
   code?: string;
@@ -171,17 +182,27 @@ const chord = (e: ChordEvent, key: string) =>
 
 /* The strip's own pattern (Alt+Shift+T adds a tab): exactly Alt(+Shift), no
    Cmd/Ctrl — extra modifiers mean some other gesture, and AltGr (Ctrl+Alt)
-   is typing, not a chord. Matches on the physical code as well as the
-   letter: on macOS Option is a composer, so Option+Shift+W reports a
-   composed glyph as e.key („ on US layouts) and a letter-only match would
-   be dead there — e.code ("KeyW") is layout/composer-independent (PR #184
-   audit, B1). */
-const altChord = (e: ChordEvent, key: string, code: string, shift: boolean) =>
-  e.altKey === true &&
-  (e.shiftKey === true) === shift &&
-  e.metaKey !== true &&
-  e.ctrlKey !== true &&
-  (e.key.toLowerCase() === key || e.code === code);
+   is typing, not a chord.
+
+   Letter-first, code-fallback (two audits' worth of layout scars): the
+   printed letter is the chord's meaning — on AZERTY the Z-labeled key must
+   reopen, never close, so when e.key is a real letter it decides. But macOS
+   Option is a composer: Option+Shift+W reports a glyph („ on US layouts) as
+   e.key, where a letter-only match is dead (round-1 B1) — a glyph falls back
+   to the physical e.code. A plain e.key OR e.code match double-fires on
+   AZERTY, whose Z-labeled key carries code KeyW (round-3 B1). The corner no
+   (key, code) pair can serve is macOS Option on a non-QWERTY layout — it
+   gets position semantics, and the palette entry is the guaranteed path. */
+const letterOf = (e: ChordEvent) => {
+  const k = e.key.toLowerCase();
+  return k.length === 1 && k >= "a" && k <= "z" ? k : null;
+};
+
+const altChord = (e: ChordEvent, key: string, code: string, shift: boolean) => {
+  if (e.altKey !== true || (e.shiftKey === true) !== shift || e.metaKey === true || e.ctrlKey === true) return false;
+  const letter = letterOf(e);
+  return letter !== null ? letter === key : e.code === code;
+};
 
 /**
  * The Alt family: Chrome's window/tab commands moved to modifiers browsers

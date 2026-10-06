@@ -2,6 +2,7 @@ import { useCallback, useRef, useSyncExternalStore } from "react";
 import type { DockviewApi, IDockviewPanel, SerializedDockview } from "dockview-react";
 import { normalizeLayoutSizes } from "./layoutSanitize";
 import {
+  activePanelToClose,
   canClose,
   canRestore,
   freshPanels,
@@ -506,8 +507,7 @@ class DesktopManager {
    * machinery tabs like welcome close without one). No active tab, no-op.
    */
   closeActivePanel() {
-    const panel = this.apis.get(this.state.activeId)?.activePanel;
-    panel?.api.close();
+    activePanelToClose((id) => this.apis.get(id), this.state.activeId)?.api.close();
   }
 
   updateSettings(patch: Partial<UiSettings>) {
