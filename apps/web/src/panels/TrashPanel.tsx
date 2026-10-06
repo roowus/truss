@@ -78,8 +78,14 @@ function Row({ e, now }: { e: TrashEntry; now: number }) {
   const restore = () => {
     if (restoring) return;
     setRestoring(true);
-    if (e.kind === "session") void store.restoreSession(e.restoreId);
-    else desktops.reopenClosedAt(Number(e.restoreId));
+    /* reset the latch when the call settles and the row is still listed:
+       a failed restore keeps the row, and a dead button there strands the
+       user (audit round 3). A success unlists the row, making this a no-op. */
+    if (e.kind === "session") {
+      void store.restoreSession(e.restoreId).finally(() => setRestoring(false));
+    } else if (desktops.reopenClosedAt(Number(e.restoreId)) === null) {
+      setRestoring(false);
+    }
   };
 
   const deletedLabel = ago(e.deletedAt, now);
