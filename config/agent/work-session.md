@@ -246,8 +246,11 @@ right now they both say a stale thing:
    `curl -sS -X POST http://127.0.0.1:3080/plugins/dsh-unread/mark -H 'content-type: application/json' -d '{"sessionId": "'"$DSH_SESSION_ID"'", "unread": false}'`
 4. Ledger entry back to `"state": "working"`.
 
-Then treat the message like a new round: fix, push (re-apply the `audit`
-label if you want a fresh audit of the fix). When the round converges, run
+Then treat the message like a new round: **a bug the developer found gets
+a regression pin FIRST** (a failing test that reproduces it, then the fix —
+TRUSS.md "Commits"), then fix, push (re-apply the `audit` label if you want
+a fresh audit of the fix). The same rule covers anything the browser-smoke
+step catches. When the round converges, run
 the FULL handoff again (phase 3 step 4: retitle, label, in-session message
 with both links + the issue restatement + test steps, PR comment) — every
 time, not just the first. Merge itself is always the developer's click —
