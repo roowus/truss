@@ -1,5 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { createServer } from "node:net";
+import type { AddressInfo } from "node:net";
 import { freshServer } from "./helpers.js";
 
 /* net.ts — reachability probe for the add-host wizard. netInfo() only runs
@@ -55,6 +57,179 @@ test("tailscaleServe rejects cleanly when tailscale is unavailable (never flips 
     // no usable tailscale: both directions must reject (Error), not throw sync
     await assert.rejects(() => net.tailscaleServe(true, 4099));
     await assert.rejects(() => net.tailscaleServe(false, 4099));
+  } finally {
+    cleanup();
+  }
+});
+
+/* issue #171: the serve toggle plans around a busy 443, and the probe behind
+   the plan is webServerPresent — a live listener must read busy, a closed
+   port must read free, and the promise must never reject. The plan probes
+   EVERY local address (the incident's Caddy owned 443 on the tailnet ip,
+   invisible to a loopback-only check), so the multi-host form gets its own
+   assertion: a listener on ANY one address reads busy. */
+
+test("webServerPresent: a live listener reads busy, a closed port reads free", async () => {
+  const { cleanup } = await freshServer("net-probe");
+  try {
+    const net = await import("../src/net.js");
+    const srv = createServer();
+    await new Promise<void>((r) => srv.listen(0, "127.0.0.1", r));
+    const port = (srv.address() as AddressInfo).port;
+
+    assert.equal(await net.webServerPresent(port, ["127.0.0.1"]), true, "something answers → busy (the plan must move off it)");
+    /* the incident shape: the listener sits on ONE address of several — the
+       probe must still find it (127.0.0.2 answers nothing on this port) */
+    assert.equal(await net.webServerPresent(port, ["127.0.0.2", "127.0.0.1"]), true, "busy on any probed address → busy");
+
+    await new Promise<void>((r) => srv.close(() => r()));
+    assert.equal(await net.webServerPresent(port, ["127.0.0.1"]), false, "refused → free (the plan may claim it)");
+    assert.equal(await net.webServerPresent(port, ["127.0.0.2", "127.0.0.1"]), false, "refused everywhere → free");
+  } finally {
+    cleanup();
+  }
+});
+
+/* audit round 2, B1/B4: the timeout direction is the conservative core of
+   the plan — a dropped SYN means "unsure", and an unsure port is never
+   claimed. A black-holed port can't be faked without a firewall, so the
+   fold is pinned directly. */
+
+test("probeBusy: connect or timeout anywhere → busy; only all-refused/errored is free", async () => {
+  const { cleanup } = await freshServer("net-probe-fold");
+  try {
+    const net = await import("../src/net.js");
+    assert.equal(net.probeBusy(["connect"]), true, "an answer is busy");
+    assert.equal(net.probeBusy(["refused", "connect"]), true);
+    assert.equal(net.probeBusy(["timeout"]), true, "a black hole is UNSURE — never claimed (a false busy costs a warning; a false free costs the outage)");
+    assert.equal(net.probeBusy(["refused", "timeout", "error"]), true, "one unsure address among clear ones still reads busy");
+    assert.equal(net.probeBusy(["refused", "refused"]), false, "refused everywhere is free");
+    assert.equal(net.probeBusy(["error", "refused"]), false, "unreachable/refused is free");
+    assert.equal(net.probeBusy([]), false, "nothing probed is free");
+  } finally {
+    cleanup();
+  }
+});
+
+test("netInfo surfaces tailscale.servePlan while serve is off and clickable (the pre-click warning)", async () => {
+  const { cleanup } = await freshServer("net-plan");
+  try {
+    const net = await import("../src/net.js");
+    const info = await net.netInfo(4040);
+    if (!info.tailscale.installed || info.tailscale.serveOn || info.tailscale.canServe === false) return; // nothing to plan on this box
+    const plan = info.tailscale.servePlan;
+    assert.ok(plan, "serve off + clickable → the plan rides along so the UI warns BEFORE the click");
+    assert.ok(Number.isInteger(plan.httpsPort) && plan.httpsPort > 0 && plan.httpsPort <= 65535);
+    if (plan.httpsPort === 443) {
+      assert.equal(plan.warning, null, "443 free → the standard plan, no noise");
+    } else {
+      assert.match(plan.warning ?? "", /443/, "the alternate-port plan names the conflict");
+    }
+  } finally {
+    cleanup();
+  }
+});
+
+test("planServe: both candidate ports busy → the plan refuses, naming both", async () => {
+  const { cleanup } = await freshServer("net-plan-both");
+  try {
+    const net = await import("../src/net.js");
+    const plan = net.planServe({ port: 4040, port443Busy: true, altPortBusy: true });
+    assert.match(plan.warning ?? "", /443/, "names the standard port");
+    assert.match(plan.warning ?? "", /8443/, "names the alternate too");
+    assert.match(plan.warning ?? "", /refuse/i, "says the toggle refuses rather than shadowing 8443's owner");
+  } finally {
+    cleanup();
+  }
+});
+
+/* audit B1 (PR #178): OFF tears down only a config it can ATTRIBUTE to this
+   truss — the status is matched by proxy target, never by name, and an
+   unattributable status yields null so the toggle tears nothing down */
+
+test("parseServingHttpsPort: only a config proxying to OUR port is attributed", async () => {
+  const { cleanup } = await freshServer("net-serve-attr");
+  try {
+    const net = await import("../src/net.js");
+    const status = JSON.stringify({
+      Web: {
+        "rewvis.tail208cbf.ts.net:443": { Handlers: { "/": { Proxy: "http://127.0.0.1:3000" } } },
+        "rewvis.tail208cbf.ts.net:8443": { Handlers: { "/": { Proxy: "http://127.0.0.1:4040" } } },
+      },
+    });
+    assert.equal(net.parseServingHttpsPort(status, 4040), 8443, "ours is the config proxying to our port");
+    assert.equal(net.parseServingHttpsPort(status, 5555), null, "a neighbor's config is NOT ours — OFF must target nothing");
+
+    /* audit round 3: the digit boundary — a neighbor on a PREFIX port
+       (40401 vs our 4040) must not attribute to us */
+    const prefix = JSON.stringify({ Web: { "rewvis.tail208cbf.ts.net:443": { Handlers: { "/": { Proxy: "http://127.0.0.1:40401" } } } } });
+    assert.equal(net.parseServingHttpsPort(prefix, 4040), null, "127.0.0.1:40401 is NOT our 4040 — the prefix neighbor stays unattributed");
+    assert.equal(net.parseServingHttpsPort(prefix, 40401), 443, "...and attributes to its real owner");
+
+    const portlessKey = JSON.stringify({ Web: { "rewvis.tail208cbf.ts.net": { Handlers: { "/": { Proxy: "http://127.0.0.1:4040" } } } } });
+    assert.equal(net.parseServingHttpsPort(portlessKey, 4040), 443, "a key without a port suffix is 443");
+
+    for (const junk of ["", "not json", "{}", "[]", "null"]) {
+      assert.equal(net.parseServingHttpsPort(junk, 4040), null, `${JSON.stringify(junk)} → null, never a crash`);
+    }
+  } finally {
+    cleanup();
+  }
+});
+
+test("parseServeAttribution: netInfo's serveOn/serveUrl path — key AND port, boundary-matched", async () => {
+  const { cleanup } = await freshServer("net-serve-attr-key");
+  try {
+    const net = await import("../src/net.js");
+    const status = JSON.stringify({
+      Web: {
+        "rewvis.tail208cbf.ts.net:443": { Handlers: { "/": { Proxy: "http://127.0.0.1:40401" } } },
+        "rewvis.tail208cbf.ts.net:8443": { Handlers: { "/": { Proxy: "http://127.0.0.1:4040" } } },
+      },
+    });
+    const ours = net.parseServeAttribution(status, 4040);
+    assert.deepEqual(ours, { key: "rewvis.tail208cbf.ts.net:8443", httpsPort: 8443 }, "serveUrl is built from OUR config's key — the neighbor's :443 is not offered");
+    assert.equal(net.parseServeAttribution(status, 3000), null, "nothing ours → serveOn false");
+
+    /* audit round 5: the Proxy field is matched exactly — a config that
+       merely MENTIONS our address in some other field is not ours */
+    const mentioned = JSON.stringify({ Web: { "rewvis.tail208cbf.ts.net:443": { Handlers: { "/": { Text: "moved to http://127.0.0.1:4040" } } } } });
+    assert.equal(net.parseServeAttribution(mentioned, 4040), null, "a mention in a non-Proxy field is not attribution");
+  } finally {
+    cleanup();
+  }
+});
+
+/* audit round 5, B1: older tailscale CLIs have no serve --json — netInfo
+   and OFF both fall back to the text status, so it gets the same matrix */
+
+test("parseServeAttributionText: the old-CLI text format attributes by the block's proxy target", async () => {
+  const { cleanup } = await freshServer("net-serve-text");
+  try {
+    const net = await import("../src/net.js");
+    const text = [
+      "https://rewvis.tail208cbf.ts.net (tailnet only)",
+      "|-- / proxy http://127.0.0.1:3000",
+      "https://rewvis.tail208cbf.ts.net:8443 (tailnet only)",
+      "|-- / proxy http://127.0.0.1:4040",
+      "",
+    ].join("\n");
+
+    assert.deepEqual(
+      net.parseServeAttributionText(text, 4040),
+      { key: "rewvis.tail208cbf.ts.net:8443", httpsPort: 8443 },
+      "OUR block wins — not the first URL on a multi-config machine",
+    );
+    assert.equal(net.parseServeAttributionText(text, 3000)?.httpsPort, 443, "a port-less URL line is 443");
+    assert.equal(net.parseServeAttributionText(text, 5555), null, "nothing ours → null (OFF tears nothing down)");
+
+    /* the digit boundary holds in the text format too */
+    const prefix = "https://rewvis.tail208cbf.ts.net (tailnet only)\n|-- / proxy http://127.0.0.1:40401\n";
+    assert.equal(net.parseServeAttributionText(prefix, 4040), null, "40401 is not 4040 in text either");
+
+    for (const junk of ["", "no serve config here", "https://\n"]) {
+      assert.equal(net.parseServeAttributionText(junk, 4040), null, `${JSON.stringify(junk)} → null, never a crash`);
+    }
   } finally {
     cleanup();
   }

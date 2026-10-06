@@ -251,20 +251,32 @@ export function AddHostWizard({ onClose }: { onClose: () => void }) {
                   <>
                     Turn on tailscale serve (https on the tailnet → loopback) or restart with <span className="font-mono">TRUSS_HOST=0.0.0.0</span>.{" "}
                     {net.tailscale.canServe !== false && (
-                      <button
-                        type="button"
-                        disabled={serveBusy}
-                        className="underline decoration-dotted hover:brightness-125"
-                        onClick={() => {
-                          setServeBusy(true);
-                          be?.tailscaleServe(true)
-                            .then(() => be.netInfo())
-                            .then((n) => { setNet(n); setServeBusy(false); })
-                            .catch(() => setServeBusy(false));
-                        }}
-                      >
-                        turn on tailscale serve now
-                      </button>
+                      <>
+                        {/* issue #171: when another server owns 443 the toggle
+                            moves truss to the alternate port — warn BEFORE the
+                            click, not after the other sites go dark */}
+                        {net.tailscale.servePlan?.warning && (
+                          <span className="block mt-1">{net.tailscale.servePlan.warning}</span>
+                        )}
+                        <button
+                          type="button"
+                          disabled={serveBusy}
+                          className="underline decoration-dotted hover:brightness-125"
+                          onClick={() => {
+                            setServeBusy(true);
+                            setErr(null);
+                            be?.tailscaleServe(true)
+                              .then(() => be.netInfo())
+                              .then((n) => { setNet(n); setServeBusy(false); })
+                              /* surface the refusal (e.g. both candidate ports
+                                 busy, audit B2) — a silent catch leaves the
+                                 user thinking the click did nothing */
+                              .catch((e) => { setErr(e?.message ?? String(e)); setServeBusy(false); });
+                          }}
+                        >
+                          turn on tailscale serve now
+                        </button>
+                      </>
                     )}
                     {net.tailscale.canServe === false && (
                       <span className="font-mono">(serve needs: sudo tailscale set --operator=$USER)</span>

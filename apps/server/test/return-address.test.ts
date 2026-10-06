@@ -62,6 +62,10 @@ test("assertDialableServerUrl: the user's exact dead address rejects with remedi
     net.assertDialableServerUrl("http://127.0.0.1:4040", NET_LOOPBACK);
     const withServe = { ...NET_LOOPBACK, tailscale: { ...NET_LOOPBACK.tailscale, serveOn: true, serveUrl: "https://rewvis.tail208cbf.ts.net" } };
     net.assertDialableServerUrl("https://rewvis.tail208cbf.ts.net", withServe);
+    /* issue #171: on a busy-443 machine the serve URL carries the alternate
+       port — dialability must accept it (it is the same serveUrl compare) */
+    const withAltServe = { ...NET_LOOPBACK, tailscale: { ...NET_LOOPBACK.tailscale, serveOn: true, serveUrl: "https://rewvis.tail208cbf.ts.net:8443" } };
+    net.assertDialableServerUrl("https://rewvis.tail208cbf.ts.net:8443", withAltServe);
 
     /* all-interfaces bind: everything local passes */
     const wide = { ...NET_LOOPBACK, bind: "0.0.0.0" };
