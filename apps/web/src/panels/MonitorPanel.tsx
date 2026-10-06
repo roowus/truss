@@ -6,6 +6,7 @@ import { Btn, Empty, Icon, Spinner } from "@/components/ui";
 import { Spark } from "./Inspectors";
 import { fmtSize, procCell, fmtUptime } from "@/lib/format";
 import { gaugeRing } from "@/lib/gaugeGeometry";
+import { sparkValueLabel } from "@/lib/sparkline";
 import type { HostMetrics, MonitorData } from "@/lib/proto";
 import { cn } from "@/utils/cn";
 
@@ -109,6 +110,7 @@ function MonitorBody({ m, hist }: { m: HostMetrics; hist: { t: number; cpu: numb
   const memPct = m.mem.total ? (m.mem.used / m.mem.total) * 100 : 0;
   const swapPct = m.mem.swapTotal ? (m.mem.swapUsed / m.mem.swapTotal) * 100 : 0;
   const rootDisk = m.disks.find((d) => d.mount === "/") ?? m.disks[0];
+  const times = hist.map((p) => p.t);
   return (
     <div className="p-4 space-y-5">
       {/* host summary */}
@@ -127,12 +129,12 @@ function MonitorBody({ m, hist }: { m: HostMetrics; hist: { t: number; cpu: numb
         <Gauge label={`disk ${rootDisk?.mount ?? "/"}`} pct={rootDisk?.pct ?? 0} detail={rootDisk ? `${fmtSize(rootDisk.used)} / ${fmtSize(rootDisk.total)}` : "—"} />
       </div>
 
-      {/* history sparklines */}
+      {/* history sparklines — real values with units, never pre-normalized (issue #161) */}
       {hist.length > 1 && (
         <div className="grid sm:grid-cols-3 gap-2">
-          <SparkCard label="cpu %" points={hist.map((p) => p.cpu / 100)} color="var(--t-teal)" />
-          <SparkCard label="memory %" points={hist.map((p) => p.mem / 100)} color="var(--t-violet)" />
-          <SparkCard label="net (rx in / tx out)" points={hist.map((p) => Math.min(1, (p.rx + p.tx) / Math.max(1, Math.max(...hist.map((q) => q.rx + q.tx)))))} color="var(--t-sky)" />
+          <SparkCard label="cpu %" points={hist.map((p) => p.cpu / 100)} unit="%" domain={[0, 1]} times={times} color="var(--t-teal)" />
+          <SparkCard label="memory %" points={hist.map((p) => p.mem / 100)} unit="%" domain={[0, 1]} times={times} color="var(--t-violet)" />
+          <SparkCard label="net (rx in / tx out)" points={hist.map((p) => p.rx + p.tx)} unit="B/s" times={times} color="var(--t-sky)" />
         </div>
       )}
 
@@ -254,14 +256,16 @@ function Gauge({ label, pct, detail }: { label: string; pct: number; detail: str
   );
 }
 
-function SparkCard({ label, points, color }: { label: string; points: number[]; color: string }) {
+function SparkCard({ label, points, color, unit, domain, times }: {
+  label: string; points: number[]; color: string; unit: string; domain?: [number, number]; times?: number[];
+}) {
   return (
     <section className="rounded-lg border border-[var(--t-line)] bg-[var(--t-bg0)]/60 p-3">
       <div className="flex items-center font-mono text-[10px] uppercase tracking-wider text-[var(--t-dim)] mb-1.5">
         <span>{label}</span>
-        <span className="ml-auto normal-case tabular-nums text-[var(--t-mute)]">{Math.round((points[points.length - 1] ?? 0) * 100)}%</span>
+        <span className="ml-auto normal-case tabular-nums text-[var(--t-mute)]">{sparkValueLabel(points[points.length - 1] ?? 0, unit)}</span>
       </div>
-      <Spark points={points} color={color} />
+      <Spark points={points} color={color} unit={unit} domain={domain} times={times} />
     </section>
   );
 }
