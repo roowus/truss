@@ -45,7 +45,10 @@ When you are handed a PR you did not make (the developer commented
    the description after the bracket. Brackets: `[working]` while implementing or
    fixing, `[needs-answer]` while blocked on the developer (see the question
    lane), `[ready]` once handed off for review. The `[merged]` bracket is
-   set by the reaper when your PR merges — you never set it yourself. The cron that started you records the mapping in
+   set by the reaper when your PR merges — you never set it yourself.
+   `[closed]` covers closed-unmerged PRs (also reaper-set). PR-less sessions
+   (verification, questions) end at `[done]` — set it yourself with your
+   findings as the final message. The cron that started you records the mapping in
    `~/.local/state/truss-sessions.json`; if it didn't, append your own entry:
    `{"pr": <n>, "session": "<id>", "since": "<iso>", "state": "working"}`.
 1. Read the issue fully, including its suggested tests.
