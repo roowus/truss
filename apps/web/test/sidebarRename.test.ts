@@ -72,4 +72,9 @@ test("read-through: row titles double-click into inline edit; the row's dblclick
   const src = readFileSync(new URL("../src/components/Sidebar.tsx", import.meta.url), "utf8");
   assert.ok(!/onDoubleClick=\{openable \? \(\) => openDailyDriver/.test(src), "the row-level dblclick → daily-driver is retired (the title takes rename)");
   assert.ok(/onDoubleClick/.test(src) && /rename/i.test(src), "the title span carries the rename gesture");
+  /* audit round 2 (M1): pin the round-1 B2 fix — the host rename targets
+     the shared label, never the per-user alias (alias || h.label here was
+     exactly the bug) */
+  assert.ok(/setName\(h\.label\)/.test(src), "the host rename prefills the shared label, never the alias (round-1 B2)");
+  assert.ok(!/setName\(alias \|\| h\.label\)/.test(src), "the alias text must not land in the shared label (round-1 B2)");
 });
