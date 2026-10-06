@@ -669,8 +669,16 @@ function Composer({ id, active }: { id: string; active: boolean }) {
   /* issue #170: a scoped catalog says so under the open list (claude's 11
      models ARE the key-proxy's whole catalog — without the note a short
      list reads as missing data). Scoped to the same harness filter the
-     options use; rich catalogs get null and stay quiet. */
-  const scopeNote = catalogScopeNote(models.filter((m) => m.harness === baseHarness(meta.harness)));
+     options use; rich catalogs get null and stay quiet. buildModelOptions
+     synthesizes the session's current model in when the catalog lacks it,
+     so fold that provider into the note's scope too — the note must never
+     contradict a row the list actually shows. */
+  const scopedRows = models.filter((m) => m.harness === baseHarness(meta.harness));
+  const scopeNote = catalogScopeNote(
+    meta.model && meta.provider && !scopedRows.some((m) => m.provider === meta.provider && m.model === meta.model)
+      ? [...scopedRows, { provider: meta.provider }]
+      : scopedRows,
+  );
   const onModelPick = (v: string) => {
     const { provider, model } = splitModelValue(v);
     if (v && v !== currentValue) void store.switchModel(id, model, provider).catch(() => {});

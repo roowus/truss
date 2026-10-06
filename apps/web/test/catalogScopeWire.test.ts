@@ -16,10 +16,14 @@ const SELECT = readFileSync(new URL("../src/components/ui.tsx", import.meta.url)
 
 test("ChatPanel feeds catalogScopeNote the harness-scoped catalog", () => {
   assert.ok(
-    /catalogScopeNote\(\s*models\.filter\(\(m\)\s*=>\s*m\.harness === baseHarness\(meta\.harness\)\)\s*\)/.test(PANEL),
+    /scopedRows = models\.filter\(\(m\)\s*=>\s*m\.harness === baseHarness\(meta\.harness\)\)/.test(PANEL),
     "the note describes the list the picker shows — the base harness's catalog rows, not the whole catalog",
   );
-  assert.ok(/<Select[\s\S]*?note=\{scopeNote\}/.test(PANEL), "the model picker receives the scope note");
+  assert.ok(
+    /!scopedRows\.some\(\(m\)\s*=>\s*m\.provider === meta\.provider && m\.model === meta\.model\)/.test(PANEL),
+    "a current model the catalog lacks folds its provider into the note, so the note never contradicts a visible row (audit B2)",
+  );
+  assert.ok(/catalogScopeNote\(/.test(PANEL) && /<Select[\s\S]*?note=\{scopeNote\}/.test(PANEL), "the model picker receives the scope note");
 });
 
 test("Select renders the note under the list, pinned to the popover bottom", () => {

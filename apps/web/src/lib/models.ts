@@ -37,17 +37,28 @@ const PROVIDER_SCOPE_NOTES: Record<string, string> = {
   "zai-local": "via zai-local (the local key-proxy)",
 };
 
+/* Past this many rows a list no longer reads as sparse, so the note has
+   nothing to explain — richness is a ROW count, not a provider count:
+   hermes tags its whole 600+ model catalog provider "hermes"
+   (apps/server/src/adapters/hermes.ts mapModels), and a provider gate
+   alone would pin "via hermes" under exactly the rich lists the issue
+   says stay quiet. Sits between claude's 11 key-proxy models and the
+   big OpenRouter/dsh catalogs. */
+const SCOPE_NOTE_MAX_ROWS = 30;
+
 /**
  * One line under the model picker's list explaining the list's scope, or
  * null when there is nothing to explain (issue #170):
  * - every row from one provider → "via <provider>", with a plain-language
  *   reason for the providers we know are scoped on purpose;
  * - two or three providers → all named;
- * - more → null: the catalog is rich, and the per-row provider labels
- *   (#169) carry the scope instead of a footnote;
+ * - more providers, or a long list at all → null: the catalog is rich,
+ *   and the per-row provider labels (#169) carry the scope instead of a
+ *   footnote;
  * - empty → null.
  */
 export function catalogScopeNote(models: { provider: string }[]): string | null {
+  if (models.length === 0 || models.length > SCOPE_NOTE_MAX_ROWS) return null;
   const providers = [...new Set(models.map((m) => m.provider).filter(Boolean))];
   if (providers.length === 0 || providers.length > 3) return null;
   if (providers.length === 1) return PROVIDER_SCOPE_NOTES[providers[0]] ?? `via ${providers[0]}`;

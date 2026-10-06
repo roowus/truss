@@ -313,7 +313,15 @@ export function Select({
           ref={listRef}
           role="listbox"
           aria-label={ariaLabel}
-          className="fixed z-[170] max-h-[280px] overflow-auto t-scroll rounded-lg bg-[var(--t-bg2)] border border-[var(--t-line2)] shadow-2xl pb-1 t-pop"
+          /* pb-1 only when NO note renders: a sticky bottom-0 element's
+             offset is measured against the container's content box, so
+             with padding the note would stick 4px above the scrollport
+             bottom and leave a strip of scrolled options showing below
+             it (audit B4). The note seals flush instead. */
+          className={cn(
+            "fixed z-[170] max-h-[280px] overflow-auto t-scroll rounded-lg bg-[var(--t-bg2)] border border-[var(--t-line2)] shadow-2xl t-pop",
+            !note && "pb-1",
+          )}
           style={
             popPos
               ? { top: popPos.top, left: popPos.left, minWidth: rect.width, maxWidth: Math.min(440, window.innerWidth - 16) }
