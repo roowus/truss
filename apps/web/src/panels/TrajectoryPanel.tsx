@@ -129,11 +129,30 @@ function TimelineView({ view, hasCalls }: { view: SessionView; hasCalls: boolean
     return ov.segments.filter((s) => s.end >= zoom.start && s.start <= zoom.end).map((s) => ({ t: turns[s.turnIndex], i: s.turnIndex }));
   }, [turns, ov, zoom]);
 
-  const focusTurn = (i: number) => {
+  /* click-to-jump on the overview. A turn outside the active zoom is not
+     rendered, so the zoom clears first and the jump runs after the feed
+     re-renders — otherwise the click silently does nothing (audit B1) */
+  const pendingFocus = useRef<number | null>(null);
+  const doFocus = (i: number) => {
     feedRef.current?.querySelector(`[data-turn="${i}"]`)?.scrollIntoView({ behavior: "smooth", block: "start" });
     setFlash(i);
     window.setTimeout(() => setFlash((f) => (f === i ? null : f)), 1200);
   };
+  const focusTurn = (i: number) => {
+    if (zoom && !shown.some((s) => s.i === i)) {
+      pendingFocus.current = i;
+      setZoom(null);
+      return;
+    }
+    doFocus(i);
+  };
+  useEffect(() => {
+    if (pendingFocus.current != null && !zoom) {
+      const i = pendingFocus.current;
+      pendingFocus.current = null;
+      doFocus(i);
+    }
+  }, [zoom, shown]);
 
   if (turns.length === 0) {
     return (
@@ -147,7 +166,7 @@ function TimelineView({ view, hasCalls }: { view: SessionView; hasCalls: boolean
 
   return (
     <>
-      {ov && <OverviewStrip ov={ov} zoom={zoom} onZoom={setZoom} onFocus={focusTurn} />}
+      {ov && <OverviewStrip ov={ov} zoom={zoom} zoomCount={shown.length} onZoom={setZoom} onFocus={focusTurn} />}
       <div ref={feedRef} className="flex-1 min-h-0 overflow-auto t-scroll">
         <div className="px-3 py-2 space-y-1.5 min-w-[420px]">
           {shown.length === 0 ? (
@@ -169,9 +188,11 @@ function TimelineView({ view, hasCalls }: { view: SessionView; hasCalls: boolean
    the session's full span (teal, red when a tool failed, striped amber while
    in flight). Drag-select zooms the feed to a window; a click jumps the feed
    to the nearest turn; Escape or the reset link clears the zoom. */
-function OverviewStrip({ ov, zoom, onZoom, onFocus }: {
+function OverviewStrip({ ov, zoom, zoomCount, onZoom, onFocus }: {
   ov: TimelineOverview;
   zoom: { start: number; end: number } | null;
+  /** turns rendered under the active zoom (the feed's own count, not a recompute) */
+  zoomCount: number;
   onZoom: (z: { start: number; end: number } | null) => void;
   onFocus: (turnIndex: number) => void;
 }) {
@@ -184,15 +205,18 @@ function OverviewStrip({ ov, zoom, onZoom, onFocus }: {
     return ov.start + Math.min(1, Math.max(0, (e.clientX - r.left) / Math.max(1, r.width))) * span;
   };
   const sel = draft ? { start: Math.min(draft[0], draft[1]), end: Math.max(draft[0], draft[1]) } : zoom;
+  const cancelDrag = () => {
+    anchor.current = null;
+    setDraft(null);
+  };
 
   return (
     <div className="shrink-0 px-3 pt-2 pb-1.5 border-b border-[var(--t-line)]">
       <div
         className="relative h-7 rounded border border-[var(--t-line)] bg-[var(--t-bg0)] overflow-hidden cursor-crosshair select-none touch-none outline-none focus-visible:ring-1 focus-visible:ring-[var(--t-sky)]"
-        role="slider"
+        role="group"
         tabIndex={0}
-        aria-label="Session overview timeline"
-        aria-valuetext={zoom ? `zoomed to ${fmtMs(zoom.end - zoom.start)} of ${fmtMs(span)}` : `full span ${fmtMs(span)}`}
+        aria-label={`Session overview timeline, ${zoom ? `zoomed to ${fmtMs(zoom.end - zoom.start)} of ${fmtMs(span)}` : `full span ${fmtMs(span)}`}`}
         onKeyDown={(e) => {
           if (e.key === "Escape") onZoom(null);
         }}
@@ -204,6 +228,7 @@ function OverviewStrip({ ov, zoom, onZoom, onFocus }: {
         onPointerMove={(e) => {
           if (anchor.current != null) setDraft([anchor.current, timeAt(e)]);
         }}
+        onPointerCancel={cancelDrag}
         onPointerUp={(e) => {
           if (anchor.current == null) return;
           const a = anchor.current;
@@ -251,7 +276,7 @@ function OverviewStrip({ ov, zoom, onZoom, onFocus }: {
         <span>{new Date(ov.start).toLocaleTimeString()}</span>
         {zoom ? (
           <button onClick={() => onZoom(null)} className="text-[var(--t-sky)] hover:underline">
-            zoomed to {fmtMs(zoom.end - zoom.start)} ({shownCount(zoom, ov)} turns) · reset
+            zoomed to {fmtMs(zoom.end - zoom.start)} ({zoomCount} turns) · reset
           </button>
         ) : (
           <span>{ov.segments.length} turns · drag to zoom · click to jump</span>
@@ -261,9 +286,6 @@ function OverviewStrip({ ov, zoom, onZoom, onFocus }: {
     </div>
   );
 }
-
-const shownCount = (zoom: { start: number; end: number }, ov: TimelineOverview) =>
-  ov.segments.filter((s) => s.end >= zoom.start && s.start <= zoom.end).length;
 
 function TurnRow({ turn, now, first, flash }: { turn: TimelineTurn; now: number; first: boolean; flash?: boolean }) {
   const a = turn.assistant;
