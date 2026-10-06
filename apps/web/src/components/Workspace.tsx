@@ -270,9 +270,11 @@ function TrussTab({ api, params }: IDockviewPanelHeaderProps<{ sessionId?: strin
             onDoubleClick={(e) => e.stopPropagation()}
             /* reads as a field, not as tab text (the search box's recipe):
                darker than the tab's own bg1, a visible border that warms on
-               focus, an amber caret so "you can type" is unmistakable */
+               focus, an amber caret so "you can type" is unmistakable. The
+               negative margin is LEFT-only: the right edge stays where the
+               title text ended, out of the indicator/X's reserved zone */
             style={{ caretColor: "var(--t-amber)" }}
-            className="min-w-0 flex-1 h-[18px] px-1 -mx-1 rounded border border-[var(--t-line2)] bg-[var(--t-bg0)] outline-none focus:border-[var(--t-amber)] text-[12px] text-[var(--t-fg)]"
+            className="min-w-0 flex-1 h-[18px] px-1 -ml-1 mr-1 rounded border border-[var(--t-line2)] bg-[var(--t-bg0)] outline-none focus:border-[var(--t-amber)] text-[12px] text-[var(--t-fg)]"
           />
         ) : (
           <span className="min-w-0 flex-1 overflow-hidden whitespace-nowrap t-fade-r" onDoubleClick={renameTarget ? beginRename : undefined}>
