@@ -215,6 +215,10 @@ export function pairingPage(): string {
   .brand h1 { font-size: 16px; font-weight: 600; margin: 0; }
   .sub { color: #9b968c; margin: 0 0 20px; }
   .step { display: flex; gap: 12px; padding: 12px 0; border-top: 1px solid #23262c; }
+  /* the step wrapper is itself a flex item: without min-width:0 its automatic
+     minimum tracks the widest content (a long command), and the overflow the
+     .cmd code rule fixes just moves up a level — caught in a real browser */
+  .step > div { min-width: 0; }
   .n { flex: none; width: 22px; height: 22px; border-radius: 999px; border: 1px solid #f0b35a; color: #f0b35a;
        display: grid; place-items: center; font-size: 11px; font-weight: 600; margin-top: 1px; }
   .step p { margin: 0 0 10px; color: #d0cabe; }
