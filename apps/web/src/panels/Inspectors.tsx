@@ -6,6 +6,7 @@ import { harnessDisplay, hostAliases } from "@/lib/device";
 import { useDesktops } from "@/lib/desktops";
 import { Btn, Empty, HarnessMark, Icon, Kbd, Select, Spinner, StateDot, TrussLogo } from "@/components/ui";
 import { openDailyDriver, openFreeShell } from "@/lib/workspace";
+import { costsRefreshDue, heatTooltip } from "@/lib/heatGrid";
 import type { SkillInfo } from "@/lib/proto";
 import { cn } from "@/utils/cn";
 
@@ -475,6 +476,14 @@ export function CostPanel() {
   /* live-ish: refetch when a llm.call.done lands anywhere */
   const tick = useApp((s) => Object.values(s.views).reduce((n, v) => n + v.callOrder.filter((c) => v.calls[c].done).length, 0));
   useEffect(() => { if (tick > 0) load(); }, [tick]);
+  /* time-based refetch (issue #158): the tick only counts dones in hydrated
+     views, so work in chats you haven't opened never landed, and a panel
+     left open overnight showed yesterday forever. The 30s clock re-checks
+     the staleness window, so new usage shows up within a couple minutes
+     regardless of which chats are open. */
+  useEffect(() => {
+    if (at > 0 && costsRefreshDue({ lastFetchAt: at, now })) load();
+  }, [now, at]);
 
   if (err) return <Empty icon="alert" title="Couldn't load costs">{err}</Empty>;
   if (!data) return <div className="h-full grid place-items-center"><Spinner /></div>;
@@ -507,7 +516,7 @@ export function CostPanel() {
           </div>
           {days && days.length > 0 && <DayTotals days={days} />}
         </div>
-        {days && days.length > 0 && <HeatGrid days={days} />}
+        {days && days.length > 0 && <HeatGrid days={days} now={now} />}
         {!t.hasCost && (
           <div className="mx-4 mb-3 rounded-md border border-[var(--t-line)] bg-[var(--t-bg2)] px-3 py-2 text-[11px] text-[var(--t-mute)]">
             No harness has reported cost yet — pi and claude-code report per-call cost; dsh and hermes report tokens only. Token columns are always real.
@@ -576,11 +585,14 @@ function DayTotals({ days }: { days: DayRow[] }) {
   );
 }
 
-/** Codex-style 5-week usage heat grid (intensity = total tokens that day). */
-function HeatGrid({ days }: { days: DayRow[] }) {
+/** Codex-style 5-week usage heat grid (intensity = total tokens that day).
+    `now` comes in as a prop (the panel's 30s tick), so "today" rolls at
+    midnight without a data change; the cell tooltip is the styled instant
+    kind (issue #158), not the slow native title. */
+function HeatGrid({ days, now }: { days: DayRow[]; now: number }) {
   const byDay = new Map(days.map((d) => [d.day, d]));
   /* build 35 cells ending today, week-aligned (oldest first, column per week) */
-  const todayD = new Date();
+  const todayD = new Date(now);
   const cells: (DayRow | null)[] = [];
   const start = new Date(todayD);
   start.setDate(start.getDate() - (34 + todayD.getDay() % 7));
@@ -600,17 +612,25 @@ function HeatGrid({ days }: { days: DayRow[] }) {
       <div className="flex gap-[3px]">
         {weeks.map((w, i) => (
           <div key={i} className="flex flex-col gap-[3px]">
-            {w.map((d) => {
-              if (!d) return <span key={Math.random()} className="w-3 h-3" />;
+            {w.map((d, j) => {
+              if (!d) return <span key={`pad${j}`} className="w-3 h-3" />;
               const tok = d.tokensIn + d.tokensOut;
               const p = tok === 0 ? 0 : Math.max(0.18, tok / max);
+              const tip = heatTooltip(d);
               return (
-                <span
-                  key={d.day}
-                  title={`${d.day}\n${d.calls} calls · ${fmtTokens(tok)} tokens${d.costUsd != null ? ` · ${fmtCost(d.costUsd)}` : ""}`}
-                  className="w-3 h-3 rounded-[3px] border border-[var(--t-line)]/60"
-                  style={{ background: tok === 0 ? "var(--t-bg0)" : `color-mix(in oklab, var(--t-amber) ${Math.round(p * 100)}%, var(--t-bg0))` }}
-                />
+                <span key={d.day} className="relative group">
+                  <span
+                    aria-label={tip}
+                    className="block w-3 h-3 rounded-[3px] border border-[var(--t-line)]/60 group-hover:border-[var(--t-amber)]"
+                    style={{ background: tok === 0 ? "var(--t-bg0)" : `color-mix(in oklab, var(--t-amber) ${Math.round(p * 100)}%, var(--t-bg0))` }}
+                  />
+                  {/* GitHub-style tooltip: instant on hover, anchored to the
+                      cell (left-aligned except the last column, which flips
+                      so it can't run off the panel edge) */}
+                  <span className={`pointer-events-none absolute bottom-full mb-1.5 z-40 hidden group-hover:block whitespace-nowrap rounded-md px-2 py-1 text-[10.5px] leading-4 font-medium text-white bg-[#24292e] shadow-md ${i === weeks.length - 1 ? "right-0" : "left-0"}`}>
+                    {tip}
+                  </span>
+                </span>
               );
             })}
           </div>
