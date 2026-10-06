@@ -370,7 +370,7 @@ function GroupActions({ props, spaceId }: { props: IDockviewHeaderActionsProps; 
           in desktops.register) */}
       <button
         className="w-6 h-6 grid place-items-center rounded text-[var(--t-dim)] hover:text-[var(--t-red)] hover:bg-white/5"
-        title="Close this whole tab group (Alt+Shift+Z reopens)"
+        title="Close this whole tab group (Alt+Shift+T reopens)"
         aria-label="Close this whole tab group"
         onClick={() => desktops.closeGroup(spaceId, [...props.group.panels])}
       >

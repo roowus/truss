@@ -65,7 +65,7 @@ interface DesktopState {
   activeId: string;
   hosts: Record<string, HostPreference>;
   settings: UiSettings;
-  /** Undo stack for "reopen what I closed" (Chrome's gesture; the advertised chord is Alt+Shift+Z, with Cmd/Ctrl+Shift+Z as an alias — browsers reserve Shift+T). Capped. Mixed: workspaces AND tabs. Lives in state so the Trash panel (issue #146) can browse it live; persisted with the layout doc. */
+  /** Undo stack for "reopen what I closed" (Chrome's gesture; the advertised chord is Alt+Shift+T — Chrome's own shape with Alt for Ctrl — with Cmd/Ctrl+Shift+Z as an "undo the close" alias; browsers reserve Cmd/Ctrl+Shift+T). Capped. Mixed: workspaces AND tabs. Lives in state so the Trash panel (issue #146) can browse it live; persisted with the layout doc. */
   closed: ClosedEntry[];
   loadError?: string;
   saveStatus: "idle" | "saving" | "saved" | "error";
@@ -386,7 +386,7 @@ class DesktopManager {
     for (const tid of terminals) this.cleanupTerminalLater(tid);
     this.queueSave();
     /* The chord is browser-reserved in some tabs, so name the sure path too. */
-    store.toast("info", `Closed workspace "${space.name}"`, "Reopen it from the command palette (Ctrl/⌘ K) or with Alt+Shift+Z.");
+    store.toast("info", `Closed workspace "${space.name}"`, "Reopen it from the command palette (Ctrl/⌘ K) or with Alt+Shift+T.");
   }
 
   /** The entry reopenClosed() would restore, or null when the undo stack is empty. */

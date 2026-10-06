@@ -21,16 +21,17 @@ import assert from "node:assert/strict";
          keeps the active one;
      the chord family (predicates take (e, typing?); every Alt chord yields
      while typing; mac-composed glyphs match via e.code; Cmd/Ctrl never mix
-     into an Alt chord):
-       isNewWorkspaceChord  — Alt+Shift+N: new workspace (Chrome's Ctrl+N);
-       isAddTabChord        — Alt+Shift+T: add tab (Chrome's Ctrl+T);
-       isCloseTabChord      — Alt+W: close the active tab (Chrome's Ctrl+W;
-                              Shift scales it to the workspace, Chrome-style);
-       isCloseWindowChord   — Alt+Shift+W: close the active workspace; the
-                              browser-reserved Cmd/Ctrl+Shift+W stays a
-                              window-level legacy alias (fires mid-typing);
-       isReopenClosedChord  — Alt+Shift+Z: reopen what closed last (Chrome's
-                              Ctrl+Shift+T is browser-reserved);
+     into an Alt chord). Chrome's own chords one for one, Alt for Ctrl/Cmd:
+       isNewWorkspaceChord  — Alt+N: new workspace (Ctrl+N);
+       isAddTabChord        — Alt+T: add tab (Ctrl+T);
+       isCloseTabChord      — Alt+W: close the active tab (Ctrl+W);
+       isCloseWindowChord   — Alt+Shift+W: close the active workspace
+                              (Ctrl+Shift+W); the browser-reserved
+                              Cmd/Ctrl+Shift+W stays a window-level legacy
+                              alias (fires mid-typing);
+       isReopenClosedChord  — Alt+Shift+T: reopen what closed last (Chrome's
+                              Ctrl+Shift+T, browser-reserved, finally
+                              reachable in its Shift+T shape);
                               Cmd/Ctrl+Shift+Z and Shift+T keep working as
                               aliases (Shift+T window-level, Shift+Z yields
                               while typing — it is text redo);
@@ -91,7 +92,7 @@ test("close guards: the last workspace never dies; the active neighbor follows C
   assert.equal(mod.nextActiveAfterClose(SPACES, "c", "a"), "a", "closing a background workspace never yanks focus");
 });
 
-test("the chords: Alt+Shift+W closes, Cmd/Ctrl+Shift+Z reopens — and only those", async () => {
+test("the chords: Alt+Shift+W closes, Alt+Shift+T reopens — and only those", async () => {
   const mod = await load();
   assert.ok(mod, "workspaceClose module must exist (see module test)");
 
@@ -107,13 +108,13 @@ test("the chords: Alt+Shift+W closes, Cmd/Ctrl+Shift+Z reopens — and only thos
      that same fallback covers a dead-key shape */
   assert.ok(mod.isCloseWindowChord({ key: "„", code: "KeyW", altKey: true, shiftKey: true }), "mac-composed glyph still fires via e.code (audit B1)");
   assert.ok(!mod.isCloseWindowChord({ key: "„", code: "KeyW", altKey: true, shiftKey: true }, true), "the mac chord yields while typing too");
-  /* AZERTY swaps Z/W vs QWERTY: the printed letter rules — the Z-labeled key
-     (physical code KeyW) REOPENS and the W-labeled key (code KeyZ) CLOSES.
-     A plain key|code OR double-fires those shapes and the wrong action wins
-     by dispatch order (round-3 audit, B1) — pin both shapes against BOTH
+  /* AZERTY swaps Z/W vs QWERTY: the printed letter rules — the W-labeled key
+     (physical code KeyZ) CLOSES; the Z-labeled key (code KeyW) closes nothing
+     and reopens nothing (the Alt family has no Z). A plain key|code OR would
+     double-fire these shapes (round-3 audit, B1) — pin both against BOTH
      predicates */
   assert.ok(!mod.isCloseWindowChord({ key: "z", code: "KeyW", altKey: true, shiftKey: true }), "AZERTY: the Z-labeled key is NOT close");
-  assert.ok(mod.isReopenClosedChord({ key: "z", code: "KeyW", altKey: true, shiftKey: true }), "AZERTY: the Z-labeled key reopens");
+  assert.ok(!mod.isReopenClosedChord({ key: "z", code: "KeyW", altKey: true, shiftKey: true }), "AZERTY: the Z-labeled key is not reopen either — the family has no Z");
   assert.ok(mod.isCloseWindowChord({ key: "w", code: "KeyZ", altKey: true, shiftKey: true }), "AZERTY: the W-labeled key closes");
   assert.ok(!mod.isReopenClosedChord({ key: "w", code: "KeyZ", altKey: true, shiftKey: true }), "AZERTY: the W-labeled key is NOT reopen");
   assert.ok(!mod.isCloseWindowChord({ key: "x", code: "KeyX", altKey: true, shiftKey: true }), "neither letter nor code, no fire");
@@ -126,11 +127,12 @@ test("the chords: Alt+Shift+W closes, Cmd/Ctrl+Shift+Z reopens — and only thos
   assert.ok(!mod.isCloseWindowChord({ key: "w", shiftKey: true }), "no modifier, no fire");
 
   /* browsers reserve Cmd/Ctrl+Shift+T (the keydown never reaches a plain
-     tab), so reopen lives on the undo mnemonic: Alt+Shift+Z is advertised
-     with the rest of the Alt family, Cmd/Ctrl+Shift+Z keeps working as an
-     alias, and Shift+T stays a legacy alias wherever a setup delivers it */
-  assert.ok(mod.isReopenClosedChord({ key: "z", altKey: true, shiftKey: true }), "the advertised reopen chord (Alt family)");
-  assert.ok(!mod.isReopenClosedChord({ key: "z", altKey: true, shiftKey: true }, true), "Alt+Shift+Z yields while typing like its siblings");
+     tab), so reopen takes Chrome's own Shift+T shape on the deliverable
+     modifier: Alt+Shift+T. Cmd/Ctrl+Shift+Z ("undo the close") and the
+     reserved Cmd/Ctrl+Shift+T keep working as aliases */
+  assert.ok(mod.isReopenClosedChord({ key: "t", altKey: true, shiftKey: true }), "the advertised reopen chord — Chrome's Ctrl+Shift+T on Alt");
+  assert.ok(!mod.isReopenClosedChord({ key: "t", altKey: true, shiftKey: true }, true), "Alt+Shift+T yields while typing like its siblings");
+  assert.ok(mod.isReopenClosedChord({ key: "†", code: "KeyT", altKey: true, shiftKey: true }), "mac-composed glyph fires via e.code");
   assert.ok(mod.isReopenClosedChord({ key: "z", metaKey: true, shiftKey: true }), "the Shift+Z alias keeps working");
   assert.ok(mod.isReopenClosedChord({ key: "Z", ctrlKey: true, shiftKey: true }), "caps-tolerant");
   assert.ok(mod.isReopenClosedChord({ key: "t", metaKey: true, shiftKey: true }), "legacy Chrome-parity alias");
@@ -138,11 +140,12 @@ test("the chords: Alt+Shift+W closes, Cmd/Ctrl+Shift+Z reopens — and only thos
   assert.ok(mod.isReopenClosedChord({ key: "t", metaKey: true, shiftKey: true }, true), "the legacy alias fires even mid-typing when delivered");
   assert.ok(!mod.isReopenClosedChord({ key: "z", metaKey: true }), "plain Cmd+Z stays undo");
   assert.ok(!mod.isReopenClosedChord({ key: "t", metaKey: true }), "plain Cmd+T stays a new tab");
+  assert.ok(!mod.isReopenClosedChord({ key: "t", altKey: true }), "Alt+T alone is ADD TAB — not reopen");
 
   /* the chords never collide */
   assert.ok(!(mod.isCloseWindowChord({ key: "z", metaKey: true, shiftKey: true })));
   assert.ok(!(mod.isCloseWindowChord({ key: "t", metaKey: true, shiftKey: true })));
-  assert.ok(!(mod.isCloseWindowChord({ key: "t", altKey: true, shiftKey: true })), "Alt+Shift+T stays add-tab");
+  assert.ok(!(mod.isCloseWindowChord({ key: "t", altKey: true, shiftKey: true })), "Alt+Shift+T is reopen — not close");
   assert.ok(!(mod.isReopenClosedChord({ key: "w", metaKey: true, shiftKey: true })));
   assert.ok(!(mod.isReopenClosedChord({ key: "w", altKey: true, shiftKey: true })));
 });
@@ -152,18 +155,19 @@ test("the Alt family: Chrome's N/T/W commands on modifiers browsers deliver (PR 
   assert.ok(mod, "workspaceClose module must exist (see module test)");
 
   /* new workspace — Chrome's Ctrl+N (browser-reserved) */
-  assert.ok(mod.isNewWorkspaceChord({ key: "n", altKey: true, shiftKey: true }), "Alt+Shift+N");
-  assert.ok(mod.isNewWorkspaceChord({ key: "N", altKey: true, shiftKey: true }), "caps-tolerant");
-  assert.ok(!mod.isNewWorkspaceChord({ key: "n", altKey: true, shiftKey: true }, true), "yields while typing");
-  assert.ok(mod.isNewWorkspaceChord({ key: "˜", code: "KeyN", altKey: true, shiftKey: true }), "mac-composed glyph fires via e.code");
-  assert.ok(!mod.isNewWorkspaceChord({ key: "n", altKey: true }), "Alt+N alone never fires");
+  assert.ok(mod.isNewWorkspaceChord({ key: "n", altKey: true }), "Alt+N");
+  assert.ok(mod.isNewWorkspaceChord({ key: "N", altKey: true }), "caps-tolerant");
+  assert.ok(!mod.isNewWorkspaceChord({ key: "n", altKey: true }, true), "yields while typing");
+  assert.ok(mod.isNewWorkspaceChord({ key: "Dead", code: "KeyN", altKey: true }), "mac Option+N is a dead key — e.code catches it");
+  assert.ok(!mod.isNewWorkspaceChord({ key: "n", altKey: true, shiftKey: true }), "Alt+Shift+N never fires (Chrome has no Shift+N in the family)");
+  assert.ok(!mod.isNewWorkspaceChord({ key: "n" }), "plain N stays new session");
   assert.ok(!mod.isNewWorkspaceChord({ key: "n", metaKey: true }), "plain Cmd+N stays the browser's own new window");
 
-  /* add tab — Chrome's Ctrl+T, the strip's original Alt chord */
-  assert.ok(mod.isAddTabChord({ key: "t", altKey: true, shiftKey: true }), "Alt+Shift+T");
-  assert.ok(!mod.isAddTabChord({ key: "t", altKey: true, shiftKey: true }, true), "yields while typing");
-  assert.ok(mod.isAddTabChord({ key: "†", code: "KeyT", altKey: true, shiftKey: true }), "mac-composed glyph fires via e.code");
-  assert.ok(!mod.isAddTabChord({ key: "t", altKey: true }), "Alt+T alone never fires");
+  /* add tab — Chrome's Ctrl+T; the Shift form is Chrome's reopen */
+  assert.ok(mod.isAddTabChord({ key: "t", altKey: true }), "Alt+T");
+  assert.ok(!mod.isAddTabChord({ key: "t", altKey: true }, true), "yields while typing");
+  assert.ok(mod.isAddTabChord({ key: "†", code: "KeyT", altKey: true }), "mac-composed glyph fires via e.code");
+  assert.ok(!mod.isAddTabChord({ key: "t", altKey: true, shiftKey: true }), "Alt+Shift+T is REOPEN — Chrome's Ctrl+Shift+T");
 
   /* close the active tab — Chrome's Ctrl+W; Shift scales it to the workspace, Chrome-style */
   assert.ok(mod.isCloseTabChord({ key: "w", altKey: true }), "Alt+W");
@@ -176,10 +180,12 @@ test("the Alt family: Chrome's N/T/W commands on modifiers browsers deliver (PR 
 
   /* the family never collides, in either direction */
   assert.ok(!mod.isCloseWindowChord({ key: "w", altKey: true }), "Alt+W is the TAB close — the workspace keeps its Shift");
-  assert.ok(!mod.isNewWorkspaceChord({ key: "t", altKey: true, shiftKey: true }));
-  assert.ok(!mod.isAddTabChord({ key: "n", altKey: true, shiftKey: true }));
-  assert.ok(!mod.isReopenClosedChord({ key: "n", altKey: true, shiftKey: true }));
-  assert.ok(!mod.isCloseTabChord({ key: "z", altKey: true, shiftKey: true }), "Alt+Shift+Z is reopen, not close-tab");
+  assert.ok(!mod.isNewWorkspaceChord({ key: "t", altKey: true }));
+  assert.ok(!mod.isAddTabChord({ key: "n", altKey: true }));
+  assert.ok(!mod.isReopenClosedChord({ key: "n", altKey: true }));
+  assert.ok(!mod.isReopenClosedChord({ key: "t", altKey: true }), "Alt+T alone is add-tab, not reopen");
+  assert.ok(!mod.isAddTabChord({ key: "t", altKey: true, shiftKey: true }), "Alt+Shift+T is reopen, not add-tab");
+  assert.ok(!mod.isCloseTabChord({ key: "t", altKey: true }));
   assert.ok(!mod.isCloseTabChord({ key: "n", altKey: true }));
 });
 
