@@ -5,6 +5,7 @@ import { ago } from "@/lib/format";
 import { Btn, Empty, Icon, Spinner } from "@/components/ui";
 import { Spark } from "./Inspectors";
 import { fmtSize, procCell, fmtUptime } from "@/lib/format";
+import { gaugeRing } from "@/lib/gaugeGeometry";
 import type { HostMetrics, MonitorData } from "@/lib/proto";
 import { cn } from "@/utils/cn";
 
@@ -231,13 +232,19 @@ function MonitorBody({ m, hist }: { m: HostMetrics; hist: { t: number; cpu: numb
 
 function Gauge({ label, pct, detail }: { label: string; pct: number; detail: string }) {
   const color = GAUGE_C(pct);
-  const R = 30, C = 2 * Math.PI * R;
+  // Ring geometry comes from gaugeRing so the stroke can never overflow
+  // the viewBox (r=30 + strokeWidth 6 in a 64 box used to clip by 1px).
+  // One `sw` feeds both the helper and the JSX so a stroke bump
+  // recomputes r instead of reintroducing the clip.
+  const sw = 6;
+  const { r: R, cx, cy } = gaugeRing({ size: 64, strokeWidth: sw });
+  const C = 2 * Math.PI * R;
   return (
     <div className="rounded-lg border border-[var(--t-line)] bg-[var(--t-bg0)]/60 p-3 flex items-center gap-3">
       <svg width="64" height="64" viewBox="0 0 64 64" className="shrink-0">
-        <circle cx="32" cy="32" r={R} fill="none" stroke="var(--t-line)" strokeWidth="6" />
-        <circle cx="32" cy="32" r={R} fill="none" stroke={color} strokeWidth="6" strokeLinecap="round" strokeDasharray={`${(Math.min(100, Math.max(0, pct)) / 100) * C} ${C}`} transform="rotate(-90 32 32)" />
-        <text x="32" y="36" textAnchor="middle" fontSize="13" fontFamily="monospace" fill="var(--t-fg)">{Math.round(pct)}%</text>
+        <circle cx={cx} cy={cy} r={R} fill="none" stroke="var(--t-line)" strokeWidth={sw} />
+        <circle cx={cx} cy={cy} r={R} fill="none" stroke={color} strokeWidth={sw} strokeLinecap="round" strokeDasharray={`${(Math.min(100, Math.max(0, pct)) / 100) * C} ${C}`} transform={`rotate(-90 ${cx} ${cy})`} />
+        <text x={cx} y={cy + 4} textAnchor="middle" fontSize="13" fontFamily="monospace" fill="var(--t-fg)">{Math.round(pct)}%</text>
       </svg>
       <div className="min-w-0">
         <div className="font-mono text-[10px] uppercase tracking-wider text-[var(--t-dim)] truncate">{label}</div>

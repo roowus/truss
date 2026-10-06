@@ -40,21 +40,14 @@ export interface SessionRowAction {
   visible: "always" | "hover";
 }
 
+/* The sidebar no longer renders trash rows — deleted chats are restored or
+   purged from the Trash tab (issue #146; the strip was removed on developer
+   feedback, PR #153), so sessionRowActions only models live/archived rows. */
 export function sessionRowActions(state: {
   pinned: boolean;
   archived?: boolean;
   dead?: boolean;
-  trashView?: boolean;
 }): SessionRowAction[] {
-  /* a trash row's session is out of the live list — pin/close/archive don't
-     apply; restore or purge are the only moves (and pin stays hidden there,
-     as before) */
-  if (state.trashView) {
-    return [
-      { id: "restore", icon: "retry", label: "Restore (back to the sidebar, history intact)", visible: "hover" },
-      { id: "purge", icon: "trash", label: "Delete forever (no undo)", danger: true, confirm: true, visible: "hover" },
-    ];
-  }
   const pin = pinAffordance(state.pinned);
   const actions: SessionRowAction[] = [
     /* the displaced gesture (issue #147): the row's double-click used to

@@ -91,9 +91,22 @@ export function panelsEntry(spaceId: string, panels: PanelLike[], at: number): C
   return { type: "panels", spaceId, panels: undoable.map(panelDescriptor), at };
 }
 
+/**
+ * Can this entry actually come back? The persisted stack is validated by
+ * shape only (parseClosed), so a row from another build — a friendly
+ * "tab"/"tab-group" form, or a "panels" row with no panels — must fail here,
+ * not deep in a render or a restore (issue #146, audit round 2).
+ */
+export function canRestore(entry: ClosedEntry): boolean {
+  if (entry.type === "workspace") return true;
+  const panels = (entry as ClosedPanels).panels;
+  return Array.isArray(panels) && panels.length > 0;
+}
+
 /** The palette/chord label for the entry reopenClosed() would restore. */
 export function describeClosed(entry: ClosedEntry): string {
   if (entry.type === "workspace") return `Reopen closed workspace: ${entry.name}`;
+  if (!canRestore(entry)) return "Closed item (not restorable)";
   if (entry.panels.length === 1) return `Reopen closed tab: ${entry.panels[0].title || entry.panels[0].id}`;
   return `Reopen ${entry.panels.length} closed tabs`;
 }
@@ -171,6 +184,37 @@ export function pushClosed<T>(stack: T[], snapshot: T, cap = CLOSED_STACK_CAP): 
 export function popClosed<T>(stack: T[]): { snapshot: T; rest: T[] } | null {
   if (!stack.length) return null;
   return { snapshot: stack[stack.length - 1], rest: stack.slice(0, -1) };
+}
+
+/* The PERSISTED undo stack (issue #146) is smaller than the live one: reload
+   insurance, not a second archive. Ten deep covers "I closed the wrong
+   workspace and restarted" without growing the layout doc forever. */
+export const CLOSED_PERSIST_CAP = 10;
+
+/** A row survives the round-trip when it has a type tag and a timestamp; the
+    restore path drops types it cannot handle, so unknown rows never wedge it. */
+function closedRowOk(e: unknown): e is ClosedEntry {
+  if (!e || typeof e !== "object") return false;
+  const row = e as { type?: unknown; at?: unknown };
+  return typeof row.type === "string" && typeof row.at === "number" && Number.isFinite(row.at);
+}
+
+/** Serialize the undo stack for the layout doc: valid rows only, newest CLOSED_PERSIST_CAP kept. */
+export function serializeClosed(stack: readonly unknown[] | null | undefined): string {
+  const list = Array.isArray(stack) ? stack.filter(closedRowOk).slice(-CLOSED_PERSIST_CAP) : [];
+  return JSON.stringify(list);
+}
+
+/** Read a persisted undo stack back: garbage in, empty stack out — never a crash. */
+export function parseClosed(raw: unknown): ClosedEntry[] {
+  if (typeof raw !== "string") return [];
+  try {
+    const data: unknown = JSON.parse(raw);
+    if (!Array.isArray(data)) return [];
+    return data.filter(closedRowOk).slice(-CLOSED_PERSIST_CAP);
+  } catch {
+    return [];
+  }
 }
 
 /**

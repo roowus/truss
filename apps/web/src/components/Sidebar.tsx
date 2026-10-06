@@ -1,7 +1,7 @@
 import { useMemo, useState, useEffect, type ReactNode } from "react";
 import { store, useApp, useNow } from "@/lib/store";
 import { desktops, useDesktops } from "@/lib/desktops";
-import { ago, daysLeftInTrash, shortPath } from "@/lib/format";
+import { ago, shortPath, until } from "@/lib/format";
 import { harnessDisplay, hostAliases } from "@/lib/device";
 import { openAgentShell, openDailyDriver, openFreeShell, openPanel, openSession } from "@/lib/workspace";
 import { HarnessMark, Icon, IconBtn, StateDot, TrussLogo, Spinner, STATE_META } from "./ui";
@@ -19,6 +19,7 @@ export function Sidebar({ onNew }: { onNew: () => void }) {
   const err = useApp((s) => s.sessionsError);
   const terminals = useApp((s) => s.terminals);
   const hosts = useApp((s) => s.hosts);
+  const pairRequests = useApp((s) => s.pairRequests);
   const agentsError = useApp((s) => s.agentsError);
   const hostPrefs = useDesktops((s) => s.hosts);
   const groupMode = useDesktops((s) => s.settings.groupMode);
@@ -141,8 +142,9 @@ export function Sidebar({ onNew }: { onNew: () => void }) {
           })
         )}
 
-        {/* recently deleted (30-day trash) — restore or delete forever */}
-        <TrashSection />
+        {/* deleted chats live in the Trash tab (issue #146) — the sidebar
+            used to carry a "recently deleted" strip here; the tab is the
+            one surface now (developer call on PR #153) */}
 
         {/* archived sessions collect here, collapsed by default */}
         {archived.length > 0 && (
@@ -170,6 +172,9 @@ export function Sidebar({ onNew }: { onNew: () => void }) {
         </Section>
 
         <Section title="remote hosts" action={<IconBtn icon="plus" label="Add host" className="w-5 h-5" onClick={() => window.dispatchEvent(new Event("truss:add-host"))} />}>
+          {/* auto-pairing (issue #111 review): a device that downloaded and
+              ran the installer asks here; Allow is the whole handshake */}
+          {pairRequests.map((r) => <PairRequestRow key={r.id} r={r} />)}
           {sortWithPinned(hosts, (h) => !!h.pinned).map((h) => <HostRow key={h.id} h={h} alias={hostPrefs[h.id]?.alias} />)}
           {hosts.length === 0 && !agentsError && (
             <button onClick={() => window.dispatchEvent(new Event("truss:add-host"))} className="w-full mx-0.5 px-2 py-2 rounded-md border border-dashed border-[var(--t-line2)] text-[11px] text-[var(--t-dim)] hover:text-[var(--t-mute)] hover:border-[var(--t-mute)] text-left">
@@ -202,7 +207,7 @@ function Section({ title, action, children }: { title: string; action?: ReactNod
   );
 }
 
-function SessionRow({ s, now, archived, trashView }: { s: SessionMeta; now: number; archived?: boolean; trashView?: boolean }) {
+function SessionRow({ s, now, archived }: { s: SessionMeta; now: number; archived?: boolean }) {
   const focused = useApp((st) => st.focused === s.id);
   const pending = useApp((st) => st.views[s.id]?.pending.length ?? 0);
   const hosts = useApp((st) => st.hosts);
@@ -213,21 +218,16 @@ function SessionRow({ s, now, archived, trashView }: { s: SessionMeta; now: numb
     const t = setTimeout(() => setConfirm(false), 3000);
     return () => clearTimeout(t);
   }, [confirm]);
-  /* double-click the name to rename inline (issue #147); a trash row's
-     session is out of the live list, so only restore/purge apply there */
+  /* double-click the name to rename inline (issue #147) */
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState("");
-  const renameTarget = trashView ? null : rowRenameTarget({ kind: "session", id: s.id });
+  const renameTarget = rowRenameTarget({ kind: "session", id: s.id });
   const finishRename = () => {
     const next = name.trim();
     setEditing(false);
     if (next && next !== s.title) void store.renameSession(s.id, next);
   };
   const dead = s.state === "closed" || s.state === "error";
-  /* trash rows don't open a chat panel: the session is not in the live list,
-     so the panel would only claim it no longer exists. Restore is the way
-     back in (issue #5). */
-  const openable = !trashView;
   /* ONE action cluster per row (issue #110): the pin shares the same array,
      flex container, and gap as every other action — before this it was a
      bespoke element mid-row, so its gap to the cluster could never match
@@ -236,7 +236,7 @@ function SessionRow({ s, now, archived, trashView }: { s: SessionMeta; now: numb
      dodges the pointer. The pin button IS the indicator (issue #99):
      solid + always visible when pinned, hollow + hover-only when not.
      Badge/timestamp/state stay indicators outside the cluster. */
-  const actions = sessionRowActions({ pinned: !!s.pinned, archived, dead, trashView });
+  const actions = sessionRowActions({ pinned: !!s.pinned, archived, dead });
   /* issue #140: the resting cluster comes from the actions themselves — an
      all-hover cluster rests hidden (nothing reserves space, so the
      timestamp+dot reach the row's right edge); a pinned row rests with only
@@ -256,9 +256,7 @@ function SessionRow({ s, now, archived, trashView }: { s: SessionMeta; now: numb
       case "archive": return void store.archiveSession(s.id, true);
       case "unarchive": return void store.archiveSession(s.id, false);
       case "close": return void store.closeSession(s.id);
-      case "restore": return void store.restoreSession(s.id);
       case "trash": return void store.deleteSession(s.id);
-      case "purge": return void store.purgeSession(s.id);
     }
   };
   return (
@@ -269,19 +267,19 @@ function SessionRow({ s, now, archived, trashView }: { s: SessionMeta; now: numb
          tabbable): focus reveals the cluster via group-focus-within, exactly
          like hover does; Enter/Space on the row itself opens the session
          (the HostRow pattern, #85) */
-      role={openable ? "button" : undefined}
+      role="button"
       /* an explicit name: without it the row announces as the concatenation
          of title + timestamp + state text (audit B2) */
-      aria-label={openable ? s.title : undefined}
-      tabIndex={openable ? 0 : undefined}
-      onKeyDown={openable ? (e) => {
+      aria-label={s.title}
+      tabIndex={0}
+      onKeyDown={(e) => {
         if ((e.key === "Enter" || e.key === " ") && e.target === e.currentTarget) {
           e.preventDefault();
           openSession(s.id);
         }
-      } : undefined}
-      onClick={openable ? () => openSession(s.id) : undefined}
-      className={cn("group relative mx-0.5 flex items-center gap-2 px-2 t-session-row rounded-md transition-colors", openable ? "cursor-pointer" : "cursor-default", focused ? "bg-[var(--t-bg2)]" : "hover:bg-white/[0.03]")}
+      }}
+      onClick={() => openSession(s.id)}
+      className={cn("group relative mx-0.5 flex items-center gap-2 px-2 t-session-row rounded-md transition-colors cursor-pointer", focused ? "bg-[var(--t-bg2)]" : "hover:bg-white/[0.03]")}
       title={`${s.title}\n${harnessDisplay(s.harness, hosts, hostAliases(hostPrefs))}${s.model ? ` · ${s.model}` : ""}\n${shortPath(s.cwd)}\n${STATE_META[s.state]?.hint ?? s.state}${archived ? "\narchived — hidden from the main list" : ""}${renameTarget ? "\n(double-click the name to rename)" : ""}`}
     >
       {focused && <span className="absolute left-0 top-2 bottom-2 w-[2px] rounded-full bg-[var(--t-amber)]" />}
@@ -309,13 +307,7 @@ function SessionRow({ s, now, archived, trashView }: { s: SessionMeta; now: numb
         <span className="shrink-0 inline-grid place-items-center w-4 h-4 rounded-full bg-[var(--t-amber)] text-[#1b1305] text-[9.5px] font-bold t-pulse-soft" title="Permission waiting">{pending}</span>
       )}
       <span className="group-hover:hidden group-focus-within:hidden flex items-center gap-1.5 shrink-0">
-        {trashView && s.deleted_at != null ? (
-          <span className="text-[10px] text-[var(--t-dim)] tabular-nums" title="Days before this chat is purged">
-            {daysLeftInTrash(+new Date(s.deleted_at) || Date.parse(String(s.deleted_at)), now)}d left
-          </span>
-        ) : (
-          <span className="text-[10px] text-[var(--t-dim)] tabular-nums">{ago(+new Date(s.updated_at) || Date.parse(String(s.updated_at)), now)}</span>
-        )}
+        <span className="text-[10px] text-[var(--t-dim)] tabular-nums">{ago(+new Date(s.updated_at) || Date.parse(String(s.updated_at)), now)}</span>
         <StateDot state={s.state} size={6} />
       </span>
       {/* one container, one gap (issue #110), resting state from
@@ -351,7 +343,6 @@ function SessionRow({ s, now, archived, trashView }: { s: SessionMeta; now: numb
    the call site, so a missing key can never blank the tooltip */
 const CONFIRM_LABEL: Record<string, string> = {
   trash: "Click again to move to trash",
-  purge: "Click again: gone forever, no undo",
 };
 
 
@@ -467,6 +458,46 @@ function ShellRow({ t }: { t: TerminalInfo }) {
   );
 }
 
+/* auto-pairing (issue #111 review): a device that ran the installer is
+   asking to join. The Allow/Deny click is the entire trust decision, so the
+   row stays loud until it is answered; the request dies on its own after
+   10 minutes even if ignored. */
+function PairRequestRow({ r }: { r: import("@/lib/proto").PairRequestInfo }) {
+  const [busy, setBusy] = useState(false);
+  const decide = (fn: (id: string) => Promise<void>) => {
+    setBusy(true);
+    void fn(r.id).finally(() => setBusy(false));
+  };
+  return (
+    <div className="mx-0.5 mb-1 rounded-md border border-[var(--t-amber)]/40 bg-[var(--t-amber)]/5 px-2 py-1.5">
+      <div className="flex items-center gap-2 text-[12px] text-[var(--t-fg)]">
+        <span className="w-1.5 h-1.5 rounded-full bg-[var(--t-amber)] shrink-0 animate-pulse" />
+        <Icon name="host" size={12} className="text-[var(--t-amber)] shrink-0" />
+        <span className="flex-1 truncate">{r.hostname} wants to pair</span>
+      </div>
+      <div className="mt-0.5 pl-3.5 text-[10px] text-[var(--t-dim)] truncate">
+        {r.os} · from {r.sourceIp}{r.tailscaleIp && r.tailscaleIp !== r.sourceIp ? ` (tailnet ${r.tailscaleIp})` : ""} · expires in {until(r.expiresAt)}
+      </div>
+      <div className="mt-1.5 flex gap-1.5 pl-3.5">
+        <button
+          disabled={busy}
+          onClick={() => decide((id) => store.approvePairRequest(id))}
+          className="px-2 py-0.5 rounded text-[10.5px] font-medium bg-[var(--t-amber)] text-black hover:brightness-110 disabled:opacity-50"
+        >
+          Allow
+        </button>
+        <button
+          disabled={busy}
+          onClick={() => decide((id) => store.denyPairRequest(id))}
+          className="px-2 py-0.5 rounded text-[10.5px] border border-[var(--t-line2)] text-[var(--t-mute)] hover:text-[var(--t-fg)] disabled:opacity-50"
+        >
+          Deny
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function HostRow({ h, alias }: { h: HostInfo; alias?: string }) {
   const [confirm, confirmClick] = useTwoClickConfirm();
   const hosts = useApp((st) => st.hosts);
@@ -557,32 +588,6 @@ function HostRow({ h, alias }: { h: HostInfo; alias?: string }) {
           onClick={() => void store.pinHost(h.id, !h.pinned)}
         />
       </span>
-    </div>
-  );
-}
-
-
-/* ---------------- recently deleted (30-day trash) ---------------- */
-function TrashSection() {
-  const trash = useApp((s) => s.trash);
-  const [open, setOpen] = useState(false);
-  const now = useNow(30_000, open);
-  useEffect(() => {
-    void store.refreshTrash();
-  }, []);
-  if (trash.length === 0) return null;
-  return (
-    <div className="mt-2">
-      <button
-        className="w-full flex items-center gap-1.5 px-2 h-7 text-[10.5px] font-medium uppercase tracking-[0.08em] text-[var(--t-dim)] hover:text-[var(--t-mute)]"
-        onClick={() => setOpen((o) => !o)}
-      >
-        <Icon name="chev" size={9} className={cn("transition-transform", open && "rotate-90")} />
-        <Icon name="trash" size={10} />
-        <span>recently deleted</span>
-        <span className="ml-auto tabular-nums">{trash.length}</span>
-      </button>
-      {open && trash.map((s) => <SessionRow key={s.id} s={s} now={now} trashView />)}
     </div>
   );
 }

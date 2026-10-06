@@ -6,6 +6,7 @@ import { dropInstructionLabel } from "@/lib/installInstruction";
 import { buildInstallCommand, agentRunCommand } from "@/lib/installCommand";
 import { reachableAddresses, reachableTailscaleReturn } from "@/lib/reachability";
 import type { DeliveryOption, NetInfo, TailscalePeer } from "@/lib/proto";
+import QRCode from "qrcode";
 import { Btn, Icon, Select, Spinner } from "./ui";
 import { cn } from "@/utils/cn";
 
@@ -31,6 +32,9 @@ export function AddHostWizard({ onClose }: { onClose: () => void }) {
   /* installer delivery (issue #1): taildrop to the picked device, or mint a
      short typeable pairing command */
   const [pairCmd, setPairCmd] = useState<{ command: string; code: string; expiresAt: number } | null>(null);
+  /* the pairing page's QR (issue #111 review): encodes <serverAddr>/p so a
+     phone-class remote (or a phone bridging to one) skips typing the URL */
+  const [pairQr, setPairQr] = useState<string | null>(null);
   const [pairBusy, setPairBusy] = useState(false);
   const [dropState, setDropState] = useState<"idle" | "sending" | "sent" | "failed">("idle");
   const [dropErr, setDropErr] = useState<string | null>(null);
@@ -82,6 +86,21 @@ export function AddHostWizard({ onClose }: { onClose: () => void }) {
   const impliedReturn = method === "tailscale" ? reachableTailscaleReturn(net) : null;
   const serverAddr = addrOverride || !impliedReturn ? (addr === "custom" ? customAddr.trim() : addr) : impliedReturn;
 
+  /* the QR encodes the auto-pair page for this exact return address; it is
+     rendered once step 2 shows the pairing panel. The custom-address field
+     is free text that lands in an href below (audit round 8, B4), so the
+     link and the QR only exist for a plain http(s) URL */
+  const pairPageUrl = /^https?:\/\//.test(serverAddr) ? `${serverAddr}/p` : null;
+  useEffect(() => {
+    if (step !== 2 || !pairPageUrl) { setPairQr(null); return; }
+    let dead = false;
+    QRCode.toDataURL(pairPageUrl, { width: 144, margin: 1 }).then(
+      (u) => { if (!dead) setPairQr(u); },
+      () => { if (!dead) setPairQr(null); },
+    );
+    return () => { dead = true; };
+  }, [step, pairPageUrl]);
+
   const create = async () => {
     if (!label.trim() || !be) return;
     setBusy(true);
@@ -111,6 +130,10 @@ export function AddHostWizard({ onClose }: { onClose: () => void }) {
     return () => { dead = true; };
   }, [be, created, pickedPeer, serverAddr]);
   const sshOption = delivery?.find((o) => o.kind === "ssh" && o.typedChars === 0) ?? null;
+  /* devices that ran the auto-pair installer and are waiting for the Allow
+     click (issue #111 review) — shown inline so the answer lives where the
+     user is already looking */
+  const pairRequests = useApp((s) => s.pairRequests);
 
   /* step 3: poll until the agent dials in */
   const online = created ? hosts.find((h) => h.id === created.id)?.online : false;
@@ -287,11 +310,45 @@ export function AddHostWizard({ onClose }: { onClose: () => void }) {
         {step === 2 && created && (
           <div className="mt-4 space-y-3">
             <p className="text-[12px] text-[var(--t-mute)] leading-relaxed">
-              Run this on <b className="text-[var(--t-fg)]">{label}</b>. It installs the agent into <span className="font-mono">~/.truss/</span> (and a user service when systemd is there). The token is in the command and lands in a chmod-600 env file — <b className="text-[var(--t-fg)]">shown only now</b>; Truss stores just its hash.
+              Install Truss on <b className="text-[var(--t-fg)]">{label}</b> like any app: open the page, download, run. It asks to pair and you approve it right here; nothing to type on either side.
             </p>
-            <div className="rounded-lg border border-[var(--t-line2)] bg-[var(--t-bg0)] p-3 font-mono text-[11px] leading-relaxed text-[var(--t-fg2)] break-all select-all">{command}</div>
+            {/* auto-pairing leads (issue #111 review): the remote downloads
+                the installer from /p, runs it, and types nothing — the
+                installer asks to join and the user approves right here. No
+                code, no mint, no expiry clock. */}
+            <div className="rounded-lg border border-[var(--t-line)] bg-[var(--t-bg0)] px-3 py-2 space-y-2">
+              <div className="flex items-start gap-3">
+                <div className="min-w-0 flex-1">
+                  {pairPageUrl ? (
+                    <a href={pairPageUrl} target="_blank" rel="noreferrer" className="font-mono text-[12px] text-[var(--t-sky)] underline decoration-dotted underline-offset-2 break-all hover:brightness-125">{pairPageUrl}</a>
+                  ) : (
+                    <span className="font-mono text-[12px] text-[var(--t-fg)] break-all select-all">{serverAddr}/p</span>
+                  )}
+                  <div className="mt-0.5 text-[10px] text-[var(--t-dim)]">open on the remote (or scan), Download, run the one command the page shows, then click Allow here when it asks.</div>
+                </div>
+                {pairQr && <img src={pairQr} width={72} height={72} className="shrink-0 rounded border border-[var(--t-line2)]" alt={`QR code for ${serverAddr}/p`} title={`${serverAddr}/p`} />}
+              </div>
+              <div>
+                <div className="font-mono text-[11px] text-[var(--t-fg2)] break-all select-all">{`curl -fsSL ${serverAddr}/i | sh`}</div>
+                <div className="mt-0.5 text-[10px] text-[var(--t-dim)]">the same flow, typed in a terminal: it asks to pair, you approve here</div>
+              </div>
+            </div>
+            {/* a device that already ran the installer is waiting for the
+                Allow click; it shows up here, not just in the sidebar */}
+            {pairRequests.length > 0 && (
+              <div className="rounded-lg border border-[var(--t-amber)]/40 bg-[var(--t-amber)]/5 px-3 py-2 space-y-1.5">
+                <p className="text-[11px] text-[var(--t-amber)] font-medium">Waiting for your approval</p>
+                {pairRequests.map((r) => (
+                  <div key={r.id} className="flex items-center gap-2 text-[12px] text-[var(--t-fg)]">
+                    <span className="w-1.5 h-1.5 rounded-full bg-[var(--t-amber)] shrink-0 animate-pulse" />
+                    <span className="flex-1 truncate">{r.hostname} <span className="text-[var(--t-dim)] text-[10px]">from {r.sourceIp}</span></span>
+                    <Btn size="xs" variant="amber" onClick={() => created && void store.approvePairRequest(r.id, { hostId: created.id, token: created.token })}>Allow</Btn>
+                    <Btn size="xs" variant="ghost" onClick={() => void store.denyPairRequest(r.id)}>Deny</Btn>
+                  </div>
+                ))}
+              </div>
+            )}
             <div className="flex items-center gap-2 flex-wrap">
-              <Btn size="xs" variant="outline" icon="copy" onClick={() => { void navigator.clipboard.writeText(command); store.toast("ok", "Copied", "run it on the remote host"); }}>Copy command</Btn>
               {sshOption && pickedPeerLabel && created && (
                 <Btn
                   size="xs"
@@ -331,23 +388,6 @@ export function AddHostWizard({ onClose }: { onClose: () => void }) {
                   {dropState === "sent" ? `Sent to ${pickedPeerLabel} ✓` : dropState === "sending" ? "Sending…" : `Send to ${pickedPeerLabel}`}
                 </Btn>
               )}
-              <Btn
-                size="xs"
-                variant="ghost"
-                icon="bolt"
-                disabled={pairBusy || !!pairCmd}
-                title="Mint a short single-use pairing code (10 min) — the typeable fallback"
-                onClick={() => {
-                  if (!created) return;
-                  setPairBusy(true);
-                  be?.pairHost(created.id, created.token, serverAddr).then(
-                    (r) => setPairCmd({ command: r.command, code: r.code, expiresAt: r.expiresAt }),
-                    (e) => store.toast("error", "Couldn't mint a pairing code", e?.message ?? String(e)),
-                  ).finally(() => setPairBusy(false));
-                }}
-              >
-                {pairCmd ? "Code minted" : "Short command"}
-              </Btn>
               <span className="text-[10.5px] text-[var(--t-dim)]">needs node ≥ 20 on the remote + the harness CLIs it should host</span>
             </div>
             {sshOption && sshState !== "done" && (
@@ -366,12 +406,46 @@ export function AddHostWizard({ onClose }: { onClose: () => void }) {
                 </div>
               </div>
             )}
-            {pairCmd && (
-              <div className="rounded-lg border border-[var(--t-line)] bg-[var(--t-bg0)] px-3 py-2">
-                <div className="font-mono text-[12px] text-[var(--t-fg)] break-all select-all">{pairCmd.command}</div>
-                <div className="mt-0.5 text-[10px] text-[var(--t-dim)]">code <span className="font-mono text-[var(--t-amber)]">{pairCmd.code}</span> · single-use · expires in {until(pairCmd.expiresAt)} — after that the code is dead, mint another</div>
+            {/* the manual commands fold away (issue #111 review: the wall of
+                command blocks read as menus nobody needs). Both carry the
+                token, which is shown only here; Truss stores just its hash. */}
+            <details className="rounded-lg border border-[var(--t-line)] bg-[var(--t-bg0)] px-3 py-2">
+              <summary className="text-[11px] text-[var(--t-dim)] cursor-pointer select-none hover:text-[var(--t-mute)]">manual commands (rarely needed; the token is inside)</summary>
+              <div className="mt-2 space-y-2">
+                <div className="flex items-center gap-1.5">
+                  <div className="font-mono text-[11px] text-[var(--t-fg2)] break-all select-all flex-1">{command}</div>
+                  <Btn size="xs" variant="outline" icon="copy" onClick={() => { void navigator.clipboard.writeText(command); store.toast("ok", "Copied", "run it on the remote host"); }}>Copy</Btn>
+                </div>
+                <div>
+                  <Btn
+                    size="xs"
+                    variant="ghost"
+                    icon="bolt"
+                    disabled={pairBusy || !!pairCmd}
+                    title="Mint a short single-use pairing code (10 min): the pre-authorized one-liner, no approval click"
+                    onClick={() => {
+                      if (!created) return;
+                      setPairBusy(true);
+                      be?.pairHost(created.id, created.token, serverAddr).then(
+                        (r) => setPairCmd({ command: r.command, code: r.code, expiresAt: r.expiresAt }),
+                        (e) => store.toast("error", "Couldn't mint a pairing code", e?.message ?? String(e)),
+                      ).finally(() => setPairBusy(false));
+                    }}
+                  >
+                    {pairCmd ? "Code minted" : "Short command (no approval click)"}
+                  </Btn>
+                  {pairCmd && (
+                    <div className="mt-2 space-y-1">
+                      <div className="flex items-center gap-1.5">
+                        <div className="font-mono text-[11px] text-[var(--t-fg2)] break-all select-all flex-1">{pairCmd.command}</div>
+                        <Btn size="xs" variant="outline" icon="copy" onClick={() => { void navigator.clipboard.writeText(pairCmd.command); store.toast("ok", "Copied", "paste it in the remote's terminal"); }}>Copy</Btn>
+                      </div>
+                      <div className="text-[10px] text-[var(--t-dim)]">code <span className="font-mono text-[var(--t-amber)]">{pairCmd.code}</span> · single-use · expires in {until(pairCmd.expiresAt)}; after it dies, mint another</div>
+                    </div>
+                  )}
+                </div>
               </div>
-            )}
+            </details>
             <div className="flex justify-end gap-2 pt-1">
               <Btn variant="ghost" onClick={() => setStep(1)}>Back</Btn>
               <Btn variant="amber" onClick={() => setStep(3)}>It's running →</Btn>
@@ -395,17 +469,36 @@ export function AddHostWizard({ onClose }: { onClose: () => void }) {
                 <Spinner size={20} />
                 <h3 className="mt-3 text-[14px] font-medium text-[var(--t-fg)]">Waiting for {label}…</h3>
                 <p className="mt-1 text-[11.5px] text-[var(--t-dim)]">The agent dials out to this server, so no inbound ports or firewall holes are needed. This page flips the moment it connects.</p>
-                {/* no systemd on the remote (macOS): the installer only laid
-                    the files down — the run command must be HERE, not just in
-                    the installer's stdout (issue #100, found in manual test) */}
-                <div className="mt-4 rounded-lg border border-[var(--t-line)] bg-[var(--t-bg0)] p-3 text-left">
-                  <p className="text-[11.5px] text-[var(--t-mute)] leading-relaxed">No systemd on the remote (macOS)? The installer doesn't start anything there — run the agent yourself:</p>
+                {/* auto-pairing (issue #111 review): a device that ran the
+                    installer before a host was created for it lands here —
+                    the Allow click is the step the spinner is waiting on */}
+                {pairRequests.length > 0 && (
+                  <div className="mt-4 rounded-lg border border-[var(--t-amber)]/40 bg-[var(--t-amber)]/5 px-3 py-2 space-y-1.5 text-left">
+                    <p className="text-[11px] text-[var(--t-amber)] font-medium">Waiting for your approval</p>
+                    {pairRequests.map((r) => (
+                      <div key={r.id} className="flex items-center gap-2 text-[12px] text-[var(--t-fg)]">
+                        <span className="w-1.5 h-1.5 rounded-full bg-[var(--t-amber)] shrink-0 animate-pulse" />
+                        <span className="flex-1 truncate">{r.hostname} <span className="text-[var(--t-dim)] text-[10px]">from {r.sourceIp}</span></span>
+                        <Btn size="xs" variant="amber" onClick={() => created && void store.approvePairRequest(r.id, { hostId: created.id, token: created.token })}>Allow</Btn>
+                        <Btn size="xs" variant="ghost" onClick={() => void store.denyPairRequest(r.id)}>Deny</Btn>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {/* the installer starts the agent itself where the platform
+                    allows (launchd on macOS, systemd user units on Linux —
+                    issue #111 review: "it just tells me another command to
+                    run"). The manual line stays for the platforms where it
+                    could not (issue #100, found in manual test) */}
+                <details className="mt-4 rounded-lg border border-[var(--t-line)] bg-[var(--t-bg0)] p-3 text-left">
+                  <summary className="text-[11px] text-[var(--t-dim)] cursor-pointer select-none hover:text-[var(--t-mute)]">the agent didn't start itself? run it by hand</summary>
+                  <p className="mt-2 text-[11.5px] text-[var(--t-mute)] leading-relaxed">The installer starts the agent itself on macOS (launchd) and Linux (systemd). If it said it could not, run the agent yourself:</p>
                   <div className="mt-2 font-mono text-[11px] leading-relaxed text-[var(--t-fg2)] break-all select-all">{agentRunCommand(created.id)}</div>
                   <div className="mt-2 flex justify-end">
                     <Btn size="xs" variant="outline" icon="copy" onClick={() => { void navigator.clipboard.writeText(agentRunCommand(created.id)); store.toast("ok", "Copied", "run it on the remote host"); }}>Copy</Btn>
                   </div>
                   <p className="mt-1 text-[10.5px] text-[var(--t-dim)] leading-relaxed">It stays in the foreground on purpose — it <i>is</i> the service. Give it its own terminal tab (or append <span className="font-mono">&amp;</span> to background it); Ctrl+C stops it.</p>
-                </div>
+                </details>
                 <div className="mt-4 flex justify-center gap-2">
                   <Btn variant="ghost" onClick={() => setStep(2)}>Back to the command</Btn>
                   <Btn variant="outline" onClick={onClose}>Finish later</Btn>
