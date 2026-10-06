@@ -268,7 +268,11 @@ function TrussTab({ api, params }: IDockviewPanelHeaderProps<{ sessionId?: strin
                dockview drag) while editing */
             onMouseDown={(e) => e.stopPropagation()}
             onDoubleClick={(e) => e.stopPropagation()}
-            className="min-w-0 flex-1 px-1 -mx-1 rounded bg-[var(--t-bg1)] outline-none text-[12px] text-[var(--t-fg)]"
+            /* reads as a field, not as tab text (the search box's recipe):
+               darker than the tab's own bg1, a visible border that warms on
+               focus, an amber caret so "you can type" is unmistakable */
+            style={{ caretColor: "var(--t-amber)" }}
+            className="min-w-0 flex-1 h-[18px] px-1 -mx-1 rounded border border-[var(--t-line2)] bg-[var(--t-bg0)] outline-none focus:border-[var(--t-amber)] text-[12px] text-[var(--t-fg)]"
           />
         ) : (
           <span className="min-w-0 flex-1 overflow-hidden whitespace-nowrap t-fade-r" onDoubleClick={renameTarget ? beginRename : undefined}>
