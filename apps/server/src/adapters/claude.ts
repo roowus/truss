@@ -2,6 +2,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import type { ProtoEvent } from "@truss/proto";
 import type { AdapterHandle, HarnessAdapter, SessionOpts } from "./types.js";
 import { cwdFallbackNote, resolveCwd } from "./types.js";
+import { modelRouterBaseUrl, modelRouterEnabled } from "../router-resolve.js";
 
 /**
  * Claude Code adapter — bidirectional stream-json over stdio.
@@ -17,6 +18,12 @@ import { cwdFallbackNote, resolveCwd } from "./types.js";
  * Models run through the dsh-key-proxy Anthropic-compatible route by default
  * (z.ai GLM): ANTHROPIC_BASE_URL=http://127.0.0.1:45821/api/anthropic with a
  * placeholder token — the proxy injects the real key, the harness never holds it.
+ *
+ * With the model router enabled (TRUSS_MODEL_ROUTER, issue #188) the default
+ * becomes the router's loopback endpoint instead — one Anthropic-compatible
+ * frontend fanning out to every provider in the aggregated catalog. An
+ * explicit TRUSS_CLAUDE_BASE_URL always wins (remote node-agents set it from
+ * their --server flag, so the gate never reroutes them).
  */
 
 /* read LAZILY (issue #100, audit item 16): on a remote host the node-agent
@@ -25,7 +32,8 @@ import { cwdFallbackNote, resolveCwd } from "./types.js";
    module-scope reads would freeze the loopback defaults and point the perms
    MCP at the agent's own dead loopback. */
 const anthropicBaseUrl = () =>
-  process.env.TRUSS_CLAUDE_BASE_URL ?? "http://127.0.0.1:45821/api/anthropic";
+  process.env.TRUSS_CLAUDE_BASE_URL ??
+  (modelRouterEnabled() ? modelRouterBaseUrl() : "http://127.0.0.1:45821/api/anthropic");
 const defaultModel = () => process.env.TRUSS_CLAUDE_MODEL ?? "glm-4.7";
 /** tests/ops can point at a different claude binary (issue #97) */
 const CLAUDE_BIN = process.env.TRUSS_CLAUDE_BIN ?? "claude";

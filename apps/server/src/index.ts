@@ -60,6 +60,8 @@ import { registerMcpTruss } from "./mcp-truss.js";
 import { controlService, deleteRoute, listCredentials, upsertRoute } from "./credentials.js";
 import { controlRouter, harnessRouting, routerStatus } from "./router.js";
 import { modelCatalog } from "./modelcat.js";
+import { modelRouterBaseUrl, modelRouterEnabled, modelRouterPort } from "./router-resolve.js";
+import { routerPickerModels, startModelRouter } from "./model-router.js";
 import { COMMIT } from "./version.js";
 import { syncPiModelsJson } from "./pi-config.js";
 import { transcribeAudio, transcribeConfigFromEnv } from "./transcribe.js";
@@ -121,19 +123,39 @@ void syncPiModelsJson()
   .then((r) => app.log.info(`pi models.json synced: ${r.providers} providers, ${r.models} models`))
   .catch((err) => app.log.warn(`pi models.json sync failed: ${err}`));
 
-/* claude's anthropic-compatible models = whatever z.ai serves right now */
-void modelCatalog()
-  .then((providers) => {
-    const zai = providers.find((p) => p.id === "zai");
-    if (zai?.models.length) {
-      setClaudeModels(zai.models.map((m) => ({
-        provider: "zai-local",
-        model: m.id,
-        label: `${m.id} (z.ai via key-proxy)`,
-      })));
-    }
-  })
-  .catch(() => undefined);
+/* the model router (issue #188): one Anthropic-compatible loopback endpoint
+   fanning claude sessions out to every provider the credentials cover.
+   Env-gated — with TRUSS_MODEL_ROUTER off, nothing binds and claude keeps
+   its direct z.ai route exactly as before. */
+if (modelRouterEnabled()) {
+  startModelRouter({ port: modelRouterPort() })
+    .then(() => app.log.info(`model router listening at ${modelRouterBaseUrl()} (claude's default base URL while the gate is on)`))
+    .catch((err) =>
+      app.log.error(`model router failed to bind :${modelRouterPort()} — the gate is ON so claude points there; fix the port or unset TRUSS_MODEL_ROUTER: ${err}`),
+    );
+
+  /* with the router in front, claude's picker is the whole aggregated
+     catalog — rich, so the #170 scope note correctly goes quiet */
+  void routerPickerModels()
+    .then((models) => {
+      if (models.length) setClaudeModels(models);
+    })
+    .catch(() => undefined);
+} else {
+  /* claude's anthropic-compatible models = whatever z.ai serves right now */
+  void modelCatalog()
+    .then((providers) => {
+      const zai = providers.find((p) => p.id === "zai");
+      if (zai?.models.length) {
+        setClaudeModels(zai.models.map((m) => ({
+          provider: "zai-local",
+          model: m.id,
+          label: `${m.id} (z.ai via key-proxy)`,
+        })));
+      }
+    })
+    .catch(() => undefined);
+}
 
 /* commit: which code is answering — one curl tells a live fix from a stale
    squatter (issue #135); "unknown" when the deploy has no git */
