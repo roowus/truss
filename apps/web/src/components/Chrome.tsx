@@ -150,11 +150,11 @@ export function CommandPalette({ onClose, onNew }: { onClose: () => void; onNew:
       { id: "add-tab", label: "Add tab…", icon: "plus", hint: "Alt+Shift+T", run: () => window.dispatchEvent(new Event("truss:add-tab")) },
       { id: "shell", label: "New free shell", icon: "term", run: () => openFreeShell() },
       { id: "settings", label: "Settings", icon: "settings", hint: "Ctrl/⌘ ,", run: () => openPanel("settings") },
-      { id: "new-workspace", label: "New workspace", icon: "desktop", run: () => desktops.create() },
+      { id: "new-workspace", label: "New workspace", icon: "desktop", hint: "Alt+Shift+N", run: () => desktops.create() },
       ...(activeNow && canClose(liveNow, activeNow.id)
         ? [{ id: "close-workspace", label: `Close workspace: ${activeNow.name}`, icon: "desktop", hint: "Alt+Shift+W", run: () => desktops.remove(activeNow.id) }]
         : []),
-      ...(closedTop ? [{ id: "reopen-closed", label: describeClosed(closedTop), icon: closedTop.type === "workspace" ? "desktop" : "layout", hint: "Ctrl/⌘ Shift+Z", run: () => desktops.reopenClosed() }] : []),
+      ...(closedTop ? [{ id: "reopen-closed", label: describeClosed(closedTop), icon: closedTop.type === "workspace" ? "desktop" : "layout", hint: "Alt+Shift+Z", run: () => desktops.reopenClosed() }] : []),
       { id: "welcome", label: "Open welcome", icon: "layout", run: () => openPanel("welcome") },
     ];
     const ws: Cmd[] = spaces.map((space, index) => ({ id: `ws-${space.id}`, label: `Switch to ${space.name}`, icon: "desktop", hint: `Alt+${index + 1}`, run: () => desktops.switchTo(space.id) }));

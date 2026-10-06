@@ -13,6 +13,14 @@
  * the advertised close chord is Alt+Shift+W, the strip's Alt+Shift+<letter>
  * pattern (issue #181), with Shift+W kept as its legacy alias.
  *
+ * The whole Chrome command family lives on Alt for the same reason (PR #184
+ * review): Alt+Shift+N new workspace (Chrome's Ctrl+N), Alt+Shift+T add tab
+ * (Ctrl+T), Alt+W close the active tab (Ctrl+W), Alt+Shift+Z reopen (the
+ * undo mnemonic — Ctrl/Cmd+Shift+Z keeps working as an alias). All Alt
+ * chords are app gestures and yield while typing; the predicates below
+ * match e.code as well as e.key so macOS Option composition can't kill
+ * them. This module is the chord home: App.tsx only wires them.
+ *
  * The undo stack is ONE mixed LIFO for everything closable (Chrome parity:
  * the chord restores whatever went last, tab or window): ClosedSnapshot for
  * whole workspaces, ClosedPanels for a tab or a whole tab group closed in
@@ -161,18 +169,38 @@ export function nextActiveAfterClose(spaces: CloseableSpace[], closedId: string,
 const chord = (e: ChordEvent, key: string) =>
   (e.metaKey === true || e.ctrlKey === true) && e.shiftKey === true && e.key.toLowerCase() === key;
 
-/* The strip's own pattern (Alt+Shift+T adds a tab): exactly Alt+Shift, no
-   Cmd/Ctrl — extra modifiers mean some other gesture. Matches on the
-   physical code as well as the letter: on macOS Option is a composer, so
-   Option+Shift+W reports a composed glyph as e.key („ on US layouts) and a
-   letter-only match would be dead there — e.code ("KeyW") is
-   layout/composer-independent (PR #184 audit, B1). */
-const altChord = (e: ChordEvent, key: string, code: string) =>
+/* The strip's own pattern (Alt+Shift+T adds a tab): exactly Alt(+Shift), no
+   Cmd/Ctrl — extra modifiers mean some other gesture, and AltGr (Ctrl+Alt)
+   is typing, not a chord. Matches on the physical code as well as the
+   letter: on macOS Option is a composer, so Option+Shift+W reports a
+   composed glyph as e.key („ on US layouts) and a letter-only match would
+   be dead there — e.code ("KeyW") is layout/composer-independent (PR #184
+   audit, B1). */
+const altChord = (e: ChordEvent, key: string, code: string, shift: boolean) =>
   e.altKey === true &&
-  e.shiftKey === true &&
+  (e.shiftKey === true) === shift &&
   e.metaKey !== true &&
   e.ctrlKey !== true &&
   (e.key.toLowerCase() === key || e.code === code);
+
+/**
+ * The Alt family: Chrome's window/tab commands moved to modifiers browsers
+ * actually deliver (Chrome reserves its own Ctrl/Cmd+N/T/W family — those
+ * keydowns never reach a plain tab, #181 verified in #122). All of them are
+ * app gestures, not text input, so they all yield while typing, like the
+ * strip's original Alt+Shift+T. Chrome's modifier scaling maps onto Shift:
+ * the workspace is the window (Alt+Shift+W closes it), the tab is the tab
+ * (Alt+W closes it).
+ */
+
+/** Alt+Shift+N: new workspace (Chrome's Ctrl+N, new window). */
+export const isNewWorkspaceChord = (e: ChordEvent, typing = false) => altChord(e, "n", "KeyN", true) && !typing;
+
+/** Alt+Shift+T: add a tab to the active workspace (Chrome's Ctrl+T) — the strip's original Alt chord. */
+export const isAddTabChord = (e: ChordEvent, typing = false) => altChord(e, "t", "KeyT", true) && !typing;
+
+/** Alt+W: close the active tab (Chrome's Ctrl+W); the Shift form stays the workspace close, Chrome-style. */
+export const isCloseTabChord = (e: ChordEvent, typing = false) => altChord(e, "w", "KeyW", false) && !typing;
 
 /**
  * Alt+Shift+W closes the active workspace — the chord browsers actually
@@ -183,7 +211,7 @@ const altChord = (e: ChordEvent, key: string, code: string) =>
  * mid-typing). The advertised Alt+Shift chord follows the strip pattern and,
  * like Alt+Shift+T, yields while typing. Plain Cmd+W stays the tab close.
  */
-export const isCloseWindowChord = (e: ChordEvent, typing = false) => chord(e, "w") || (altChord(e, "w", "KeyW") && !typing);
+export const isCloseWindowChord = (e: ChordEvent, typing = false) => chord(e, "w") || (altChord(e, "w", "KeyW", true) && !typing);
 
 /**
  * Cmd/Ctrl+Shift+Z reopens whatever closed last — a tab, a tab group, or a
@@ -192,8 +220,11 @@ export const isCloseWindowChord = (e: ChordEvent, typing = false) => chord(e, "w
  * the advertised chord is Shift+Z: "undo the close". It is a text-redo chord,
  * so it must NOT fire while typing (inputs and terminals keep their redo);
  * Shift+T stays as a legacy alias for environments that pass it through.
+ * Alt+Shift+Z is the Alt-family reopen (PR #184 review): same undo mnemonic,
+ * same typing yield, deliverable everywhere the Alt family is.
  */
-export const isReopenClosedChord = (e: ChordEvent, typing = false) => chord(e, "t") || (chord(e, "z") && !typing);
+export const isReopenClosedChord = (e: ChordEvent, typing = false) =>
+  chord(e, "t") || (chord(e, "z") && !typing) || (altChord(e, "z", "KeyZ", true) && !typing);
 
 /* Sized for the mixed stack: tab closes vastly outnumber workspace closes,
    and Chrome keeps ~25 — a 5-deep cap let six quick tab closes evict a

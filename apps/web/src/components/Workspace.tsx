@@ -238,7 +238,7 @@ function TrussTab({ api, params }: IDockviewPanelHeaderProps<{ sessionId?: strin
       onMouseDown={(e) => {
         if (e.button === 1) { e.preventDefault(); api.close(); }
       }}
-      title={`${title}\nRight-click to copy or move to another workspace\n(middle-click closes)${renameTarget ? "\n(double-click renames)" : ""}`}
+      title={`${title}\nRight-click to copy or move to another workspace\n(middle-click or Alt+W closes)${renameTarget ? "\n(double-click renames)" : ""}`}
     >
       <span
         style={{ color: kind === "chat" ? color : undefined }}
@@ -370,7 +370,7 @@ function GroupActions({ props, spaceId }: { props: IDockviewHeaderActionsProps; 
           in desktops.register) */}
       <button
         className="w-6 h-6 grid place-items-center rounded text-[var(--t-dim)] hover:text-[var(--t-red)] hover:bg-white/5"
-        title="Close this whole tab group (Ctrl/⌘ Shift+Z reopens)"
+        title="Close this whole tab group (Alt+Shift+Z reopens)"
         aria-label="Close this whole tab group"
         onClick={() => desktops.closeGroup(spaceId, [...props.group.panels])}
       >
