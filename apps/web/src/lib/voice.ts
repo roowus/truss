@@ -39,43 +39,101 @@ export function speechRecognitionCtor(): SpeechRecognitionCtor | null {
 
 /* SpeechRecognition-backed take: start() opens the mic in the browser's own
    recognizer, stop() ends capture and resolves with the final transcript.
-   The promise rejects via onerror (denied mic, no speech service, …). */
-function recognitionRecorder(Ctor: SpeechRecognitionCtor): VoiceRecorder {
+   The promise rejects via onerror (denied mic, no speech service, …).
+
+   The recognizer owns its audio and exposes no stream, so without help the
+   dictation visualizer (issue #112) would have nothing to read on this
+   path — Chrome/Edge/Safari, the majority. So a take ALSO opens a
+   metering-only getUserMedia (injected, optional): same mic permission as
+   the recognizer's own prompt, analysis only, never recorded or played.
+   Its lifetime mirrors the capture's generation guard — a take cancelled
+   or stopped while the grant is pending releases the late stream and
+   exposes nothing. If metering fails (denied, no device), the take is
+   unaffected; the visualizer just stays hidden. */
+export function recognitionRecorder(
+  Ctor: SpeechRecognitionCtor,
+  deps: { getUserMedia?: () => Promise<MediaStreamLike> } = {},
+): LevelStreamingRecorder {
   let rec: SpeechRecognitionLike | null = null;
   let settle: { res: (t: string) => void; rej: (e: Error) => void } | null = null;
   let result: Promise<string> | null = null;
+  let meter: MediaStreamLike | null = null;
+  let meterGen = 0;
+  const releaseMeter = () => {
+    meterGen++; // invalidate a pending grant, same guard as the capture path
+    meter?.getTracks().forEach((t) => t.stop());
+    meter = null;
+  };
   return {
+    levelStream: () => meter,
     start() {
-      const r = new Ctor();
-      rec = r;
-      r.lang = navigator.language || "en-US";
-      r.continuous = false;
-      r.interimResults = false;
-      let text = "";
-      result = new Promise<string>((res, rej) => {
-        settle = { res, rej };
-      });
-      r.onresult = (e) => {
-        for (let i = e.resultIndex; i < e.results.length; i++) {
-          const res = e.results[i];
-          if (res?.isFinal) text += res[0]?.transcript ?? "";
+      /* the metering mic's lifetime must equal the take's, however the take
+         ends — stop, cancel, the recognizer's own onerror/onend (Chrome's
+         no-speech lands ~8s in), or a synchronous throw below. Every one of
+         those paths releases it; a fresh start first sweeps any stale
+         stream so it can never be overwritten live (audit round 5, B1). */
+      releaseMeter();
+      const myMeter = meterGen;
+      if (deps.getUserMedia) {
+        /* requested synchronously like the capture path, so a stop/cancel
+           landing right after start() still wins the generation race */
+        let pending: Promise<MediaStreamLike> | null = null;
+        try {
+          pending = deps.getUserMedia();
+        } catch {
+          /* no metering stream — the take still works, bars stay hidden */
         }
-      };
-      r.onerror = (e) => {
-        const s = settle;
-        settle = null;
-        const msg = e.error === "not-allowed" ? "microphone access denied" : `speech recognition failed (${e.error ?? "unknown"})`;
-        s?.rej(new Error(msg));
-      };
-      r.onend = () => {
-        const s = settle;
-        settle = null;
-        rec = null;
-        s?.res(text);
-      };
-      r.start();
+        pending?.then((s) => {
+          /* the take ended while the metering prompt was up: release the
+             just-granted mic instead of leaking it */
+          if (myMeter !== meterGen) {
+            s.getTracks().forEach((t) => t.stop());
+            return;
+          }
+          meter = s;
+        }).catch(() => {
+          /* no metering stream — the take still works, bars stay hidden */
+        });
+      }
+      try {
+        const r = new Ctor();
+        rec = r;
+        r.lang = navigator.language || "en-US";
+        r.continuous = false;
+        r.interimResults = false;
+        let text = "";
+        result = new Promise<string>((res, rej) => {
+          settle = { res, rej };
+        });
+        r.onresult = (e) => {
+          for (let i = e.resultIndex; i < e.results.length; i++) {
+            const res = e.results[i];
+            if (res?.isFinal) text += res[0]?.transcript ?? "";
+          }
+        };
+        r.onerror = (e) => {
+          releaseMeter(); // the take just died — the metering mic dies with it
+          result?.catch(() => {}); // a rejection nobody may await must not crash
+          const s = settle;
+          settle = null;
+          const msg = e.error === "not-allowed" ? "microphone access denied" : `speech recognition failed (${e.error ?? "unknown"})`;
+          s?.rej(new Error(msg));
+        };
+        r.onend = () => {
+          releaseMeter(); // onend fires on error paths too — idempotent
+          const s = settle;
+          settle = null;
+          rec = null;
+          s?.res(text);
+        };
+        r.start();
+      } catch (e) {
+        releaseMeter(); // construction/start threw: no take, no mic
+        throw e;
+      }
     },
     stop() {
+      releaseMeter();
       try {
         rec?.stop(); // onend fires next with the final transcript
       } catch {
@@ -84,6 +142,7 @@ function recognitionRecorder(Ctor: SpeechRecognitionCtor): VoiceRecorder {
       return result ?? Promise.resolve("");
     },
     cancel() {
+      releaseMeter();
       settle = null;
       result?.catch(() => {}); // nobody awaits it anymore — swallow a late rejection
       result = null;
@@ -115,10 +174,19 @@ export interface MediaRecorderLike {
   stop(): void;
 }
 
+/* the MediaRecorder take also lends the granted stream to a visualizer
+   (issue #112): levelStream() is null before start and after stop/cancel,
+   the live stream while the take runs. The generation guard covers it too —
+   a take cancelled mid-permission-prompt never assigns `stream`, so a stale
+   take exposes nothing. */
+export interface LevelStreamingRecorder extends VoiceRecorder {
+  levelStream(): MediaStreamLike | null;
+}
+
 export function mediaRecorderCapture(deps: {
   getUserMedia: () => Promise<MediaStreamLike>;
   createRecorder: (stream: MediaStreamLike) => MediaRecorderLike;
-}): VoiceRecorder {
+}): LevelStreamingRecorder {
   let stream: MediaStreamLike | null = null;
   let rec: MediaRecorderLike | null = null;
   let chunks: Blob[] = [];
@@ -136,6 +204,7 @@ export function mediaRecorderCapture(deps: {
     rec = null;
   };
   return {
+    levelStream: () => stream,
     async start() {
       const my = ++gen;
       const s = await deps.getUserMedia();
@@ -227,16 +296,35 @@ export function appendTranscript(draft: string, transcript: string): string {
   return d ? `${d} ${t}` : t;
 }
 
+/** the browser controller with the stream seam typed: the MediaRecorder
+    path lends its live mic stream to the dictation visualizer (issue #112);
+    the SpeechRecognition path meters via its own parallel getUserMedia.
+    Either way it reads null whenever no take is live. */
+export interface BrowserVoiceController extends VoiceController {
+  levelStream(): MediaStreamLike | null;
+}
+
 /** build the composer controller: recognition where the browser has it,
     server transcription everywhere else. Never auto-sends — onText only
     touches the draft. */
-export function createBrowserVoiceInput(deps: { onText: (text: string) => void; onState?: (s: VoiceState) => void }): VoiceController {
+export function createBrowserVoiceInput(deps: { onText: (text: string) => void; onState?: (s: VoiceState) => void }): BrowserVoiceController {
   const SR = typeof window !== "undefined" ? speechRecognitionCtor() : null;
-  return createVoiceInput({
+  const c = createVoiceInput({
     maxDurationMs: 60_000,
     onText: deps.onText,
     ...(deps.onState ? { onState: deps.onState } : {}),
-    recorder: SR ? recognitionRecorder(SR) : mediaRecorder(),
+    recorder: SR
+      ? recognitionRecorder(SR, {
+          /* metering-only stream for the visualizer (issue #112): the
+             recognizer exposes no audio, so without this the bars would
+             have nothing real to read on the majority path */
+          getUserMedia: () => {
+            if (!navigator.mediaDevices?.getUserMedia) throw new Error("no mic capture for metering");
+            return navigator.mediaDevices.getUserMedia({ audio: true });
+          },
+        })
+      : mediaRecorder(),
     transcribe: transcribeAudio,
   });
+  return { ...c, levelStream: () => (c.levelStream() ?? null) as MediaStreamLike | null };
 }

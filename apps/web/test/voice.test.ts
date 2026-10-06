@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { appendTranscript, mediaRecorderCapture, transcribeAudio, type MediaRecorderLike, type MediaStreamLike } from "../src/lib/voice";
+import { appendTranscript, createBrowserVoiceInput, mediaRecorderCapture, recognitionRecorder, transcribeAudio, type MediaRecorderLike, type MediaStreamLike } from "../src/lib/voice";
 import { createVoiceInput } from "../src/lib/voiceInput";
 
 /* Companion tests for the DOM-side voice wiring (issue #15) — the pure
@@ -229,4 +229,181 @@ test("B5 follow-through: overlapping startups cannot clear each other's invalida
   assert.equal(pf.recorders.length, 1, "exactly one recorder, from the fresh take");
   rec.cancel?.();
   assert.equal(tracks[1].stopped, true, "and it releases cleanly");
+});
+
+test("createBrowserVoiceInput: the typed levelStream seam exists and reads null before any take", () => {
+  /* issue #112, audit round 1 (I1): the browser controller re-wraps
+     createVoiceInput's passthrough — a dropped method or a lost ?? null
+     blanks the visualizer while shipping green. Node has no window, so
+     this builds the MediaRecorder-path controller without touching the
+     mic (nothing is requested until start()). */
+  const v = createBrowserVoiceInput({ onText: () => {} });
+  assert.equal(typeof v.levelStream, "function", "the browser controller exposes levelStream()");
+  assert.equal(v.levelStream(), null, "no take running → no stream");
+});
+
+/* ── issue #112: the SpeechRecognition path's metering-only stream ──
+   The browser recognizer owns its audio and exposes no stream, so the
+   visualizer would have nothing to read on Chrome/Edge/Safari. A take
+   therefore opens a parallel metering-only getUserMedia whose lifetime
+   mirrors the capture path's generation guard. */
+
+function fakeSpeechRecognition() {
+  const instances: {
+    onresult: unknown;
+    onerror: ((e: { error?: string }) => void) | null;
+    onend: (() => void) | null;
+    started: boolean;
+    stopped: boolean;
+    aborted: boolean;
+  }[] = [];
+  class Fake {
+    lang = "";
+    continuous = false;
+    interimResults = false;
+    onresult: unknown = null;
+    onerror: ((e: { error?: string }) => void) | null = null;
+    onend: (() => void) | null = null;
+    started = false;
+    stopped = false;
+    aborted = false;
+    start() {
+      this.started = true;
+      instances.push(this);
+    }
+    stop() {
+      this.stopped = true;
+      this.onend?.();
+    }
+    abort() {
+      this.aborted = true;
+    }
+  }
+  return { Ctor: Fake as never, instances };
+}
+
+const meterStreamOf = () => {
+  const tracks = [{ stopped: false, stop() { this.stopped = true; } }];
+  return { stream: { getTracks: () => tracks }, tracks };
+};
+
+test("recognition recorder: metering stream is null → live → released across a take", async () => {
+  const { Ctor, instances } = fakeSpeechRecognition();
+  const { stream, tracks } = meterStreamOf();
+  const rec = recognitionRecorder(Ctor, { getUserMedia: async () => stream as never });
+
+  assert.equal(rec.levelStream(), null, "nothing before start");
+  rec.start();
+  await tick(1); // let the metering grant land
+  assert.equal(rec.levelStream(), stream, "the metering stream is live while the take runs");
+  const done = rec.stop();
+  instances[0]!.onend?.();
+  await done;
+  assert.equal(rec.levelStream(), null, "released with the take");
+  assert.equal(tracks[0]!.stopped, true, "metering tracks stopped — no zombie mic");
+});
+
+test("recognition recorder: a take cancelled mid-metering-prompt releases the late grant", async () => {
+  const { Ctor } = fakeSpeechRecognition();
+  const { stream, tracks } = meterStreamOf();
+  let grant: ((s: MediaStreamLike) => void) | undefined;
+  const rec = recognitionRecorder(Ctor, { getUserMedia: () => new Promise<MediaStreamLike>((r) => { grant = r; }) });
+  rec.start();
+  rec.cancel?.(); // user bails while the prompt is up
+  grant?.(stream as never); // the grant arrives late
+  await tick(1);
+  assert.equal(rec.levelStream(), null, "a stale take exposes nothing");
+  assert.equal(tracks[0]!.stopped, true, "the late grant is released, not leaked");
+});
+
+test("recognition recorder: metering failure never breaks the take", async () => {
+  const { Ctor, instances } = fakeSpeechRecognition();
+  const rec = recognitionRecorder(Ctor, { getUserMedia: () => Promise.reject(new Error("no metering device")) });
+  rec.start();
+  await tick(1);
+  assert.equal(rec.levelStream(), null, "no stream, bars stay hidden — honest");
+  const done = rec.stop();
+  instances[0]!.onresult = null;
+  instances[0]!.onend?.();
+  assert.equal(await done, "", "the take itself is unaffected");
+});
+
+test("recognition recorder without a metering dep: no stream, take unaffected", async () => {
+  const { Ctor, instances } = fakeSpeechRecognition();
+  const rec = recognitionRecorder(Ctor);
+  assert.equal(rec.levelStream(), null);
+  rec.start();
+  await tick(1);
+  assert.equal(rec.levelStream(), null, "no metering requested, nothing to expose");
+  const done = rec.stop();
+  instances[0]!.onend?.();
+  await done;
+});
+
+test("recognition recorder: the metering mic dies with the take — onerror path (audit round 5, B1)", async () => {
+  /* Chrome's recognizer ends takes on its own: no-speech after ~8s of
+     silence, network, service-not-allowed. Neither stop() nor cancel()
+     reaches the recorder then — the meter must release anyway, or the mic
+     indicator stays lit for a dead take. */
+  const { Ctor, instances } = fakeSpeechRecognition();
+  const { stream, tracks } = meterStreamOf();
+  const rec = recognitionRecorder(Ctor, { getUserMedia: async () => stream as never });
+  rec.start();
+  await tick(1);
+  assert.equal(rec.levelStream(), stream, "metering live while the take runs");
+  instances[0]!.onerror?.({ error: "no-speech" });
+  assert.equal(rec.levelStream(), null, "the meter releases when the recognizer errors");
+  assert.equal(tracks[0]!.stopped, true, "tracks stopped — mic indicator clears");
+  instances[0]!.onend?.(); // browsers fire onend after onerror; release is idempotent
+  assert.equal(rec.levelStream(), null);
+});
+
+test("recognition recorder: onend alone (recognizer-ended take) releases the meter", async () => {
+  const { Ctor, instances } = fakeSpeechRecognition();
+  const { stream, tracks } = meterStreamOf();
+  const rec = recognitionRecorder(Ctor, { getUserMedia: async () => stream as never });
+  rec.start();
+  await tick(1);
+  instances[0]!.onend?.(); // recognizer ended the take by itself
+  assert.equal(rec.levelStream(), null, "no live meter for a dead take");
+  assert.equal(tracks[0]!.stopped, true);
+});
+
+test("recognition recorder: a synchronous start failure never leaks the metering grant", async () => {
+  /* if constructing/starting the recognizer throws, the controller moves to
+     error without ever calling stop/cancel — a late metering grant must
+     still be released, not held until page reload */
+  class Throwing {
+    lang = ""; continuous = false; interimResults = false;
+    onresult: unknown = null; onerror: unknown = null; onend: unknown = null;
+    start() { throw new Error("recognizer unavailable"); }
+  }
+  const { stream, tracks } = meterStreamOf();
+  let grant: ((s: MediaStreamLike) => void) | undefined;
+  const rec = recognitionRecorder(Throwing as never, { getUserMedia: () => new Promise<MediaStreamLike>((r) => { grant = r; }) });
+  assert.throws(() => rec.start(), /recognizer unavailable/);
+  grant?.(stream); // the metering grant lands after the throw
+  await tick(1);
+  assert.equal(rec.levelStream(), null, "no stream exposed for a take that never started");
+  assert.equal(tracks[0]!.stopped, true, "the late grant is released, not leaked");
+});
+
+test("recognition recorder: a new take after an error never inherits a stale live meter", async () => {
+  const { Ctor, instances } = fakeSpeechRecognition();
+  const a = meterStreamOf();
+  const b = meterStreamOf();
+  const grants = [a.stream as never, b.stream as never];
+  const rec = recognitionRecorder(Ctor, { getUserMedia: async () => grants.shift()! });
+  rec.start();
+  await tick(1);
+  assert.equal(rec.levelStream(), a.stream);
+  instances[0]!.onerror?.({ error: "network" });
+  instances[0]!.onend?.();
+  rec.start(); // take 2
+  await tick(1);
+  assert.equal(rec.levelStream(), b.stream, "the fresh take's meter is live");
+  assert.equal(a.tracks[0]!.stopped, true, "the errored take's stream was stopped, not overwritten live");
+  rec.cancel?.();
+  assert.equal(b.tracks[0]!.stopped, true);
+  assert.equal(rec.levelStream(), null);
 });

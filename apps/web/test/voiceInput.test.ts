@@ -35,12 +35,20 @@ interface VoiceController {
   start(): void;
   stop(): Promise<void>;
   cancel(): void;
+  /** the recorder's live capture stream while a take runs (issue #112) */
+  levelStream(): unknown;
 }
 interface VoiceInputModule {
   createVoiceInput(deps: {
     transcribe: (audio: unknown) => Promise<string>;
     onText: (text: string) => void;
     maxDurationMs?: number;
+    recorder?: {
+      start(): void | Promise<void>;
+      stop(): Promise<unknown>;
+      cancel?(): void;
+      levelStream?(): unknown;
+    };
   }): VoiceController;
 }
 
@@ -172,4 +180,32 @@ test("start() while recording/transcribing is a no-op (no double-mic)", async ()
   assert.equal(v.state(), "recording");
   await v.stop();
   assert.equal(sttCalls, 1, "exactly one transcription happened");
+});
+
+test("levelStream(): the controller surfaces the recorder's live stream; a recorder without the hook reads null", async () => {
+  const mod = await load();
+  assert.ok(mod, "voiceInput module must exist (see module test)");
+
+  /* issue #112: the dictation visualizer polls controller.levelStream() —
+     a dropped passthrough blanks it while shipping green */
+  const stream = { getTracks: () => [] };
+  const withHook = mod.createVoiceInput({
+    transcribe: async () => "",
+    onText: () => {},
+    recorder: { start() {}, stop: async () => null, levelStream: () => stream },
+  });
+  assert.equal(withHook.levelStream(), stream, "the recorder's stream passes through the controller");
+
+  /* any recorder may lack the levelStream hook (the seam is optional):
+     the controller must then read null, not undefined — the visualizer's
+     null branch depends on it */
+  const noHook = mod.createVoiceInput({
+    transcribe: async () => "",
+    onText: () => {},
+    recorder: { start() {}, stop: async () => null },
+  });
+  assert.equal(noHook.levelStream(), null, "a recorder without levelStream reads null, not undefined");
+
+  const noRecorder = mod.createVoiceInput({ transcribe: async () => "", onText: () => {} });
+  assert.equal(noRecorder.levelStream(), null, "no recorder at all also reads null");
 });

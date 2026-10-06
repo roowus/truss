@@ -23,6 +23,10 @@ export interface VoiceRecorder {
   stop(): Promise<unknown>;
   /** release the mic without producing audio (cancel path) */
   cancel?(): void;
+  /** the live capture stream while a take runs, for UI level metering
+      (issue #112); null when unsupported or no take is live. Opaque here —
+      the DOM side types it (MediaStreamLike in voice.ts). */
+  levelStream?(): unknown;
 }
 
 export interface VoiceInputDeps {
@@ -42,6 +46,9 @@ export interface VoiceController {
   start(): void;
   stop(): Promise<void>;
   cancel(): void;
+  /** the recorder's live capture stream (opaque), or null — see
+      VoiceRecorder.levelStream */
+  levelStream(): unknown;
 }
 
 export function createVoiceInput(deps: VoiceInputDeps): VoiceController {
@@ -111,6 +118,7 @@ export function createVoiceInput(deps: VoiceInputDeps): VoiceController {
   return {
     state: () => state,
     error: () => errorMsg,
+    levelStream: () => deps.recorder?.levelStream?.() ?? null,
 
     start() {
       if (state === "recording" || state === "transcribing") return; // no double-mic

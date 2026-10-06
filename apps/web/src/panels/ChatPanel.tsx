@@ -1,7 +1,7 @@
-import { createContext, memo, useContext, useEffect, useLayoutEffect, useRef, useState, useMemo, type ReactNode } from "react";
+import { createContext, memo, useCallback, useContext, useEffect, useLayoutEffect, useRef, useState, useMemo, type ReactNode } from "react";
 import type { IDockviewPanelProps } from "dockview-react";
 import { store, useApp, useNow, capsOf, type Msg, type ToolRun, type Perm, type SessionView } from "@/lib/store";
-import { argSummary, fmtMs, harnessStyle, shortPath, baseHarness, deadSessionHint } from "@/lib/format";
+import { argSummary, fmtMs, fmtTakeTime, harnessStyle, shortPath, baseHarness, deadSessionHint } from "@/lib/format";
 import { deviceLabel, harnessDisplay, hostAliases } from "@/lib/device";
 import { useDesktops } from "@/lib/desktops";
 import { buildModelOptions, modelValue, splitModelValue } from "@/lib/models";
@@ -11,10 +11,11 @@ import { filesFromTransfer, isFileDrag } from "@/lib/attach";
 import { formatSessionRef } from "@/lib/sessionRef";
 import { resumeCommand } from "@/lib/resumeCommand";
 import { RAIL_INSET, activeRailIndex, railIndexAtOffset, railMarkTop, railNaturalHeight, turnRailItems } from "@/lib/turnRail";
-import { createBrowserVoiceInput, appendTranscript } from "@/lib/voice";
-import type { VoiceController, VoiceState } from "@/lib/voiceInput";
+import { createBrowserVoiceInput, appendTranscript, type BrowserVoiceController } from "@/lib/voice";
+import type { VoiceState } from "@/lib/voiceInput";
 import { openPanel, openAgentShell, renameSessionPanels } from "@/lib/workspace";
 import { Btn, Empty, HarnessMark, Icon, IconBtn, Select, Spinner, StateDot, STATE_META } from "@/components/ui";
+import { VoiceVisualizer } from "@/components/VoiceVisualizer";
 import { Markdown } from "./Markdown";
 import { cn } from "@/utils/cn";
 
@@ -581,7 +582,7 @@ function Composer({ id, active }: { id: string; active: boolean }) {
   /* voice dictation (issue #15): the controller lives across renders and its
      only output is the draft — sending stays the user's click */
   const [voiceState, setVoiceState] = useState<VoiceState>("idle");
-  const voiceRef = useRef<VoiceController | null>(null);
+  const voiceRef = useRef<BrowserVoiceController | null>(null);
   const voice = () =>
     (voiceRef.current ??= createBrowserVoiceInput({
       onText: (t) => {
@@ -591,6 +592,15 @@ function Composer({ id, active }: { id: string; active: boolean }) {
       onState: setVoiceState,
     }));
   useEffect(() => () => voiceRef.current?.cancel(), []); // drop a live take when the panel unmounts
+  /* the take's start wall-time, for the 0:07-style clock in the chip */
+  const [voiceStart, setVoiceStart] = useState<number | null>(null);
+  useEffect(() => {
+    setVoiceStart(voiceState === "recording" ? Date.now() : null);
+  }, [voiceState]);
+  const voiceNow = useNow(500, voiceStart !== null);
+  /* stable getter for the visualizer (issue #112): the stream appears once
+     the mic grant lands, so the component polls rather than subscribes */
+  const voiceLevelStream = useCallback(() => voiceRef.current?.levelStream() ?? null, []);
 
   useEffect(() => {
     drafts.set(id, text);
@@ -660,7 +670,7 @@ function Composer({ id, active }: { id: string; active: boolean }) {
     else v.start();
   };
   const voiceTitle =
-    voiceState === "recording" ? "Stop dictation — the transcript lands in the draft" :
+    voiceState === "recording" ? "Stop dictation · the transcript lands in the draft · Esc cancels" :
     voiceState === "transcribing" ? "Transcribing… click to cancel" :
     voiceState === "error" ? `Dictation failed: ${voiceRef.current?.error() ?? "unknown error"}` :
     "Dictate into the draft (Esc cancels a take)";
@@ -686,11 +696,11 @@ function Composer({ id, active }: { id: string; active: boolean }) {
     tone = "amber";
     hint = <><Icon name="lock" size={12} /> {harnessName} can't take input mid-run — draft is held, or <button className="underline" onClick={() => store.interrupt(id)}>interrupt</button>.</>;
   }
-  /* an active voice take owns the hint line while it lives */
-  if (voiceState === "recording") {
-    tone = "amber";
-    hint = <><Icon name="mic" size={12} /> Dictating… click the mic to finish, Esc to cancel.</>;
-  } else if (voiceState === "error") {
+  /* an active voice take no longer touches the hint line (review feedback:
+     the hint pushed the composer bar up) — the recording state lives
+     entirely in the bar: mic button pulses, the overlay carries the clock,
+     the waveform, and the Esc affordance */
+  if (voiceState === "error") {
     tone = "red";
     hint = <><Icon name="alert" size={12} /> Dictation failed: {voiceRef.current?.error() ?? "unknown error"}</>;
   }
@@ -756,6 +766,7 @@ function Composer({ id, active }: { id: string; active: boolean }) {
         >
           {voiceState === "transcribing" ? <Spinner size={13} /> : <Icon name="mic" />}
         </button>
+        <div className="relative flex-1 min-w-0 flex items-end">
         <textarea
           ref={ta}
           value={text}
@@ -791,6 +802,24 @@ function Composer({ id, active }: { id: string; active: boolean }) {
           placeholder={dead ? `Message to resume ${harnessName}…` : "Message…"}
           className="flex-1 min-w-0 resize-none bg-transparent px-1.5 py-1 text-[13.5px] text-[var(--t-fg)] placeholder:text-[var(--t-dim)] outline-none"
         />
+        {/* while a take runs, the chat bar IS the recorder (iMessage /
+            Voice Memos style): the waveform fills the input's width over
+            the draft, with the take clock at its left. The overlay is
+            pointer-events-none — purely decorative — so clicks still land
+            on the textarea underneath: it stays focused/focusable, Esc
+            still cancels the take, Enter still sends, and the draft is one
+            stop away. The bars appear once the mic grant lands; if no
+            stream can be had, the clock alone shows the take is alive. */}
+        {voiceState === "recording" && (
+          <div className="pointer-events-none absolute inset-0 flex items-center gap-2 px-1.5 rounded-sm bg-[var(--t-bg0)] text-[var(--t-amber)] overflow-hidden">
+            <span className="shrink-0 text-[11.5px] tabular-nums">{fmtTakeTime(voiceNow - (voiceStart ?? voiceNow))}</span>
+            <VoiceVisualizer levelStream={voiceLevelStream} className="flex min-w-0 flex-1 items-center gap-[2px] h-5 overflow-hidden" />
+            {/* the Esc affordance lives in the bar itself — no hint line
+                below, so the composer never shifts when a take starts */}
+            <span className="shrink-0 text-[10px] text-[var(--t-dim)]">Esc to cancel</span>
+          </div>
+        )}
+        </div>
         {running && !queues ? (
           <Btn size="sm" variant="danger" icon="stop" onClick={() => store.interrupt(id)} title="Interrupt (Esc)" className="mb-0.5">Stop</Btn>
         ) : (
