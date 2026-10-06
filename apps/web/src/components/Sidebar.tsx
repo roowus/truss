@@ -6,7 +6,8 @@ import { harnessDisplay, hostAliases } from "@/lib/device";
 import { openAgentShell, openDailyDriver, openFreeShell, openPanel, openSession } from "@/lib/workspace";
 import { HarnessMark, Icon, IconBtn, StateDot, TrussLogo, Spinner, STATE_META } from "./ui";
 import type { HostInfo, SessionMeta, TerminalInfo } from "@/lib/proto";
-import { hostRowActions, sessionRowActions, shellRowActions, type SessionRowAction } from "@/lib/rowActions";
+import { clusterRestState, hostRowActions, sessionRowActions, shellRowActions, type SessionRowAction } from "@/lib/rowActions";
+import { rowRenameTarget } from "@/lib/rowRename";
 import { sortWithPinned } from "@/lib/pinSort";
 import { pinAffordance, pinVisibilityCls } from "@/lib/pinAffordance";
 import { cn } from "@/utils/cn";
@@ -212,6 +213,16 @@ function SessionRow({ s, now, archived, trashView }: { s: SessionMeta; now: numb
     const t = setTimeout(() => setConfirm(false), 3000);
     return () => clearTimeout(t);
   }, [confirm]);
+  /* double-click the name to rename inline (issue #147); a trash row's
+     session is out of the live list, so only restore/purge apply there */
+  const [editing, setEditing] = useState(false);
+  const [name, setName] = useState("");
+  const renameTarget = trashView ? null : rowRenameTarget({ kind: "session", id: s.id });
+  const finishRename = () => {
+    const next = name.trim();
+    setEditing(false);
+    if (next && next !== s.title) void store.renameSession(s.id, next);
+  };
   const dead = s.state === "closed" || s.state === "error";
   /* trash rows don't open a chat panel: the session is not in the live list,
      so the panel would only claim it no longer exists. Restore is the way
@@ -224,6 +235,11 @@ function SessionRow({ s, now, archived, trashView }: { s: SessionMeta; now: numb
      solid + always visible when pinned, hollow + hover-only when not.
      Badge/timestamp/state stay indicators outside the cluster. */
   const actions = sessionRowActions({ pinned: !!s.pinned, archived, dead, trashView });
+  /* issue #140: the resting cluster comes from the actions themselves — an
+     all-hover cluster rests hidden (nothing reserves space, so the
+     timestamp+dot reach the row's right edge); a pinned row rests with only
+     the solid pin */
+  const rest = clusterRestState(actions);
   const runAction = (a: SessionRowAction) => {
     /* destructive entries keep the two-click confirm (the #85 rule) */
     if (a.confirm) {
@@ -232,6 +248,8 @@ function SessionRow({ s, now, archived, trashView }: { s: SessionMeta; now: numb
     }
     switch (a.id) {
       case "pin": return void store.pinSession(s.id, !s.pinned);
+      /* the displaced double-click (issue #147): chat + trajectory + context */
+      case "open-all": return openDailyDriver(s.id);
       case "shell": return openAgentShell(s.id);
       case "archive": return void store.archiveSession(s.id, true);
       case "unarchive": return void store.archiveSession(s.id, false);
@@ -243,18 +261,52 @@ function SessionRow({ s, now, archived, trashView }: { s: SessionMeta; now: numb
   };
   return (
     <div
+      /* the row is a tab stop so keyboard users keep a path to the cluster
+         now that hover-only members take no layout space at rest (issue
+         #140, replacing the opacity-0 slot-keeping that kept the pin
+         tabbable): focus reveals the cluster via group-focus-within, exactly
+         like hover does; Enter/Space on the row itself opens the session
+         (the HostRow pattern, #85) */
+      role={openable ? "button" : undefined}
+      /* an explicit name: without it the row announces as the concatenation
+         of title + timestamp + state text (audit B2) */
+      aria-label={openable ? s.title : undefined}
+      tabIndex={openable ? 0 : undefined}
+      onKeyDown={openable ? (e) => {
+        if ((e.key === "Enter" || e.key === " ") && e.target === e.currentTarget) {
+          e.preventDefault();
+          openSession(s.id);
+        }
+      } : undefined}
       onClick={openable ? () => openSession(s.id) : undefined}
-      onDoubleClick={openable ? () => openDailyDriver(s.id) : undefined}
       className={cn("group relative mx-0.5 flex items-center gap-2 px-2 t-session-row rounded-md transition-colors", openable ? "cursor-pointer" : "cursor-default", focused ? "bg-[var(--t-bg2)]" : "hover:bg-white/[0.03]")}
-      title={`${s.title}\n${harnessDisplay(s.harness, hosts, hostAliases(hostPrefs))}${s.model ? ` · ${s.model}` : ""}\n${shortPath(s.cwd)}\n${STATE_META[s.state]?.hint ?? s.state}${archived ? "\narchived — hidden from the main list" : ""}${openable ? "\n(double-click: chat + trajectory + context)" : ""}`}
+      title={`${s.title}\n${harnessDisplay(s.harness, hosts, hostAliases(hostPrefs))}${s.model ? ` · ${s.model}` : ""}\n${shortPath(s.cwd)}\n${STATE_META[s.state]?.hint ?? s.state}${archived ? "\narchived — hidden from the main list" : ""}${renameTarget ? "\n(double-click the name to rename)" : ""}`}
     >
       {focused && <span className="absolute left-0 top-2 bottom-2 w-[2px] rounded-full bg-[var(--t-amber)]" />}
       <HarnessMark harness={s.harness} size={17} className={dead ? "opacity-45" : ""} />
-      <span className={cn("flex-1 min-w-0 truncate text-[12.5px]", dead ? "text-[var(--t-mute)]" : "text-[var(--t-fg)]", archived && "opacity-60")}>{s.title}</span>
+      {editing ? (
+        <input
+          autoFocus
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          onClick={(e) => e.stopPropagation()}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") finishRename();
+            else if (e.key === "Escape") setEditing(false);
+          }}
+          onBlur={finishRename}
+          className="flex-1 min-w-0 bg-[var(--t-bg1)] border border-[var(--t-line2)] rounded px-1 text-[12.5px] text-[var(--t-fg)] outline-none"
+        />
+      ) : (
+        <span
+          onDoubleClick={renameTarget ? () => { setName(s.title); setEditing(true); } : undefined}
+          className={cn("flex-1 min-w-0 truncate text-[12.5px]", dead ? "text-[var(--t-mute)]" : "text-[var(--t-fg)]", archived && "opacity-60")}
+        >{s.title}</span>
+      )}
       {pending > 0 && (
         <span className="shrink-0 inline-grid place-items-center w-4 h-4 rounded-full bg-[var(--t-amber)] text-[#1b1305] text-[9.5px] font-bold t-pulse-soft" title="Permission waiting">{pending}</span>
       )}
-      <span className="group-hover:hidden flex items-center gap-1.5 shrink-0">
+      <span className="group-hover:hidden group-focus-within:hidden flex items-center gap-1.5 shrink-0">
         {trashView && s.deleted_at != null ? (
           <span className="text-[10px] text-[var(--t-dim)] tabular-nums" title="Days before this chat is purged">
             {daysLeftInTrash(+new Date(s.deleted_at) || Date.parse(String(s.deleted_at)), now)}d left
@@ -264,12 +316,15 @@ function SessionRow({ s, now, archived, trashView }: { s: SessionMeta; now: numb
         )}
         <StateDot state={s.state} size={6} />
       </span>
-      {/* one container, one gap: the pin's visibility is its per-member rule
-          (opacity, so it keeps its slot and stays tabbable), the rest reveal
-          on hover as before. In trash view there is no always-slotted member,
-          so the container itself hides until hover (as the pre-#110 wrapper
-          did) — otherwise its empty box would eat a row gap (audit B2). */}
-      <span className={cn("items-center shrink-0", trashView ? "hidden group-hover:flex" : "flex")} onClick={(e) => e.stopPropagation()}>
+      {/* one container, one gap (issue #110), resting state from
+          clusterRestState (issue #140): no always-visible member → the whole
+          cluster hides until hover/focus, so nothing (not even an
+          opacity-0 pin) reserves space and the timestamp+dot sit flush at
+          the right edge; pinned → only the solid pin rests. Hover members
+          take zero layout space at rest (display, not opacity) — keyboard
+          reach comes from the row being a tab stop, with group-focus-within
+          revealing the cluster just like hover. */}
+      <span className={cn("items-center shrink-0", rest.cls, "group-focus-within:flex")} onClick={(e) => e.stopPropagation()}>
         {actions.map((a) => (
           <IconBtn
             key={a.id}
@@ -278,7 +333,7 @@ function SessionRow({ s, now, archived, trashView }: { s: SessionMeta; now: numb
             active={a.id === "pin" ? !!s.pinned : undefined}
             className={cn(
               "w-6 h-6 shrink-0",
-              a.id === "pin" ? pinVisibilityCls(a.visible) : "hidden group-hover:inline-grid",
+              a.visible === "hover" && "hidden group-hover:inline-grid group-focus-within:inline-grid",
               confirm && a.confirm && "!text-[var(--t-red)] bg-[color-mix(in_oklab,var(--t-red)_15%,transparent)]",
             )}
             onClick={() => runAction(a)}
@@ -365,7 +420,11 @@ function ShellRow({ t }: { t: TerminalInfo }) {
           className="flex-1 min-w-0 bg-[var(--t-bg1)] border border-[var(--t-line2)] rounded px-1 text-[12px] text-[var(--t-fg)] outline-none"
         />
       ) : (
-        <span className="text-[12px] text-[var(--t-fg2)] truncate">{t.title ?? t.id}</span>
+        <span
+          onDoubleClick={rowRenameTarget({ kind: "terminal", id: t.id }) ? () => { setName(t.title ?? ""); setEditing(true); } : undefined}
+          title="Double-click to rename"
+          className="text-[12px] text-[var(--t-fg2)] truncate"
+        >{t.title ?? t.id}</span>
       )}
       {/* one cluster, one gap (issue #110): the pin leads the same container
           as the other actions — its opacity rule keeps the slot and the tab
@@ -408,6 +467,19 @@ function HostRow({ h, alias }: { h: HostInfo; alias?: string }) {
   const [confirm, confirmClick] = useTwoClickConfirm();
   const hosts = useApp((st) => st.hosts);
   const hostPrefs = useDesktops((st) => st.hosts);
+  /* double-click the name to rename the host's label inline (issue #147);
+     the id is the identity and never changes. The edit targets the shared
+     label itself — prefill/compare h.label, never the alias: a per-user
+     alias stays a HostPanel preference and must not leak into the label
+     every client sees (audit round 1) */
+  const [editing, setEditing] = useState(false);
+  const [name, setName] = useState("");
+  const renameTarget = rowRenameTarget({ kind: "host", id: h.id });
+  const finishRename = () => {
+    const next = name.trim();
+    setEditing(false);
+    if (next && next !== h.label) void store.renameHost(h.id, next);
+  };
 
   const actions = hostRowActions(h);
   const del = actions.find((a) => a.dangerous);
@@ -436,7 +508,26 @@ function HostRow({ h, alias }: { h: HostInfo; alias?: string }) {
     >
       <span className={cn("w-1.5 h-1.5 rounded-full shrink-0", h.online ? "bg-[var(--t-teal)]" : "bg-[var(--t-line2)]")} />
       <Icon name="host" size={12} className={h.online ? "text-[var(--t-sky)]" : "text-[var(--t-dim)]"} />
-      <span className={cn("flex-1 truncate", !h.online && "opacity-50")}>{alias || h.label}</span>
+      {editing ? (
+        <input
+          autoFocus
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          onClick={(e) => e.stopPropagation()}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") finishRename();
+            else if (e.key === "Escape") setEditing(false);
+          }}
+          onBlur={finishRename}
+          className="flex-1 min-w-0 bg-[var(--t-bg1)] border border-[var(--t-line2)] rounded px-1 text-[12px] text-[var(--t-fg)] outline-none"
+        />
+      ) : (
+        <span
+          onDoubleClick={renameTarget ? () => { setName(h.label); setEditing(true); } : undefined}
+          title={renameTarget ? (alias ? `Double-click to rename the shared label (your alias “${alias}” stays)` : "Double-click to rename") : undefined}
+          className={cn("flex-1 truncate", !h.online && "opacity-50")}
+        >{alias || h.label}</span>
+      )}
       {h.revoked && !confirm && <span className="text-[8.5px] font-mono uppercase text-[var(--t-red)] shrink-0 group-hover:hidden">revoked</span>}
       {/* one cluster, one gap (issue #110): the pin leads the same container
           as delete — its opacity rule keeps the slot and the tab order (#86),

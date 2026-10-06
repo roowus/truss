@@ -1,0 +1,74 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { composerAlign, composerTextareaHeight } from "../src/lib/composerFit";
+
+/* TESTS for the composer resting height — https://github.com/roowus/truss/issues/139
+   ("Composer rests a row too tall: the 'Message to resume <harness>'
+   placeholder sits one row above the buttons even though they don't
+   overlap — looks mismatched and ugly"). They pinned the contract before
+   the fix (4/4 red) and now keep it green.
+
+   The contract: src/lib/composerFit.ts —
+
+     composerTextareaHeight({ scrollHeight, lineHeight, verticalPadding, cap }): number
+       Empty draft → EXACTLY one line + vertical padding (never a phantom
+       second row — padding is counted once, not twice);
+     composerAlign(lineCount): "center" | "end"
+       1 line → "center" (placeholder and buttons share the row);
+       2+ lines → "end" (buttons sink to the bottom of a tall draft).
+
+   Post-audit note (PR #144 round 1): the issue diagnosed the mismeasure as
+   content-box double-counting; the shipped stylesheet is border-box
+   (Tailwind preflight), so ChatPanel applies the total height directly and
+   the padding is counted exactly once. */
+
+test("src/lib/composerFit.ts exists", () => {
+  assert.equal(typeof composerTextareaHeight, "function", "src/lib/composerFit.ts must export composerTextareaHeight — see issue #139");
+  assert.equal(typeof composerAlign, "function", "src/lib/composerFit.ts must export composerAlign — see issue #139");
+});
+
+test("the empty draft is EXACTLY one row — padding counted once", () => {
+  const oneLine = 13.5 * 1.5; // 20.25px content
+  const pad = 8; // py-1
+  /* what the browser reports for an empty rows=1 textarea with py-1 */
+  const measured = oneLine + pad;
+  const h = composerTextareaHeight({ scrollHeight: measured, lineHeight: oneLine, verticalPadding: pad });
+  assert.equal(h, oneLine + pad, "one line + padding, once — the phantom row dies");
+  assert.ok(h < oneLine * 2 + pad, "never two rows when empty");
+
+  /* growth is linear and capped */
+  const threeLines = composerTextareaHeight({ scrollHeight: oneLine * 3 + pad, lineHeight: oneLine, verticalPadding: pad });
+  assert.equal(threeLines, oneLine * 3 + pad, "three lines measure as three");
+  const huge = composerTextareaHeight({ scrollHeight: 9000, lineHeight: oneLine, verticalPadding: pad, cap: 220 });
+  assert.equal(huge, 220, "the cap holds");
+});
+
+test("alignment: single-line centers (placeholder on the buttons' row); multi-line bottoms", () => {
+  assert.equal(composerAlign(1), "center", "one line → everything shares the row (the complaint)");
+  assert.equal(composerAlign(2), "end", "tall drafts bottom-align the buttons");
+  assert.equal(composerAlign(9), "end");
+});
+
+test("read-through: the composer actually uses the contract", () => {
+  const src = readFileSync(new URL("../src/panels/ChatPanel.tsx", import.meta.url), "utf8");
+  assert.ok(/composerAlign\(/.test(src), "the composer row's alignment must come from composerAlign — today it's a static items-end with a mismeasured textarea");
+  assert.ok(/composerTextareaHeight\(/.test(src), "the autosize must go through composerTextareaHeight (padding counted once)");
+});
+
+test("read-through: the applied height is the total directly — the textarea is border-box", () => {
+  /* audit round 1 (B1): Tailwind's preflight makes the textarea border-box,
+     so scrollHeight's padding is counted once; subtracting it again renders
+     every draft a padding-row short and clips the text line */
+  const src = readFileSync(new URL("../src/panels/ChatPanel.tsx", import.meta.url), "utf8");
+  assert.ok(/style\.height = total \+ "px"/.test(src), "the border-box textarea takes the total height as-is — subtracting the padding clips the line");
+  assert.ok(!/style\.height = total - verticalPadding/.test(src), "never subtract the padding from a border-box height");
+});
+
+test("read-through: a rewrap without a text change re-measures (resize observer)", () => {
+  /* audit round 1 (B2): dragging the chat width or resizing the window
+     rewraps the draft without firing the [text] effect — height and the
+     center/end switch would go stale until the next keystroke */
+  const src = readFileSync(new URL("../src/panels/ChatPanel.tsx", import.meta.url), "utf8");
+  assert.ok(/ResizeObserver/.test(src), "the autosize must re-run when the textarea's width changes, not only on keystrokes");
+});

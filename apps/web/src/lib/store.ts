@@ -775,6 +775,36 @@ class Store {
     }
     this.set((s) => ({ terminals: s.terminals.map((t) => (t.id === id ? { ...t, title: title.trim().slice(0, 64) } : t)) }));
   }
+  /* tab double-click rename (issue #141): patch the row in place like
+     renameTerminal does; the session.updated broadcast covers the other
+     clients, and ChatPanel retitles open panels off meta.title */
+  async renameSession(id: string, title: string) {
+    try {
+      await this.be.renameSession(id, title);
+    } catch (e: any) {
+      this.toast("error", "Couldn't rename chat", e.message);
+      return;
+    }
+    const next = title.trim().slice(0, 64);
+    this.set((s) => {
+      const meta = s.sessions[id];
+      if (!meta) return {};
+      return { sessions: { ...s.sessions, [id]: { ...meta, title: next } } };
+    });
+  }
+  /* sidebar host rename (issue #147): the label is display-only (the id is
+     the identity), so the row patches in place like a pin */
+  async renameHost(id: string, label: string) {
+    const be = this.state.backend;
+    if (!be) return;
+    try {
+      await be.renameHost(id, label);
+    } catch (e: any) {
+      this.toast("error", "Couldn't rename host", e?.message ?? String(e));
+      return;
+    }
+    this.set((s) => ({ hosts: s.hosts.map((h) => (h.id === id ? { ...h, label: label.trim().slice(0, 64) } : h)) }));
+  }
   /* sidebar host delete (issue #85): a primary affordance must not fail
      silently — toast on error, refresh either way */
   async deleteHost(id: string) {
