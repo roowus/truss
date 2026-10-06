@@ -97,6 +97,25 @@ test("diskIoRates: partitions and virtual devices are filtered, whole disks stay
   }
 });
 
+test("diskIoRates: numeric-family whole disks survive (md127, nbd15, zd12) — audit round 1 B1", () => {
+  /* the first partition-regex arm used to end in md\d+|nbd\d+|zd\d+ followed
+     by \d+ — backtracking split md127 into "md12"+"7" and the kernel's
+     default auto-assembled RAID name vanished from the panel. Numeric
+     families partition pN-style, so whole disks must survive. */
+  const cur = [
+    "   9     127 md127 100 0 4000 500 200 0 8000 700 0 300 1200", // whole RAID array — kept
+    "   9       0 md0 100 0 4000 500 200 0 8000 700 0 300 1200", // whole array — kept
+    "   9       1 md0p1 100 0 4000 500 200 0 8000 700 0 300 1200", // partition — dropped
+    "  43      15 nbd15 100 0 4000 500 200 0 8000 700 0 300 1200", // whole nbd — kept
+    "  43      16 nbd15p1 100 0 4000 500 200 0 8000 700 0 300 1200", // partition — dropped
+    " 254      12 zd12 100 0 4000 500 200 0 8000 700 0 300 1200", // whole zd — kept
+  ].join("\n");
+  assert.deepEqual(
+    metrics.diskIoRates(null, cur, 1000).map((r: { device: string }) => r.device).sort(),
+    ["md0", "md127", "nbd15", "zd12"],
+  );
+});
+
 test("diskIoRates: counter reset clamps to 0, never negative", () => {
   const before = `   8       0 sda 1000 0 40000 5000 2000 0 80000 7000 0 3000 12000`;
   const afterReset = `   8       0 sda 10 0 400 50 20 0 800 70 0 30 120`; // device reset (e.g. replug)

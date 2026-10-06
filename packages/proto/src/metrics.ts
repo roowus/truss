@@ -60,7 +60,9 @@ export interface HostMetrics {
   };
   /** top systemd services by cpu then rss, from the cgroup v2 tree */
   services?: { name: string; cpu: number; rssMb: number }[];
-  /** refreshed at most once a minute (subprocesses; see logsSlow) */
+  /** refreshed at most once a minute (subprocesses; see logsSlow). Omitted
+      entirely when the host lacks systemd, so the panel hides the card
+      instead of showing a fake "none" (audit round 1, B2) */
   logs?: { failedUnits: string[]; coredumps: number | null; lines: string[] };
   sys?: { users: string[]; updatesPending: number | null };
   temps: { label: string; c: number }[];
@@ -216,8 +218,11 @@ function cpuFreqMhz(): number {
 }
 
 /* partition suffixes by name — the pure diskIoRates can't stat /sys, so
-   sda1 / nvme0n1p2 / mmcblk0p1 are recognized by shape (whole disks only) */
-const isDiskPart = (n: string) => /^(?:sd[a-z]+|vd[a-z]+|xvd[a-z]+|hd[a-z]+|md\d+|nbd\d+|zd\d+)\d+$/.test(n) || /\d+p\d+$/.test(n);
+   sda1 / nvme0n1p2 / mmcblk0p1 are recognized by shape (whole disks only).
+   Only the letter families take bare-digit partitions (sda1); the numeric
+   families partition pN-style (md0p1, nbd0p1 — the \d+p\d+$ arm), so md127/
+   nbd15/zd12 must stay whole disks (audit round 1, B1) */
+const isDiskPart = (n: string) => /^(?:sd[a-z]+|vd[a-z]+|xvd[a-z]+|hd[a-z]+)\d+$/.test(n) || /\d+p\d+$/.test(n);
 const SKIP_DISK = /^(loop|ram|sr|dm-)/;
 
 /** two /proc/diskstats snapshots → per-device B/s rates. Pure: no fs, no
@@ -399,12 +404,15 @@ function sysInfo(): NonNullable<HostMetrics["sys"]> {
   return { users: utmp ? parseUtmpUsers(utmp) : [], updatesPending };
 }
 
-/* execFile that never rejects — a missing/slow probe yields "" so the
-   section degrades to empty instead of killing the whole snapshot */
-function execText(cmd: string, args: string[], timeoutMs: number): Promise<string> {
+/* execFile that never rejects — a probe that cannot run at all (missing
+   binary, nonzero exit with no output, timeout) resolves null so the caller
+   can tell "no systemd here" apart from "ran fine, nothing to report" (audit
+   round 1, B2); a successful run with empty output resolves "" */
+function execText(cmd: string, args: string[], timeoutMs: number): Promise<string | null> {
   return new Promise((resolve) => {
-    execFile(cmd, args, { timeout: timeoutMs, maxBuffer: 1024 * 1024 }, (_err, stdout) => {
-      resolve(stdout?.toString() ?? "");
+    execFile(cmd, args, { timeout: timeoutMs, maxBuffer: 1024 * 1024 }, (err, stdout) => {
+      const text = stdout?.toString() ?? "";
+      resolve(err && !text ? null : text);
     });
   });
 }
@@ -412,21 +420,28 @@ function execText(cmd: string, args: string[], timeoutMs: number): Promise<strin
 /* failed units + coredumps + journal tail are subprocess probes (systemctl,
    journalctl) — far too heavy for every 3s poll, so they refresh at most
    once a minute and every snapshot in between reuses the last result. The
-   in-flight promise is shared so overlapping polls never double-spawn. */
+   in-flight promise is shared so overlapping polls never double-spawn.
+   Returns null when neither probe can run (a systemd-less host) so the
+   section is OMITTED, not rendered as an authoritative-looking empty card
+   (audit round 1, B2). */
 const LOGS_TTL_MS = 60_000;
 type Logs = NonNullable<HostMetrics["logs"]>;
-let logsCache: { at: number; logs: Logs } | null = null;
-let logsPending: Promise<Logs> | null = null;
+let logsCache: { at: number; logs: Logs | null } | null = null;
+let logsPending: Promise<Logs | null> | null = null;
 
-async function logsSlow(): Promise<Logs> {
+async function logsSlow(): Promise<Logs | null> {
   if (logsCache && Date.now() - logsCache.at < LOGS_TTL_MS) return logsCache.logs;
   if (logsPending) return logsPending;
-  logsPending = (async (): Promise<Logs> => {
+  logsPending = (async (): Promise<Logs | null> => {
     const [failedOut, journal] = await Promise.all([
       execText("systemctl", ["--failed", "--no-legend", "--plain"], 3000),
       execText("journalctl", ["-b", "-p", "warning..emerg", "--no-pager", "-n", "20", "-o", "short-iso"], 4000),
     ]);
-    const failedUnits = failedOut
+    if (failedOut === null && journal === null) {
+      logsCache = { at: Date.now(), logs: null };
+      return null;
+    }
+    const failedUnits = (failedOut ?? "")
       .split("\n")
       .map((l) => l.trim().split(/\s+/)[0] ?? "")
       .filter((l) => l.includes("."))
@@ -437,7 +452,7 @@ async function logsSlow(): Promise<Logs> {
     } catch {
       /* no coredump dir / unreadable */
     }
-    const lines = journal
+    const lines = (journal ?? "")
       .split("\n")
       .filter((l) => l.trim().length > 0 && !l.startsWith("-- "))
       .slice(-20);
@@ -646,7 +661,7 @@ export async function collectMetrics(): Promise<HostMetrics> {
   const diskText = read("/proc/diskstats");
   const diskIo = diskIoRates(prevDisk, diskText, dt * 1000);
 
-  const logsPromise = logsSlow(); // cached a minute — the subprocess probes don't run per poll
+  const logsPromise = logsSlow(); // cached a minute — the subprocess probes don't run per poll; null when the host lacks systemd
 
   prevCpu = cpu;
   prevNet = net.cur;
@@ -654,6 +669,10 @@ export async function collectMetrics(): Promise<HostMetrics> {
   prevStatX = { ctxt: statX.ctxt, intr: statX.intr, forks: statX.forks };
   prevDisk = diskText;
   prevAt = now;
+
+  /* awaited after the prev-state updates so a slow probe never stalls the
+     next sample's baseline; null → the key is omitted, not null */
+  const logs = await logsPromise;
 
   return {
     at: now,
@@ -683,7 +702,7 @@ export async function collectMetrics(): Promise<HostMetrics> {
     net: net.list,
     sock: sockCounts(),
     services: services(now, cpu.perCore.length),
-    logs: await logsPromise,
+    ...(logs ? { logs } : {}),
     sys: sysInfo(),
     temps: temps(),
     procs: top.slice(0, 25), // the reference monitor's top-25
