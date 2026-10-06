@@ -191,7 +191,10 @@ sh "$SCRIPT" "$TOKEN"
  * no injection surface) and no state changes hands here: the download never
  * burns anything and can be repeated freely. Styled to the app's "graphite
  * & signal" tokens with system font stacks, self-contained so a
- * tailnet-only remote needs no internet to render it.
+ * tailnet-only remote needs no internet to render it. The brand svg
+ * duplicates the canonical TrussLogo path data from
+ * apps/web/src/components/ui.tsx (the server can't import the web tsx) —
+ * keep the two in sync when the logo changes.
  */
 export function pairingPage(): string {
   return `<!doctype html>
@@ -203,11 +206,12 @@ export function pairingPage(): string {
 <style>
   :root { color-scheme: dark; }
   * { box-sizing: border-box; }
-  body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #0b0c0e; color: #ece7dd;
+  body { margin: 0; min-height: 100vh; min-height: 100svh; display: grid; place-items: center; background: #0b0c0e; color: #ece7dd;
          font: 13px/1.55 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; -webkit-font-smoothing: antialiased; }
   .card { width: 400px; max-width: calc(100vw - 32px); background: #111316; border: 1px solid #353941; border-radius: 12px;
           padding: 24px; box-shadow: 0 18px 50px rgba(0,0,0,0.45); }
   .brand { display: flex; align-items: center; gap: 10px; margin-bottom: 4px; }
+  .brand svg { flex: none; }
   .brand h1 { font-size: 16px; font-weight: 600; margin: 0; }
   .sub { color: #9b968c; margin: 0 0 20px; }
   .step { display: flex; gap: 12px; padding: 12px 0; border-top: 1px solid #23262c; }
@@ -220,7 +224,8 @@ export function pairingPage(): string {
   .dl:hover { filter: brightness(1.08); }
   .dl:disabled { opacity: 0.55; cursor: default; }
   .cmd { display: flex; align-items: center; gap: 8px; background: #0b0c0e; border: 1px solid #23262c; border-radius: 8px; padding: 9px 12px; }
-  .cmd code { flex: 1; font: 13px "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace; color: #5fc9c0; user-select: all; }
+  .cmd code { flex: 1; min-width: 0; overflow-x: auto; white-space: nowrap; font: 13px "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace; color: #5fc9c0; user-select: all;
+              scrollbar-width: thin; scrollbar-color: #353941 transparent; }
   .copy { flex: none; font: inherit; font-size: 11.5px; color: #9b968c; background: none; border: 1px solid #353941;
           border-radius: 6px; padding: 4px 10px; cursor: pointer; }
   .copy:hover { color: #ece7dd; border-color: #66635d; }
@@ -230,8 +235,8 @@ export function pairingPage(): string {
 <body>
 <main class="card">
   <div class="brand">
-    <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#f0b35a" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-      <path d="M3 20 L12 4 L21 20 Z"/><path d="M7.5 12 L16.5 12"/><path d="M12 4 L12 12"/><path d="M7.5 12 L3 20"/><path d="M16.5 12 L21 20"/>
+    <svg width="32" height="20" viewBox="0 0 32 20" fill="none" stroke="#f0b35a" stroke-width="1.6" stroke-linejoin="round" aria-label="Truss">
+      <path d="M1 18h30M3 3h26"/><path d="M1 18L6 3l5 15 5-15 5 15 5-15 5 15"/>
     </svg>
     <h1>Pair this device with Truss</h1>
   </div>
