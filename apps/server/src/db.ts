@@ -315,10 +315,17 @@ export const store = {
     const rows = listEventsStmt.all(sessionId) as { id: number; payload: string; at: number }[];
     /* Rows persisted before the sink stamped `at` carry no time of their
        own — hand back the row's wall-clock instead, or replay collapses
-       every unstamped done-span to a fabricated 0ms (issue #142 audit) */
+       every unstamped done-span to a fabricated 0ms (issue #142 audit).
+       Exception: imported dsh logs (the importer names its rows `dsh-*`)
+       are inserted in one synchronous batch, so the row time is the import
+       instant, not the event time — injecting it would fabricate spans as
+       long as the session's age at import. Those stay timeless here and
+       fall back to the client's replay clock: bounded, and honest — dsh
+       records a message as a single record, so the real span is ~0. */
+    const isImport = sessionId.startsWith("dsh-");
     return rows.map((r) => {
       const ev = JSON.parse(r.payload) as ProtoEvent;
-      if ((ev as { at?: unknown }).at === undefined) (ev as { at?: unknown }).at = r.at;
+      if (!isImport && (ev as { at?: unknown }).at === undefined) (ev as { at?: unknown }).at = r.at;
       return { seq: r.id, ev };
     });
   },

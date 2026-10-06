@@ -97,6 +97,36 @@ test("events: append and replay in order", async () => {
   cleanup();
 });
 
+test("events: the row-at fallback skips imported dsh logs (issue #142 audit, B9)", async () => {
+  const { db, cleanup } = await freshServer("db-import-at");
+  const T = 1_700_000_000_000; // the record's real moment, long before "now"
+  db.store.createSession({ id: "dsh-deadbeef", harness: "dsh" as never, title: "t", cwd: "/tmp" });
+  /* the pre-upgrade importer appended the whole rebuilt log in one batch:
+     msg.start stamped with the record time, the done unstamped — and every
+     row sharing the import instant. Appending the done on a later tick
+     reproduces that shape (row time ≠ event time). */
+  db.store.appendEvent({ type: "msg.start", sessionId: "dsh-deadbeef", messageId: "m1", role: "assistant", at: T } as never);
+  await new Promise((r) => setTimeout(r, 5));
+  db.store.appendEvent({ type: "msg.done", sessionId: "dsh-deadbeef", messageId: "m1" } as never);
+  const imported = db.store.listEvents("dsh-deadbeef");
+  assert.equal(
+    (imported[1].ev as { at?: number }).at,
+    undefined,
+    "an imported done stays timeless — injecting the row time would fabricate a span as long as the session's age; the client replay clock bounds it instead",
+  );
+
+  /* the same shape on a sink-produced session still gets the repair:
+     there the row time IS the event time */
+  db.store.createSession({ id: "s-live", harness: "pi", title: "t", cwd: "/tmp" });
+  db.store.appendEvent({ type: "msg.start", sessionId: "s-live", messageId: "m1", role: "assistant", at: T } as never);
+  await new Promise((r) => setTimeout(r, 5));
+  db.store.appendEvent({ type: "msg.done", sessionId: "s-live", messageId: "m1" } as never);
+  const live = db.store.listEvents("s-live");
+  const liveDoneAt = (live[1].ev as { at?: number }).at;
+  assert.ok(typeof liveDoneAt === "number" && liveDoneAt > T, "a pre-upgrade sink row inherits its real insert time");
+  cleanup();
+});
+
 test("events: deleting a session cascades its events", async () => {
   const { db, cleanup } = await freshServer("db-cascade");
   db.store.createSession({ id: "s7", harness: "pi", title: "t", cwd: "/tmp" });
