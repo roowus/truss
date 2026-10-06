@@ -13,16 +13,16 @@ import assert from "node:assert/strict";
 
    The contract (headerFit.ts — the planner stays the engine):
    - HEADER_CLUSTER carries the panel shortcuts as regular items
-     (trajectory, context, skills — "team" joins capability-gated in the
-     panel code);
+     (trajectory, context, skills, shell — "team" joins capability-gated
+     in the panel code);
    - a roomy header inlines ALL of them;
    - a narrow header still collapses overflow into ⋯ (the planner's whole
      point — no new behavior);
    - the planner reports needsMore (overflow non-empty) so the ⋯ trigger
      never has to render as an empty button. ChatPanel keeps the trigger
-     unconditional: its menu always carries the utility block (shell, copy
+     unconditional: its menu always carries the utility block (copy
      reference, resume, the id dump) — developer call, option A on the
-     issue. */
+     issue. (Shell joined the top bar too, on the developer's follow-up.) */
 
 interface HeaderFitModule {
   HEADER_GAP: number;
@@ -38,7 +38,7 @@ async function load(): Promise<HeaderFitModule> {
 test("the panel shortcuts join the header cluster", async () => {
   const mod = await load();
   const ids = mod.HEADER_CLUSTER.map((i) => i.id);
-  for (const id of ["trajectory", "context", "skills"]) {
+  for (const id of ["trajectory", "context", "skills", "shell"]) {
     assert.ok(ids.includes(id), `HEADER_CLUSTER must carry "${id}" inline — today it hides under ⋯ (issue #145)`);
   }
 });

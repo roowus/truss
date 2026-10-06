@@ -98,7 +98,7 @@ function ChatHeader({ id }: { id: string }) {
      the title gets a 56px reservation (it truncates beyond that). */
   const headerRef = useRef<HTMLDivElement>(null);
   const leftRef = useRef<HTMLSpanElement>(null);
-  const [plan, setPlan] = useState<{ visible: string[]; overflow: string[] }>({ visible: ["stop", "trajectory", "context", "team", "skills", "more"], overflow: [] });
+  const [plan, setPlan] = useState<{ visible: string[]; overflow: string[] }>({ visible: ["stop", "trajectory", "context", "team", "skills", "shell", "more"], overflow: [] });
 
   /* which device this session runs on: bare harness id = this server,
      harness@hostId = that remote host (the user's alias wins, then the
@@ -176,9 +176,12 @@ function ChatHeader({ id }: { id: string }) {
         {plan.visible.includes("skills") && (
           <IconBtn icon="spark" label="Skills" onClick={() => openPanel("skills", { sessionId: id, cwd: meta.cwd })} />
         )}
+        {plan.visible.includes("shell") && (
+          <IconBtn icon="term" label="Shell in this cwd" onClick={() => openAgentShell(id)} />
+        )}
         {/* the trigger renders unconditionally: its menu always carries the
-            utility block (shell, copy reference, resume, the id dump), so it
-            is never the empty dead-weight button issue #145 guards against.
+            utility block (copy reference, resume, the id dump), so it is
+            never the empty dead-weight button issue #145 guards against.
             planHeaderFit still reports needsMore — if the utilities ever
             move out, gate this on it. */}
         <IconBtn icon="dots" label="More panels" active={menu} onClick={() => setMenu((m) => !m)} />
@@ -193,13 +196,14 @@ function ChatHeader({ id }: { id: string }) {
                 Trajectory
               </button>
             )}
-            {/* the collapsed panel shortcuts rejoin their overflowed
-                siblings here (issue #145) — each is inline whenever the
-                planner keeps it visible */}
+            {/* the collapsed shortcuts rejoin their overflowed siblings
+                here (issue #145) — each is inline whenever the planner
+                keeps it visible */}
             {[
               ...(plan.overflow.includes("context") ? [{ icon: "gauge", label: "Context usage", run: () => openPanel("context", { sessionId: id }) }] : []),
               ...(plan.overflow.includes("team") ? [{ icon: "tree", label: "Subagent team", run: () => openPanel("team", { sessionId: id }) }] : []),
               ...(plan.overflow.includes("skills") ? [{ icon: "spark", label: "Skills", run: () => openPanel("skills", { sessionId: id, cwd: meta.cwd }) }] : []),
+              ...(plan.overflow.includes("shell") ? [{ icon: "term", label: "Shell in this cwd", run: () => openAgentShell(id) }] : []),
             ].map((it) => (
               <button key={it.label} onClick={() => { setMenu(false); it.run(); }} className="w-full flex items-center gap-2.5 px-3 h-8 text-left text-[12.5px] text-[var(--t-fg2)] hover:bg-white/[0.05]">
                 <Icon name={it.icon} size={13} className="text-[var(--t-mute)]" />
@@ -211,11 +215,6 @@ function ChatHeader({ id }: { id: string }) {
                 trigger renders unconditionally: the menu is never the empty
                 button issue #145 calls dead weight (developer call: option
                 A on the issue) */}
-            <button onClick={() => { setMenu(false); openAgentShell(id); }} className="w-full flex items-center gap-2.5 px-3 h-8 text-left text-[12.5px] text-[var(--t-fg2)] hover:bg-white/[0.05]">
-              <Icon name="term" size={13} className="text-[var(--t-mute)]" />
-              Shell in this cwd
-            </button>
-            <div className="my-1 border-t border-[var(--t-line)]" />
             <button
               onClick={() => {
                 const refText = formatSessionRef(meta, hosts);

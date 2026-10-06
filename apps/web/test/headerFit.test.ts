@@ -58,13 +58,14 @@ async function loadPlanner(): Promise<PlanFn | null> {
 
 /* the chat header's right cluster, as rendered today — the model Select left
    for the composer bar in issue #143, and the panel shortcuts (context, team,
-   skills) joined as regular items in issue #145 */
+   skills) plus the agent shell joined as regular items in issue #145 */
 const CLUSTER: HeaderItem[] = [
   { id: "stop", width: 58, essential: true }, // safety: interrupt must stay reachable
   { id: "trajectory", width: 28 },
   { id: "context", width: 28 },
   { id: "team", width: 28 },
   { id: "skills", width: 28 },
+  { id: "shell", width: 28 },
   { id: "more", width: 28, essential: true }, // the ⋯ menu IS the overflow trigger's home
 ];
 const GAP = 6;
@@ -116,7 +117,7 @@ test("plenty of room: everything visible, no overflow, no trigger reserved", asy
   const plan = await loadPlanner();
   assert.ok(plan, "planHeaderFit must exist (see module test)");
   const p = plan(CLUSTER, 800, { triggerWidth: TRIGGER, gap: GAP });
-  assert.deepEqual(p, { visible: ["stop", "trajectory", "context", "team", "skills", "more"], overflow: [], needsMore: false });
+  assert.deepEqual(p, { visible: ["stop", "trajectory", "context", "team", "skills", "shell", "more"], overflow: [], needsMore: false });
   assert.ok(footprint(p, CLUSTER) <= 800);
 });
 
@@ -125,11 +126,12 @@ test("the reported geometry: ~380px chat panel → the new shortcuts collapse fi
   assert.ok(plan, "planHeaderFit must exist (see module test)");
   /* panel ≈ 380px; the left cluster (mark 18 + device chip ≈ 96 + state ≈ 46
      + padding/gaps ≈ 48) leaves ≈ 172px for the right cluster. The model
-     Select is gone to the composer (#143); of the panel shortcuts (#145),
-     context/team/skills give way rightmost-first, trajectory stays inline */
+     Select is gone to the composer (#143); of the #145 additions,
+     context/team/skills/shell give way rightmost-first, trajectory stays
+     inline */
   const p = plan(CLUSTER, 172, { triggerWidth: TRIGGER, gap: GAP });
   assert.deepEqual(p.visible, ["stop", "trajectory", "more"], "essentials + trajectory remain reachable");
-  assert.deepEqual(p.overflow, ["context", "team", "skills"], "the new shortcuts collapse into the ⋯ menu, in display order");
+  assert.deepEqual(p.overflow, ["context", "team", "skills", "shell"], "the new shortcuts collapse into the ⋯ menu, in display order");
   assert.equal(p.needsMore, true, "the menu has contents → the ⋯ trigger shows");
   assert.ok(footprint(p, CLUSTER) <= 172, "the clipped right end is gone by construction");
 });
@@ -139,7 +141,7 @@ test("a truly narrow panel collapses trajectory; the essentials stay reachable",
   assert.ok(plan, "planHeaderFit must exist (see module test)");
   const p = plan(CLUSTER, 100, { triggerWidth: TRIGGER, gap: GAP });
   assert.deepEqual(p.visible, ["stop", "more"], "essentials remain reachable");
-  assert.deepEqual(p.overflow, ["trajectory", "context", "team", "skills"], "everything collapsible moves into the ⋯ menu");
+  assert.deepEqual(p.overflow, ["trajectory", "context", "team", "skills", "shell"], "everything collapsible moves into the ⋯ menu");
 });
 
 test("zero width: essentials stay, everything else overflows, nothing crashes", async () => {
@@ -147,7 +149,7 @@ test("zero width: essentials stay, everything else overflows, nothing crashes", 
   assert.ok(plan, "planHeaderFit must exist (see module test)");
   const p = plan(CLUSTER, 0, { triggerWidth: TRIGGER, gap: GAP });
   assert.deepEqual(p.visible, ["stop", "more"]);
-  assert.deepEqual(p.overflow, ["trajectory", "context", "team", "skills"]);
+  assert.deepEqual(p.overflow, ["trajectory", "context", "team", "skills", "shell"]);
 });
 
 test("empty cluster is a valid plan", async () => {
@@ -206,11 +208,11 @@ test("the ⋯ trigger is priced once: widths that truly fit keep everything inli
      for it. Reserving it twice (the essential `more` item AND the trigger)
      left the footprint unchanged when an item collapsed, so widths that
      truly fit pushed items into the menu ~28px early. The full cluster is
-     198px of items + 30px of gaps = 228. */
-  const p = plan(CLUSTER, 228, { triggerWidth: 0, gap: GAP });
+     226px of items + 36px of gaps = 262. */
+  const p = plan(CLUSTER, 262, { triggerWidth: 0, gap: GAP });
   assert.deepEqual(p.overflow, [], "the exact fit collapses nothing");
   assert.equal(p.needsMore, false, "nothing overflowed → needsMore says so");
-  const q = plan(CLUSTER, 227, { triggerWidth: 0, gap: GAP });
-  assert.deepEqual(q.overflow, ["skills"], "the first 1px shortfall collapses the rightmost shortcut only");
+  const q = plan(CLUSTER, 261, { triggerWidth: 0, gap: GAP });
+  assert.deepEqual(q.overflow, ["shell"], "the first 1px shortfall collapses the rightmost shortcut only");
   assert.equal(q.needsMore, true);
 });
