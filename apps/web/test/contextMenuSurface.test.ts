@@ -50,3 +50,26 @@ test("guard: hidden tabs STAY transparent — the fix is the menu's own var", ()
     "the hidden-tab transparency is correct for the strip — don't fix the menu by making tabs opaque",
   );
 });
+
+/* audit round-2 pins: the contract tests above check only that chrome
+   EXISTS — the two declarations later rounds settled on could silently
+   revert green (a weaker literal shadow, a deleted separator rule both
+   pass "box-shadow is present"). Pin WHICH shadow and the separator's
+   visible line. */
+test("the chrome uses the SHARED floating shadow token, not a bespoke one", () => {
+  const css = CSS();
+  const rule = css.match(/\.dv-context-menu\s*\{[^}]*\}/s);
+  assert.ok(rule, "the chrome rule must exist");
+  assert.match(
+    rule![0],
+    /box-shadow:\s*var\(--dv-floating-box-shadow\)/,
+    "the menu's shadow is dockview's themed floating token — a weaker one-off downgrades the existing lift",
+  );
+});
+
+test("menu separators get a visible line on the opaque surface", () => {
+  const css = CSS();
+  const sep = css.match(/\.dv-context-menu-separator\s*\{[^}]*\}/);
+  assert.ok(sep, "a .dv-context-menu-separator rule must exist — separators read the transparent tab-divider var otherwise");
+  assert.match(sep![0], /background:\s*var\(--t-line[0-9]?\)/, "a real line token, visible on --t-bg2");
+});
