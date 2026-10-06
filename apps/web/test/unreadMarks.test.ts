@@ -70,6 +70,16 @@ test("marksForFocusChange stays inside the cap across a focus storm", () => {
   assert.ok(Object.keys(readAt).length <= READ_AT_CAP, "the persisted map is bounded no matter how focus moves");
 });
 
+test("read-through: the row's unread treatment is the violet attention bar, not a second dot", () => {
+  /* PR #182 review feedback: two dots side by side read as noise — the
+     unread signal shares the focused bar's left-edge slot (the focused
+     session is never unread, so they never collide) and the state dot
+     keeps the right edge alone */
+  const src = readFileSync(new URL("../src/components/Sidebar.tsx", import.meta.url), "utf8");
+  assert.ok(/attention === "unread"/.test(src), "SessionRow renders the sidebarAttention model (issue #173)");
+  assert.ok(/bg-\[var\(--t-violet\)\]/.test(src), "the unread treatment is violet — never the state dot's teal/amber/red or the permission pill's amber");
+});
+
 test("read-through: the saved layout doc carries the read marks (survives reloads)", () => {
   const src = readFileSync(new URL("../src/lib/desktops.ts", import.meta.url), "utf8");
   assert.ok(

@@ -235,10 +235,11 @@ function SessionRow({ s, now, archived }: { s: SessionMeta; now: number; archive
     if (next && next !== s.title) void store.renameSession(s.id, next);
   };
   const dead = s.state === "closed" || s.state === "error";
-  /* issue #173: the unread badge sits beside the state dot but answers a
-     different question — violet, never the dot's teal/amber/red and never
-     the permission pill's amber. Focusing the session marks it read (the
-     desktops store writes the mark), which clears the badge. */
+  /* issue #173: unread shows as a violet bar on the row's left edge plus a
+     medium title — the same slot the amber focused bar uses, which is free
+     exactly then (the focused session is never unread). The state dot keeps
+     the right edge to itself: one glyph per side, no dot pair. Focusing the
+     session marks it read (the desktops store writes the mark), clearing it. */
   const attention = sidebarAttention(
     { id: s.id, updatedAt: toMs(s.updated_at), state: s.state, createdAt: toMs(s.created_at) },
     readAt ?? NO_READ_MARKS,
@@ -296,9 +297,13 @@ function SessionRow({ s, now, archived }: { s: SessionMeta; now: number; archive
       }}
       onClick={() => openSession(s.id)}
       className={cn("group relative mx-0.5 flex items-center gap-2 px-2 t-session-row rounded-md transition-colors cursor-pointer", focused ? "bg-[var(--t-bg2)]" : "hover:bg-white/[0.03]")}
-      title={`${s.title}\n${harnessDisplay(s.harness, hosts, hostAliases(hostPrefs))}${s.model ? ` · ${s.model}` : ""}\n${shortPath(s.cwd)}\n${STATE_META[s.state]?.hint ?? s.state}${archived ? "\narchived — hidden from the main list" : ""}${renameTarget ? "\n(double-click the name to rename)" : ""}`}
+      title={`${s.title}\n${harnessDisplay(s.harness, hosts, hostAliases(hostPrefs))}${s.model ? ` · ${s.model}` : ""}\n${shortPath(s.cwd)}\n${STATE_META[s.state]?.hint ?? s.state}${attention === "unread" ? "\nunread activity (open to mark it read)" : ""}${archived ? "\narchived — hidden from the main list" : ""}${renameTarget ? "\n(double-click the name to rename)" : ""}`}
     >
-      {focused && <span className="absolute left-0 top-2 bottom-2 w-[2px] rounded-full bg-[var(--t-amber)]" />}
+      {focused ? (
+        <span className="absolute left-0 top-2 bottom-2 w-[2px] rounded-full bg-[var(--t-amber)]" />
+      ) : attention === "unread" ? (
+        <span className="absolute left-0 top-2 bottom-2 w-[2px] rounded-full bg-[var(--t-violet)]" />
+      ) : null}
       <HarnessMark harness={s.harness} size={17} className={dead ? "opacity-45" : ""} />
       {editing ? (
         <input
@@ -316,7 +321,7 @@ function SessionRow({ s, now, archived }: { s: SessionMeta; now: number; archive
       ) : (
         <span
           onDoubleClick={renameTarget ? () => { setName(s.title); setEditing(true); } : undefined}
-          className={cn("flex-1 min-w-0 truncate text-[12.5px]", dead ? "text-[var(--t-mute)]" : "text-[var(--t-fg)]", archived && "opacity-60")}
+          className={cn("flex-1 min-w-0 truncate text-[12.5px]", dead ? "text-[var(--t-mute)]" : "text-[var(--t-fg)]", archived && "opacity-60", attention === "unread" && "font-medium")}
         >{s.title}</span>
       )}
       {pending > 0 && (
@@ -324,9 +329,6 @@ function SessionRow({ s, now, archived }: { s: SessionMeta; now: number; archive
       )}
       <span className="group-hover:hidden group-focus-within:hidden flex items-center gap-1.5 shrink-0">
         <span className="text-[10px] text-[var(--t-dim)] tabular-nums">{ago(+new Date(s.updated_at) || Date.parse(String(s.updated_at)), now)}</span>
-        {attention === "unread" && (
-          <span className="w-1.5 h-1.5 rounded-full bg-[var(--t-violet)] shrink-0" title="Unread activity" />
-        )}
         <StateDot state={s.state} size={6} />
       </span>
       {/* one container, one gap (issue #110), resting state from
