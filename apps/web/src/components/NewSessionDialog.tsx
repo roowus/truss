@@ -5,6 +5,7 @@ import { harnessStyle, hostOf, shortPath } from "@/lib/format";
 import { hostAliases, hostDisplay } from "@/lib/device";
 import { resolveDefaultCwd, hostDefaultFor, hostSuggestedFor } from "@/lib/cwdDefault";
 import { createBrowseNav, type BrowseNav } from "@/lib/browseNav";
+import { createPortal } from "react-dom";
 import type { BrowseDir } from "@/lib/proto";
 import { openPanel, openSession } from "@/lib/workspace";
 import { Btn, HarnessMark, Icon, Kbd, Select, Spinner } from "./ui";
@@ -34,6 +35,7 @@ export function NewSessionDialog({ onClose, preset }: { onClose: () => void; pre
   const [model, setModel] = useState("");
   const [cwd, setCwdState] = useState("");
   const [pickerOpen, setPickerOpen] = useState(false);
+  const cwdFieldRef = useRef<HTMLDivElement>(null);
   const [project, setProject] = useState(preset?.project ?? sessions[order[0]]?.project ?? "");
 
   /* The default working directory follows the named precedence
@@ -208,7 +210,7 @@ export function NewSessionDialog({ onClose, preset }: { onClose: () => void; pre
 
           <div className="grid grid-cols-[1fr_180px] gap-3">
             <Field label="working directory" error={cwdErr}>
-              <div className="relative">
+              <div ref={cwdFieldRef}>
                 <div className="flex gap-1.5">
                   <input value={cwd} onChange={(e) => setCwd(e.target.value)} placeholder="/home/you/code/project" className="t-input font-mono flex-1" autoFocus />
                   <button
@@ -228,6 +230,7 @@ export function NewSessionDialog({ onClose, preset }: { onClose: () => void; pre
                 </div>
                 {pickerOpen && !remoteHost && (
                   <DirPicker
+                    anchorRef={cwdFieldRef}
                     onPick={(p) => {
                       setCwd(p);
                       setPickerOpen(false);
@@ -312,8 +315,15 @@ function Cap({ on, children }: { on: boolean; children: React.ReactNode }) {
 /** The cwd picker's directory browser (issue #106): click to navigate, a
    breadcrumb and up-button to climb, a hidden-dirs toggle, and "choose this
    folder" to take the current directory. The server lists directory NAMES
-   only, confined to its browse roots. `path` null means the roots view. */
-function DirPicker({ onPick, onClose }: { onPick: (path: string) => void; onClose: () => void }) {
+   only, confined to its browse roots. `path` null means the roots view.
+
+   The dropdown portals to <body> and anchors itself under the cwd field:
+   rendered inside the dialog it was clipped by the dialog's 92vh scroll
+   box, and every listing swap (rows → spinner → rows) changed the dialog's
+   scrollable extent and yanked the user's view back to the top (developer
+   feedback on PR #138). As an overlay it neither scrolls with nor resizes
+   the dialog. */
+function DirPicker({ anchorRef, onPick, onClose }: { anchorRef: { current: HTMLDivElement | null }; onPick: (path: string) => void; onClose: () => void }) {
   const [path, setPath] = useState<string | null>(null);
   const [roots, setRoots] = useState<string[]>([]);
   const [dirs, setDirs] = useState<BrowseDir[]>([]);
@@ -405,8 +415,45 @@ function DirPicker({ onPick, onClose }: { onPick: (path: string) => void; onClos
     return out;
   }, [path, roots]);
 
-  return (
-    <div className="absolute left-0 right-0 top-full mt-1 z-20 rounded-lg border border-[var(--t-line2)] bg-[var(--t-bg1)] shadow-xl t-pop">
+  /* anchor the overlay under the cwd field; follow any scroll (the dialog
+     itself can scroll on short viewports — capture phase, scroll doesn't
+     bubble) or resize. Flip above the field when the window has no room
+     below: the dropdown is ~300px at its tallest (header 36 + list 224 +
+     footer 40). */
+  const [anchor, setAnchor] = useState<{ left: number; top?: number; bottom?: number; width: number } | null>(null);
+  useLayoutEffect(() => {
+    const update = () => {
+      const r = anchorRef.current?.getBoundingClientRect();
+      if (!r || r.width === 0) return;
+      const base = { left: r.left, width: r.width };
+      setAnchor(
+        window.innerHeight - r.bottom >= 304
+          ? { ...base, top: r.bottom + 4 }
+          : /* flip above; clamp so the dropdown never dips past the
+               viewport's bottom edge when the field itself is scrolled
+               out of view */
+            { ...base, bottom: Math.max(4, window.innerHeight - r.top + 4) },
+      );
+    };
+    update();
+    window.addEventListener("resize", update);
+    window.addEventListener("scroll", update, true);
+    return () => {
+      window.removeEventListener("resize", update);
+      window.removeEventListener("scroll", update, true);
+    };
+  }, [anchorRef]);
+
+  if (!anchor) return null;
+  return createPortal(
+    <div
+      className="fixed z-[110] rounded-lg border border-[var(--t-line2)] bg-[var(--t-bg1)] shadow-xl t-pop"
+      style={{ left: anchor.left, width: anchor.width, ...(anchor.top !== undefined ? { top: anchor.top } : { bottom: anchor.bottom }) }}
+      /* portal events bubble through the REACT tree: without this the
+         dialog's backdrop onMouseDown would treat clicks inside the
+         dropdown as outside clicks and close the whole dialog */
+      onMouseDown={(e) => e.stopPropagation()}
+    >
       <div className="flex items-center gap-1 px-2 h-9 border-b border-[var(--t-line)]">
         <button
           type="button"
@@ -476,6 +523,7 @@ function DirPicker({ onPick, onClose }: { onPick: (path: string) => void; onClos
           Choose this folder
         </Btn>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
