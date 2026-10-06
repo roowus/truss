@@ -10,7 +10,6 @@ export interface ModelOption {
   hint?: string;
   providerLabel?: string;
   fullPath?: string;
-  title?: string;
 }
 
 export interface CatalogModel {
@@ -84,10 +83,11 @@ export function modelDisplay(m: { provider: string; model: string; label: string
 }
 
 /** Display projection of picker options for the generic Select: the
-   provider rides as the row's secondary line and the full path becomes the
-   hover detail. The option's own hint stays the exact id (the typeahead
-   filters on it; device tests pin it) — this maps, it doesn't mutate. */
-export function modelSelectOptions(options: ModelOption[]): ModelOption[] {
+   projected row's secondary line becomes the provider and its hover title
+   the full path. Source options are untouched — their hint stays the exact
+   id (device tests pin it), and the typeahead still matches the raw id via
+   `value`. Maps, never mutates. */
+export function modelSelectOptions(options: ModelOption[]): Array<ModelOption & { title?: string }> {
   return options.map((o) => ({ ...o, hint: o.providerLabel || o.hint, title: o.fullPath }));
 }
 

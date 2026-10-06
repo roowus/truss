@@ -61,7 +61,7 @@ test("clean labels pass through; garbage never throws", async () => {
 
   const clean = mod.modelDisplay({ provider: "zai-local", model: "glm-4.7", label: "GLM 4.7 (z.ai via key-proxy)" });
   assert.equal(clean.name, "GLM 4.7 (z.ai via key-proxy)", "a real label is already the name — untouched");
-  assert.equal(clean.providerLabel, "zai-local".length > 0 ? clean.providerLabel : "", "provider still shown");
+  assert.ok(clean.providerLabel.length > 0, "provider still shown");
 
   assert.doesNotThrow(() => mod.modelDisplay({ provider: "", model: "", label: "" }));
   const junk = mod.modelDisplay({ provider: "", model: "x", label: "" });
