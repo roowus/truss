@@ -79,7 +79,6 @@ function ChatHeader({ id }: { id: string }) {
   const since = useApp((s) => s.stateSince[id]);
   const caps = useApp((s) => capsOf(s, meta.harness));
   const hosts = useApp((s) => s.hosts);
-  const models = useApp((s) => s.models);
   const busy = meta.state === "running";
   const now = useNow(1000, busy || meta.state === "spawning");
   const abnormal = meta.state === "spawning" || meta.state === "error" || meta.state === "closed";
@@ -99,7 +98,7 @@ function ChatHeader({ id }: { id: string }) {
      the title gets a 56px reservation (it truncates beyond that). */
   const headerRef = useRef<HTMLDivElement>(null);
   const leftRef = useRef<HTMLSpanElement>(null);
-  const [plan, setPlan] = useState<{ visible: string[]; overflow: string[] }>({ visible: ["select", "stop", "trajectory", "more"], overflow: [] });
+  const [plan, setPlan] = useState<{ visible: string[]; overflow: string[] }>({ visible: ["stop", "trajectory", "more"], overflow: [] });
 
   /* which device this session runs on: bare harness id = this server,
      harness@hostId = that remote host (the user's alias wins, then the
@@ -114,21 +113,13 @@ function ChatHeader({ id }: { id: string }) {
   const resumeCmd = resumeCommand(meta.harness, meta.harness_ref);
   const resumeBase = baseHarness(meta.harness);
 
-  /* model picker: the catalog lists base harnesses; remote sessions share
-     the base harness's catalog */
-  const currentValue = modelValue(meta.provider, meta.model);
-  const modelOptions = buildModelOptions(models, meta.harness, meta.model, meta.provider);
-  const onModelPick = (v: string) => {
-    const { provider, model } = splitModelValue(v);
-    if (v && v !== currentValue) void store.switchModel(id, model, provider).catch(() => {});
-  };
-
-  const hasModel = modelOptions.length > 0;
+  /* the model picker left the header in issue #143 — it lives in the
+     composer bar now, so nothing here plans or renders for it */
   useEffect(() => {
     const el = headerRef.current;
     if (!el) return;
-    /* the model Select only when there is a catalog, Stop only while running */
-    const items = HEADER_CLUSTER.filter((it) => (it.id === "select" ? hasModel : it.id === "stop" ? busy : true));
+    /* Stop only while running */
+    const items = HEADER_CLUSTER.filter((it) => (it.id === "stop" ? busy : true));
     const measure = () => {
       const leftW = leftRef.current?.getBoundingClientRect().width ?? 200;
       const available = el.clientWidth - leftW - 56 /* title reservation */ - 24 /* paddings */;
@@ -142,7 +133,7 @@ function ChatHeader({ id }: { id: string }) {
     if (leftRef.current) ro.observe(leftRef.current);
     measure();
     return () => ro.disconnect();
-  }, [hasModel, busy, device, meta.state]);
+  }, [busy, device, meta.state]);
 
   return (
     <div ref={headerRef} className="relative shrink-0 flex items-center gap-2 px-3 h-10 border-b border-[var(--t-line)]">
@@ -163,17 +154,6 @@ function ChatHeader({ id }: { id: string }) {
       </span>
       <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-[var(--t-fg)]" title={tooltip}>{meta.title}</span>
       <div className="ml-auto flex items-center gap-1.5 shrink-0">
-        {hasModel && plan.visible.includes("select") && (
-          /* w-auto is load-bearing: the .t-input component width is 100% and
-             would otherwise fill the cluster. The planner reserves the cap. */
-          <Select
-            value={currentValue}
-            options={modelOptions}
-            onChange={onModelPick}
-            ariaLabel="Switch model"
-            className="!h-6 !px-2 !py-0 !text-[11px] font-mono text-[var(--t-mute)] w-auto max-w-[170px] shrink-0"
-          />
-        )}
         {busy && (
           <Btn variant="danger" size="xs" icon="stop" onClick={() => store.interrupt(id)} title="Interrupt (Esc in composer)">Stop</Btn>
         )}
@@ -186,17 +166,6 @@ function ChatHeader({ id }: { id: string }) {
         <>
           <div className="fixed inset-0 z-40" onClick={() => setMenu(false)} />
           <div className="absolute right-2 top-[42px] z-50 w-64 rounded-lg bg-[var(--t-bg2)] border border-[var(--t-line2)] shadow-2xl py-1 t-pop">
-            {plan.overflow.includes("select") && (
-              <div className="px-2 py-1.5" onClick={(e) => e.stopPropagation()}>
-                <Select
-                  value={currentValue}
-                  options={modelOptions}
-                  onChange={(v) => { onModelPick(v); }}
-                  ariaLabel="Switch model"
-                  className="w-full !h-7 !text-[11.5px] font-mono"
-                />
-              </div>
-            )}
             {plan.overflow.includes("trajectory") && (
               <button onClick={() => { setMenu(false); openPanel("trajectory", { sessionId: id }); }} className="w-full flex items-center gap-2.5 px-3 h-8 text-left text-[12.5px] text-[var(--t-fg2)] hover:bg-white/[0.05]">
                 <Icon name="wave" size={13} className="text-[var(--t-mute)]" />
@@ -561,6 +530,7 @@ function Composer({ id, active }: { id: string; active: boolean }) {
   const meta = useApp((s) => s.sessions[id]);
   const caps = useApp((s) => capsOf(s, meta.harness));
   const hosts = useApp((s) => s.hosts);
+  const models = useApp((s) => s.models);
   const hostPrefs = useDesktops((s) => s.hosts);
   const aliases = hostAliases(hostPrefs);
   const harnessName = harnessDisplay(meta.harness, hosts, aliases);
@@ -654,6 +624,19 @@ function Composer({ id, active }: { id: string; active: boolean }) {
     return () => ro.disconnect();
   }, [measureTa]);
   const taAlignEnd = composerAlign(taLines) === "end";
+
+  /* model picker (issue #143): it lives in the composer bar — the control
+     you touch while writing a message. The catalog lists base harnesses;
+     remote sessions share the base harness's catalog. It is deliberately
+     NOT chained to the input lock below: the lock is about text mid-run,
+     and switching the model is not text input. */
+  const currentValue = modelValue(meta.provider, meta.model);
+  const modelOptions = buildModelOptions(models, meta.harness, meta.model, meta.provider);
+  const onModelPick = (v: string) => {
+    const { provider, model } = splitModelValue(v);
+    if (v && v !== currentValue) void store.switchModel(id, model, provider).catch(() => {});
+  };
+  const hasModel = modelOptions.length > 0;
 
   const hasPending = !!pending?.length;
   const running = meta.state === "running";
@@ -853,6 +836,20 @@ function Composer({ id, active }: { id: string; active: boolean }) {
           </div>
         )}
         </div>
+        {hasModel && (
+          /* right side of the row, next to send — the control you touch
+             while writing a message, like the chat apps issue #143 points
+             at. w-auto is load-bearing: the .t-input component width is
+             100% and would otherwise fill the row. Stays enabled while the
+             draft is locked mid-run — model switching is not text input. */
+          <Select
+            value={currentValue}
+            options={modelOptions}
+            onChange={onModelPick}
+            ariaLabel="Switch model"
+            className={cn("!h-7 !px-2 !py-0 !text-[11px] font-mono text-[var(--t-mute)] w-auto max-w-[160px] shrink-0", taAlignEnd && "mb-0.5")}
+          />
+        )}
         {running && !queues ? (
           <Btn size="sm" variant="danger" icon="stop" onClick={() => store.interrupt(id)} title="Interrupt (Esc)" className={cn(taAlignEnd && "mb-0.5")}>Stop</Btn>
         ) : (

@@ -7,7 +7,8 @@ import assert from "node:assert/strict";
 
    The bug: ChatHeader (apps/web/src/panels/ChatPanel.tsx:88-119) is a single
    no-wrap flex row whose only flexible item is the title. The right cluster —
-   model Select (w-[170px] shrink-0), Stop, Trajectory, ⋯ menu — is pinned
+   Stop, Trajectory, ⋯ menu (the model Select sat here until issue #143 moved
+   it into the composer bar) — is pinned
    wider than narrow chat panels, and dockview clips the overflow
    (overflow:hidden, index.css), so the rightmost controls get cut off and
    become unreachable.
@@ -52,9 +53,9 @@ async function loadPlanner(): Promise<PlanFn | null> {
   return typeof mod?.planHeaderFit === "function" ? mod.planHeaderFit : null;
 }
 
-/* the chat header's right cluster, roughly as rendered today */
+/* the chat header's right cluster, as rendered today — the model Select left
+   for the composer bar in issue #143, so the header never plans for it */
 const CLUSTER: HeaderItem[] = [
-  { id: "select", width: 170 },
   { id: "stop", width: 58, essential: true }, // safety: interrupt must stay reachable
   { id: "trajectory", width: 28 },
   { id: "more", width: 28, essential: true }, // the ⋯ menu IS the overflow trigger's home
@@ -108,19 +109,28 @@ test("plenty of room: everything visible, no overflow, no trigger reserved", asy
   const plan = await loadPlanner();
   assert.ok(plan, "planHeaderFit must exist (see module test)");
   const p = plan(CLUSTER, 800, { triggerWidth: TRIGGER, gap: GAP });
-  assert.deepEqual(p, { visible: ["select", "stop", "trajectory", "more"], overflow: [] });
+  assert.deepEqual(p, { visible: ["stop", "trajectory", "more"], overflow: [] });
   assert.ok(footprint(p, CLUSTER) <= 800);
 });
 
-test("the reported geometry: ~380px chat panel → select + trajectory collapse, essentials stay", async () => {
+test("the reported geometry: ~380px chat panel fits the whole slimmer cluster (post-#143)", async () => {
   const plan = await loadPlanner();
   assert.ok(plan, "planHeaderFit must exist (see module test)");
   /* panel ≈ 380px; the left cluster (mark 18 + device chip ≈ 96 + state ≈ 46
-     + padding/gaps ≈ 48) leaves ≈ 172px for the right cluster */
+     + padding/gaps ≈ 48) leaves ≈ 172px for the right cluster — and with the
+     model Select gone to the composer (issue #143), 126px of cluster fits */
   const p = plan(CLUSTER, 172, { triggerWidth: TRIGGER, gap: GAP });
-  assert.deepEqual(p.visible, ["stop", "more"], "essentials remain reachable");
-  assert.deepEqual(p.overflow, ["select", "trajectory"], "collapses move into the ⋯ menu, in display order");
+  assert.deepEqual(p.visible, ["stop", "trajectory", "more"], "nothing collapses at the reported width anymore");
+  assert.deepEqual(p.overflow, []);
   assert.ok(footprint(p, CLUSTER) <= 172, "the clipped right end is gone by construction");
+});
+
+test("a truly narrow panel collapses trajectory; the essentials stay reachable", async () => {
+  const plan = await loadPlanner();
+  assert.ok(plan, "planHeaderFit must exist (see module test)");
+  const p = plan(CLUSTER, 100, { triggerWidth: TRIGGER, gap: GAP });
+  assert.deepEqual(p.visible, ["stop", "more"], "essentials remain reachable");
+  assert.deepEqual(p.overflow, ["trajectory"], "the collapse moves into the ⋯ menu");
 });
 
 test("zero width: essentials stay, everything else overflows, nothing crashes", async () => {
@@ -128,7 +138,7 @@ test("zero width: essentials stay, everything else overflows, nothing crashes", 
   assert.ok(plan, "planHeaderFit must exist (see module test)");
   const p = plan(CLUSTER, 0, { triggerWidth: TRIGGER, gap: GAP });
   assert.deepEqual(p.visible, ["stop", "more"]);
-  assert.deepEqual(p.overflow, ["select", "trajectory"]);
+  assert.deepEqual(p.overflow, ["trajectory"]);
 });
 
 test("empty cluster is a valid plan", async () => {
@@ -180,14 +190,18 @@ test("the wiring's exported geometry still matches the spec cluster", async () =
   assert.equal(HEADER_GAP, GAP, "ChatPanel's gap drifted from the spec gap");
 });
 
-test("the ⋯ trigger is priced once: widths that truly fit keep the model Select up", async () => {
+test("the ⋯ trigger is priced once: widths that truly fit keep trajectory up", async () => {
   const plan = await loadPlanner();
   assert.ok(plan, "planHeaderFit must exist (see module test)");
   /* ChatPanel renders the ⋯ trigger on every plan and reserves triggerWidth 0
      for it. Reserving it twice (the essential `more` item AND the trigger)
-     left the footprint unchanged when trajectory collapsed, so widths in
-     ~[274, 301] pushed the model Select into the menu although it fit. */
-  const p = plan(CLUSTER, 290, { triggerWidth: 0, gap: GAP });
-  assert.deepEqual(p.overflow, ["trajectory"], "only trajectory gives way at 290px");
-  assert.deepEqual(p.visible, ["select", "stop", "more"], "the model Select stays up while 290px fits it");
+     left the footprint unchanged when trajectory collapsed, so widths that
+     truly fit pushed an item into the menu ~28px early. The full cluster is
+     126px; one px short only trajectory gives way (no double-charged
+     trigger keeps it out). */
+  const fits = plan(CLUSTER, 126, { triggerWidth: 0, gap: GAP });
+  assert.deepEqual(fits, { visible: ["stop", "trajectory", "more"], overflow: [] }, "126px fits the whole cluster");
+  const tight = plan(CLUSTER, 125, { triggerWidth: 0, gap: GAP });
+  assert.deepEqual(tight.overflow, ["trajectory"], "only trajectory gives way at 125px");
+  assert.deepEqual(tight.visible, ["stop", "more"], "the essentials stay up");
 });
