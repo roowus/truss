@@ -512,7 +512,9 @@ function pushHistory(key: string, m: any) {
     rx: (m.net ?? []).reduce((a: number, n: any) => a + (n.rxBps || 0), 0),
     tx: (m.net ?? []).reduce((a: number, n: any) => a + (n.txBps || 0), 0),
   });
-  if (ring.length > 240) ring.shift();
+  /* 1200 × ~3s polls ≈ 60 minutes — the reference monitor's history depth
+     (its own 2400 × 1.5s), so the Monitor tab can offer the same ranges */
+  if (ring.length > 1200) ring.shift();
   metricsHistory.set(key, ring);
 }
 

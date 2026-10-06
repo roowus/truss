@@ -142,6 +142,49 @@ test("diskIoRates: a device absent from prev reports 0 (hotplug, first sighting)
   assert.equal(sdb.writeBps, 0);
 });
 
+test("cpuTimeShares: tick delta → 1-dp percents, nice folds into user", () => {
+  assert.equal(typeof metrics.cpuTimeShares, "function", "metrics.ts must export cpuTimeShares — see issue #168");
+  // window: 1000 ticks — user 500, nice 100, system 200, idle 100, iowait 50, irq 20, softirq 20, steal 10
+  const t = metrics.cpuTimeShares([500, 100, 200, 100, 50, 20, 20, 10]);
+  assert.equal(t.user, 60, "user + nice");
+  assert.equal(t.system, 20);
+  assert.equal(t.iowait, 5);
+  assert.equal(t.irq, 2);
+  assert.equal(t.softirq, 2);
+  assert.equal(t.steal, 1);
+  assert.deepEqual(metrics.cpuTimeShares([0, 0, 0, 0, 0, 0, 0, 0]), { user: 0, system: 0, iowait: 0, irq: 0, softirq: 0, steal: 0 }, "zero window never NaNs");
+});
+
+test("parseVmstat: the six keys the memory card reads", () => {
+  assert.equal(typeof metrics.parseVmstat, "function", "metrics.ts must export parseVmstat — see issue #168");
+  const vm = metrics.parseVmstat("pgpgin 1000\npgpgout 2000\npswpin 3\npswpout 4\npgmajfault 55\noom_kill 2\nnr_free_pages 999\n");
+  assert.deepEqual(vm, { pgpgin: 1000, pgpgout: 2000, pswpin: 3, pswpout: 4, pgmajfault: 55, oom_kill: 2 });
+  assert.deepEqual(metrics.parseVmstat(""), { pgpgin: 0, pgpgout: 0, pswpin: 0, pswpout: 0, pgmajfault: 0, oom_kill: 0 }, "missing file → zeros");
+});
+
+test("parseNetRoute: default route, little-endian gateway hex", () => {
+  assert.equal(typeof metrics.parseNetRoute, "function", "metrics.ts must export parseNetRoute — see issue #168");
+  const table = [
+    "Iface\tDestination\tGateway\tFlags\tRefCnt\tUse\tMetric\tMask\tMTU\tWindow\tIRTT",
+    "enp0s6\t00000000\t0101A8C0\t0003\t0\t0\t100\t00000000\t0\t0\t0", // gw c0.a8.01.01 = 192.168.1.1
+    "enp0s6\t0001A8C0\t00000000\t0001\t0\t0\t100\t00FFFFFF\t0\t0\t0", // not a default route
+    "tailscale0\t002A0C64\t00000000\t0005\t0\t0\t0\t00FFFFFF\t0\t0\t0",
+  ].join("\n");
+  assert.deepEqual(metrics.parseNetRoute(table), { ip: "192.168.1.1", iface: "enp0s6" });
+  assert.equal(metrics.parseNetRoute(""), null, "no table → no gateway");
+  assert.equal(metrics.parseNetRoute(table.split("\n").slice(0, 1).join("\n") + "\n"), null, "no default route → null");
+});
+
+test("diskIoRates: iops from completed-IO deltas, inFlight is a gauge from cur", () => {
+  const before = `   8       0 sda 1000 0 40000 5000 2000 0 80000 7000 0 3000 12000`;
+  const after = `   8       0 sda 1100 0 42400 5100 2200 0 96000 7100 7 3100 12200`;
+  const rates = metrics.diskIoRates(before, after, 2000);
+  const sda = rates.find((r: { device: string }) => r.device === "sda");
+  assert.equal(sda.rIops, 50, "100 reads completed over 2s");
+  assert.equal(sda.wIops, 100, "200 writes completed over 2s");
+  assert.equal(sda.inFlight, 7, "current queue depth, not a rate");
+});
+
 test("collectMetrics live: second sample yields non-negative rates everywhere (real /proc)", async () => {
   await metrics.collectMetrics(); // prime
   await new Promise((r) => setTimeout(r, 150));
