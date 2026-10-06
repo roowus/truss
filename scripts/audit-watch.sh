@@ -82,7 +82,8 @@ done
 # new comment lands after its question. (Comments all share the repo owner's
 # login — worker and developer alike — so the trigger is "newest comment id
 # moved", baselined on first sight.)
-gh pr list -R "$REPO" --state open --label needs-answer --json number --jq '.[].number' 2>/dev/null > "$SPOOL/needs-answer.txt"
+{ gh pr list -R "$REPO" --state open --label needs-answer --json number --jq '.[].number';
+  gh issue list -R "$REPO" --state open --label needs-answer --json number --jq '.[].number'; } 2>/dev/null | sort -u > "$SPOOL/needs-answer.txt"
 while read -r n; do
   [ -n "$n" ] || continue
   LATEST=$(gh api "repos/$REPO/issues/$n/comments" --jq '.[-1].id // empty' 2>/dev/null | tail -1)
