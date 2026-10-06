@@ -734,18 +734,6 @@ function Composer({ id, active }: { id: string; active: boolean }) {
           aria-label="Attach files"
           onChange={(e) => { if (e.target.files?.length) void attachFiles(e.target.files); }}
         />
-        {hasModel && (
-          /* w-auto is load-bearing: the .t-input component width is 100% and
-             would otherwise fill the row. Stays enabled while the draft is
-             locked mid-run — model switching is not text input (issue #143). */
-          <Select
-            value={currentValue}
-            options={modelOptions}
-            onChange={onModelPick}
-            ariaLabel="Switch model"
-            className="mb-0.5 !h-7 !px-2 !py-0 !text-[11px] font-mono text-[var(--t-mute)] w-auto max-w-[160px] shrink-0"
-          />
-        )}
         <IconBtn icon="clip" label={uploading ? "Uploading…" : "Attach files (they land in .truss-uploads/ in the workspace)"} disabled={uploading || sending} onClick={() => fileRef.current?.click()} className="mb-0.5 shrink-0" />
         <button
           onClick={onMic}
@@ -815,6 +803,19 @@ function Composer({ id, active }: { id: string; active: boolean }) {
           </div>
         )}
         </div>
+        {hasModel && (
+          /* right side of the row, ahead of send (review feedback on #143).
+             w-auto is load-bearing: the .t-input component width is 100% and
+             would otherwise fill the row. Stays enabled while the draft is
+             locked mid-run — model switching is not text input. */
+          <Select
+            value={currentValue}
+            options={modelOptions}
+            onChange={onModelPick}
+            ariaLabel="Switch model"
+            className="mb-0.5 !h-7 !px-2 !py-0 !text-[11px] font-mono text-[var(--t-mute)] w-auto max-w-[160px] shrink-0"
+          />
+        )}
         {running && !queues ? (
           <Btn size="sm" variant="danger" icon="stop" onClick={() => store.interrupt(id)} title="Interrupt (Esc)" className="mb-0.5">Stop</Btn>
         ) : (
