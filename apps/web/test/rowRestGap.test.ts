@@ -2,11 +2,12 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
-/* SPEC-TESTS for the resting row's right-edge gap —
+/* Regression pin for the resting row's right-edge gap —
    https://github.com/roowus/truss/issues/140
    ("The timestamp + state indicator on a sidebar session row sits too far
    from the right edge — a big gap; shift everything to the edge"). These
-   FAIL on purpose today: they pin the contract a fix must satisfy.
+   failed 4/4 while the fix was missing and now pin the contract it must
+   keep satisfying.
 
    Why (investigated, Sidebar.tsx SessionRow): the action cluster is `flex`
    at REST whenever the row isn't trash — and the unpinned pin keeps its slot
@@ -69,9 +70,13 @@ test("pinned at rest: the cluster rests visible with ONLY the solid pin", async 
 test("read-through: the session row's resting cluster uses the contract — no opacity slot-keeping for unpinned pins", () => {
   const src = readFileSync(new URL("../src/components/Sidebar.tsx", import.meta.url), "utf8");
   assert.ok(/clusterRestState\(/.test(src), "the resting cluster must come from clusterRestState");
-  /* the exact bug: an opacity-hidden pin inside a rest-visible flex box */
-  assert.ok(
-    !/className=\{cn\("items-center shrink-0",[^)]*"flex"\)\}/.test(src) || /clusterRestState/.test(src),
-    "the rest-visible flex container with an opacity-0 pin inside is the gap",
-  );
+  /* pin the REAL markup, scoped to SessionRow (shell/host rows keep their
+     #86 opacity rule on purpose): the container renders rest.cls, and the
+     row carries neither the opacity-0 slot-keeping nor pinVisibilityCls —
+     those two together were the phantom 24px */
+  const row = src
+    .slice(src.indexOf("function SessionRow"), src.indexOf("\nfunction ", src.indexOf("function SessionRow") + 1))
+    .replace(/\/\*[\s\S]*?\*\//g, ""); /* prose may name the old hack; the pin is on the markup */
+  assert.ok(/cn\("items-center shrink-0", rest\.cls/.test(row), "the cluster container must render clusterRestState's cls");
+  assert.ok(!/opacity-0|pinVisibilityCls/.test(row), "SessionRow must not keep an invisible member's slot — zero layout space at rest");
 });

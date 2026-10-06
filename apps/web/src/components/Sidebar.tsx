@@ -255,6 +255,9 @@ function SessionRow({ s, now, archived, trashView }: { s: SessionMeta; now: numb
          like hover does; Enter/Space on the row itself opens the session
          (the HostRow pattern, #85) */
       role={openable ? "button" : undefined}
+      /* an explicit name: without it the row announces as the concatenation
+         of title + timestamp + state text (audit B2) */
+      aria-label={openable ? s.title : undefined}
       tabIndex={openable ? 0 : undefined}
       onKeyDown={openable ? (e) => {
         if ((e.key === "Enter" || e.key === " ") && e.target === e.currentTarget) {
