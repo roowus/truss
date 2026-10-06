@@ -804,10 +804,11 @@ function Composer({ id, active }: { id: string; active: boolean }) {
         )}
         </div>
         {hasModel && (
-          /* right side of the row, ahead of send (review feedback on #143).
-             w-auto is load-bearing: the .t-input component width is 100% and
-             would otherwise fill the row. Stays enabled while the draft is
-             locked mid-run — model switching is not text input. */
+          /* right side of the row, next to send — the control you touch
+             while writing a message, like the chat apps issue #143 points
+             at. w-auto is load-bearing: the .t-input component width is
+             100% and would otherwise fill the row. Stays enabled while the
+             draft is locked mid-run — model switching is not text input. */
           <Select
             value={currentValue}
             options={modelOptions}
