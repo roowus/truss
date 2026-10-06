@@ -139,6 +139,19 @@ export function deleteHost(id: string) {
   tombstoned.add(id);
 }
 
+/** rename a host (issue #147 — the sidebar's double-click rename): the label
+   is display-only; the id is the identity and never changes, so env files
+   and tokens on the device keep working. The session/terminal rule:
+   trimmed, capped at 64, never blank. */
+export function renameHost(id: string, label: string): { id: string; label: string } {
+  const row = getHost(id);
+  if (!row) throw Object.assign(new Error(`no such host: ${id}`), { status: 404 });
+  const trimmed = label.trim().slice(0, 64);
+  if (!trimmed) throw Object.assign(new Error("label must not be blank"), { status: 400 });
+  store.run(`UPDATE hosts SET label = ? WHERE id = ?`, trimmed, id);
+  return { id, label: trimmed };
+}
+
 export function setHostRevoked(id: string, revoked: boolean) {
   table();
   store.run(`UPDATE hosts SET revoked = ? WHERE id = ?`, revoked ? 1 : 0, id);

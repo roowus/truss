@@ -53,6 +53,10 @@ export function sessionRowActions(state: {
   const pin = pinAffordance(state.pinned);
   const actions: SessionRowAction[] = [
     { id: "pin", icon: pin.icon, label: pin.actionLabel, visible: pin.visible },
+    /* the displaced gesture (issue #147): the row's double-click used to
+       open chat + trajectory + context; the name's double-click is rename
+       now, so the layout open lives on as an explicit action */
+    { id: "open-all", icon: "layout", label: "Open chat + trajectory + context", visible: "hover" },
   ];
   if (state.archived) {
     actions.push({ id: "unarchive", icon: "archive", label: "Restore to the sidebar", visible: "hover" });
