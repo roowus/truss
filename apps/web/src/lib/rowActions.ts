@@ -1,9 +1,11 @@
 /* One descriptor source for sidebar row actions (issue #85). The sidebar
    renders rows straight from these lists, so the rules live here exactly
-   once: "open" first (the row click itself), the destructive action last,
-   and destructive always carries confirm:true for the two-click pattern
-   the session rows established. Every action has a real label — tooltips
-   are mandatory (issue #25). */
+   once: "open" first (the row click itself), the destructive action last
+   (the session array excepted — there the pin anchors the right edge and
+   destructive rides just inside it, issue #156), and destructive always
+   carries confirm:true for the two-click pattern the session rows
+   established. Every action has a real label — tooltips are mandatory
+   (issue #25). */
 
 import { pinAffordance } from "./pinAffordance";
 

@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 
 /* SPEC-TESTS for one action cluster per row — https://github.com/roowus/truss/issues/110
    ("In the sidebar the pin button sits a different gap from the other
@@ -133,4 +134,28 @@ test("archived rows unarchive instead of shell/archive; dead rows drop close", a
     assert.equal(acts.at(-2)!.danger, true, `${name}: destructive rides just inside the pin anchor`);
     assert.equal(acts.at(-2)!.confirm, true, `${name}: the destructive entry keeps its two-click confirm (the #85 rule)`);
   }
+});
+
+/* issue #156, audit round 1 (B1): the contract tests above only exercise
+   sessionRowActions — but shells/hosts compose their pin at RENDER time
+   (their #85 arrays are a pinned contract), so a future edit moving the pin
+   back to the front of those clusters would ship green and re-introduce
+   the exact dodge #156 fixes. Pin the real markup (the rowRestGap
+   pattern): inside each row's cluster, the pin button comes AFTER the
+   other actions. */
+test("read-through: shell and host rows render the pin LAST in their cluster", () => {
+  const src = readFileSync(new URL("../src/components/Sidebar.tsx", import.meta.url), "utf8")
+    .replace(/\/\*[\s\S]*?\*\//g, ""); /* prose may name the old order; the pin is on the markup */
+  const slice = (name: string) => {
+    const start = src.indexOf(`function ${name}`);
+    return src.slice(start, src.indexOf("\nfunction ", start + 1));
+  };
+
+  const shell = slice("ShellRow");
+  assert.ok(shell.includes("pinTerminal"), "the shell row renders its pin via pinTerminal");
+  assert.ok(shell.indexOf("pinTerminal") > shell.indexOf("killTerminal"), "shell row: the pin follows rename/kill — it anchors the right edge, so hover never dodges it (issue #156)");
+
+  const host = slice("HostRow");
+  assert.ok(host.includes("pinHost"), "the host row renders its pin via pinHost");
+  assert.ok(host.indexOf("pinHost") > host.indexOf("deleteHost"), "host row: the pin follows delete — it anchors the right edge, so hover never dodges it (issue #156)");
 });
