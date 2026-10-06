@@ -1,69 +1,53 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { composerAlign, composerTextareaHeight } from "../src/lib/composerFit";
 
-/* SPEC-TESTS for the composer resting height — https://github.com/roowus/truss/issues/139
+/* TESTS for the composer resting height — https://github.com/roowus/truss/issues/139
    ("Composer rests a row too tall: the 'Message to resume <harness>'
    placeholder sits one row above the buttons even though they don't
-   overlap — looks mismatched and ugly"). These FAIL on purpose today: they
-   pin the contract a fix must satisfy.
+   overlap — looks mismatched and ugly"). They pinned the contract before
+   the fix (4/4 red) and now keep it green.
 
-   Today (ChatPanel.tsx): the composer row is `flex items-end … py-1.5` —
-   buttons bottom-align — while the textarea autosizes via
-   `height=0; height=min(220, scrollHeight)` (content-box: the measure
-   double-counts padding, so the empty box rests a row too tall, its
-   placeholder floating a line above the buttons).
-
-   The contract: a pure src/lib/composerFit.ts —
+   The contract: src/lib/composerFit.ts —
 
      composerTextareaHeight({ scrollHeight, lineHeight, verticalPadding, cap }): number
        Empty draft → EXACTLY one line + vertical padding (never a phantom
        second row — padding is counted once, not twice);
      composerAlign(lineCount): "center" | "end"
        1 line → "center" (placeholder and buttons share the row);
-       2+ lines → "end" (buttons sink to the bottom of a tall draft). */
+       2+ lines → "end" (buttons sink to the bottom of a tall draft).
 
-interface ComposerFitModule {
-  composerTextareaHeight(input: { scrollHeight: number; lineHeight: number; verticalPadding: number; cap?: number }): number;
-  composerAlign(lineCount: number): "center" | "end";
-}
+   Post-audit note (PR #144 round 1): the issue diagnosed the mismeasure as
+   content-box double-counting; the shipped stylesheet is border-box
+   (Tailwind preflight), so ChatPanel applies the total height directly and
+   the padding is counted exactly once. */
 
-async function load(): Promise<ComposerFitModule | null> {
-  const spec = "../src/lib/composerFit"; // variable specifier: typechecks before the module exists
-  return import(spec).catch(() => null);
-}
-
-test("src/lib/composerFit.ts exists", async () => {
-  const mod = await load();
-  assert.ok(mod, "src/lib/composerFit.ts must export composerTextareaHeight + composerAlign — see issue #139");
+test("src/lib/composerFit.ts exists", () => {
+  assert.equal(typeof composerTextareaHeight, "function", "src/lib/composerFit.ts must export composerTextareaHeight — see issue #139");
+  assert.equal(typeof composerAlign, "function", "src/lib/composerFit.ts must export composerAlign — see issue #139");
 });
 
-test("the empty draft is EXACTLY one row — padding counted once", async () => {
-  const mod = await load();
-  assert.ok(mod, "composerFit module must exist (see module test)");
-
+test("the empty draft is EXACTLY one row — padding counted once", () => {
   const oneLine = 13.5 * 1.5; // 20.25px content
   const pad = 8; // py-1
   /* what the browser reports for an empty rows=1 textarea with py-1 */
   const measured = oneLine + pad;
-  const h = mod.composerTextareaHeight({ scrollHeight: measured, lineHeight: oneLine, verticalPadding: pad });
+  const h = composerTextareaHeight({ scrollHeight: measured, lineHeight: oneLine, verticalPadding: pad });
   assert.equal(h, oneLine + pad, "one line + padding, once — the phantom row dies");
   assert.ok(h < oneLine * 2 + pad, "never two rows when empty");
 
   /* growth is linear and capped */
-  const threeLines = mod.composerTextareaHeight({ scrollHeight: oneLine * 3 + pad, lineHeight: oneLine, verticalPadding: pad });
+  const threeLines = composerTextareaHeight({ scrollHeight: oneLine * 3 + pad, lineHeight: oneLine, verticalPadding: pad });
   assert.equal(threeLines, oneLine * 3 + pad, "three lines measure as three");
-  const huge = mod.composerTextareaHeight({ scrollHeight: 9000, lineHeight: oneLine, verticalPadding: pad, cap: 220 });
+  const huge = composerTextareaHeight({ scrollHeight: 9000, lineHeight: oneLine, verticalPadding: pad, cap: 220 });
   assert.equal(huge, 220, "the cap holds");
 });
 
-test("alignment: single-line centers (placeholder on the buttons' row); multi-line bottoms", async () => {
-  const mod = await load();
-  assert.ok(mod, "composerFit module must exist (see module test)");
-
-  assert.equal(mod.composerAlign(1), "center", "one line → everything shares the row (the complaint)");
-  assert.equal(mod.composerAlign(2), "end", "tall drafts bottom-align the buttons");
-  assert.equal(mod.composerAlign(9), "end");
+test("alignment: single-line centers (placeholder on the buttons' row); multi-line bottoms", () => {
+  assert.equal(composerAlign(1), "center", "one line → everything shares the row (the complaint)");
+  assert.equal(composerAlign(2), "end", "tall drafts bottom-align the buttons");
+  assert.equal(composerAlign(9), "end");
 });
 
 test("read-through: the composer actually uses the contract", () => {
