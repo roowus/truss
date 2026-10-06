@@ -13,6 +13,7 @@ import {
 } from "dockview-react";
 import "dockview-react/dist/styles/dockview.css";
 import { store, useApp } from "@/lib/store";
+import { tabContextMenuItems } from "@/lib/contextMenu";
 import { cleanTabTitle, tabRenameTarget } from "@/lib/tabRename";
 import { desktops, useDesktops } from "@/lib/desktops";
 import { getDockApi, renameSessionPanels, renameHostPanels } from "@/lib/workspace";
@@ -402,18 +403,15 @@ const DesktopCanvas = memo(function DesktopCanvas({ id, visible }: { id: string;
   const actions = useMemo(() => (props: IDockviewHeaderActionsProps) => <GroupActions props={props} spaceId={id} />, [id]);
   const contextMenu = useCallback(({ panel }: GetTabContextMenuItemsParams): (BuiltInContextMenuItem | ReactContextMenuItemConfig)[] => {
     const others = desktops.state.spaces.filter((s) => s.id !== id);
-    return [
-      "close",
+    const group = panel.group;
+    return tabContextMenuItems({
+      others,
       /* the batch close goes through the undo stack as ONE entry, matching
          the group-corner X (built-in closeOthers would record N singles) */
-      ...(panel.group
-        ? [{ label: "Close Others", action: () => desktops.closeGroup(id, panel.group.panels.filter((p) => p.id !== panel.id)) }]
-        : ["closeOthers" as const]),
-      "separator",
-      ...others.map((space) => ({ label: `Copy to ${space.name}`, action: () => desktops.transferPanel(id, panel.id, space.id) })),
-      ...(others.length ? ["separator" as const] : []),
-      ...others.map((space) => ({ label: `Move to ${space.name}`, action: () => desktops.transferPanel(id, panel.id, space.id, true) })),
-    ];
+      closeOthers: group ? () => desktops.closeGroup(id, group.panels.filter((p) => p.id !== panel.id)) : undefined,
+      copyTo: (spaceId) => desktops.transferPanel(id, panel.id, spaceId),
+      moveTo: (spaceId) => desktops.transferPanel(id, panel.id, spaceId, true),
+    });
   }, [id]);
 
   useEffect(() => () => { dispose.current?.(); dispose.current = null; }, []);
