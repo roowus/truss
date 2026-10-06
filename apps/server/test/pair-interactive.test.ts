@@ -124,6 +124,28 @@ test("POST /api/pair/request with a metacharacter Host header refuses to embed i
   assert.equal(status, 400, "a hostile Host must never be stored as the dial-home address");
 });
 
+test("approve can pair INTO the wizard's own host (its waiting screen is the one that flips)", async () => {
+  /* manual test (issue #111 review): a bare approval created a FRESH host,
+     so the wizard's host waited forever and one device became two records.
+     The wizard holds the plaintext token in memory; the route verifies it
+     against the host's hash like every delivery route. */
+  const mine = await postJson("/api/hosts", { label: "wizard box" }).then((r) => r.json());
+  const created = await postJson("/api/pair/request", { hostname: "wizard box", os: "macos" }).then((r) => r.json());
+
+  const wrong = await postJson(`/api/pair/request/${created.id}/approve`, { hostId: mine.host.id, token: "truss_agent_deadbeef" });
+  assert.equal(wrong.status, 403, "a token that does not match the named host never resolves the request");
+
+  const ok = await postJson(`/api/pair/request/${created.id}/approve`, { hostId: mine.host.id, token: mine.token });
+  assert.equal(ok.status, 200, JSON.stringify(await ok.clone().text()));
+  const payload = await fetch(`${srv.base}/api/pair/request/${created.id}`).then((r) => r.json());
+  assert.equal(payload.status, "approved");
+  assert.equal(payload.hostId, mine.host.id, "the device pairs into the wizard's host, not a fresh one");
+  assert.equal(payload.token, mine.token, "and carries the wizard host's own token");
+
+  const hosts = await fetch(`${srv.base}/api/hosts`).then((r) => r.json());
+  assert.equal(hosts.hosts.filter((h: { label: string }) => h.label === "wizard box").length, 1, "one device, one record");
+});
+
 test("deny answers the poll honestly; creation is rate-limited per client", async () => {
   const r2 = await postJson("/api/pair/request", { hostname: "denybox", os: "linux" }).then((r) => r.json());
   const denied = await postJson(`/api/pair/request/${r2.id}/deny`, {});
@@ -173,9 +195,11 @@ test("GET /p serves the browser pairing page: download, run the exact-named file
   assert.match(res.headers.get("content-type") ?? "", /text\/html/, "a page, not a script");
   const body = await res.text();
   assert.ok(body.includes("<!doctype html"), "actually html");
-  assert.match(body, /fetch\("\/i"\)/, "the Download button fetches the generic auto-pair script");
+  assert.match(body, /location\.origin \+ "\/i \| sh"/, "the page leads with the one command, derived from its own origin");
+  assert.match(body, /curl -fsSL/, "the paste-ready command is the primary action");
+  assert.match(body, /fetch\("\/i"\)/, "the download fallback fetches the generic auto-pair script");
   assert.match(body, /truss-pair-/, "downloads get a fresh name per click");
-  assert.match(body, /"sh ~\/Downloads\/" \+ name/, "the run command shows the exact downloaded name (dedup-proof)");
+  assert.match(body, /Run it with: sh ~\/Downloads\/" \+ name/, "the run command shows the exact downloaded name (dedup-proof)");
   assert.ok(!body.includes("aria-label=\"pairing code\""), "no code box — the Allow click replaced it");
   assert.match(body, /Allow/, "the page names the approval step");
   assert.ok(!/truss_agent_[0-9a-f]{10,}/.test(body), "the page is token-free like the /i script");

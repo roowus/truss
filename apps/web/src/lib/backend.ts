@@ -116,8 +116,11 @@ export interface Backend {
   renameHost(id: string, label: string): Promise<unknown>;
   deleteHost(id: string): Promise<unknown>;
   /** auto-pairing (issue #111 review): the Allow/Deny click on a device that
-     ran the installer and announced itself */
-  approvePairRequest(id: string): Promise<{ ok: boolean; hostId: string }>;
+     ran the installer and announced itself. The wizard passes its own
+     hostId + in-memory token so the device pairs into the wizard's host and
+     its waiting screen flips; the sidebar's standalone row approves bare
+     (a fresh host is created). */
+  approvePairRequest(id: string, into?: { hostId: string; token: string }): Promise<{ ok: boolean; hostId: string }>;
   denyPairRequest(id: string): Promise<{ ok: boolean }>;
   /** installer delivery (issue #1): short single-use pairing command, or
      taildrop the standalone script to the picked tailnet device.
@@ -268,7 +271,7 @@ export function createLiveBackend(): Backend {
     pinHost: (id, pinned) => req("POST", `/api/hosts/${encodeURIComponent(id)}/pin`, { pinned }),
     renameHost: (id, label) => req("POST", `/api/hosts/${encodeURIComponent(id)}/rename`, { label }),
     deleteHost: (id) => req("DELETE", `/api/hosts/${encodeURIComponent(id)}`),
-    approvePairRequest: (id) => req("POST", `/api/pair/request/${encodeURIComponent(id)}/approve`, {}),
+    approvePairRequest: (id, into) => req("POST", `/api/pair/request/${encodeURIComponent(id)}/approve`, into ?? {}),
     denyPairRequest: (id) => req("POST", `/api/pair/request/${encodeURIComponent(id)}/deny`, {}),
     pairHost: (id, token, serverUrl) => req("POST", `/api/hosts/${encodeURIComponent(id)}/pair`, { token, serverUrl }),
     taildropHost: (id, peer, token, serverUrl) => req("POST", `/api/hosts/${encodeURIComponent(id)}/taildrop`, { peer, token, serverUrl }),

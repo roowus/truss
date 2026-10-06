@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { createHost } from "./hosts.js";
+import { createHost, verifyAgentToken } from "./hosts.js";
 
 /**
  * Auto-pairing (issue #111, review rounds): the WhatsApp/Discord shape. The
@@ -141,18 +141,39 @@ export function readPairRequest(id: string):
   return { status: "approved", hostId: r.approved.hostId, token: r.approved.token, serverUrl: r.serverUrl };
 }
 
-/** the Allow click: create the host + token exactly like the add-host
-   wizard, park them for the agent's next poll. False when the request is
-   gone or already decided. */
-export function approvePairRequest(id: string): { hostId: string } | undefined {
+/** the Allow click, two shapes:
+   - with the wizard's hostId + its in-memory plaintext token (verified
+     against the host's hash like every delivery route), the request pairs
+     INTO the wizard's own host, so the wizard's waiting screen is the one
+     that flips (manual test: a fresh host per approval left the wizard's
+     host waiting forever — two records for one device);
+   - bare (the sidebar's standalone row), create the host + token exactly
+     like the add-host wizard.
+   Either way the credentials park for the agent's next poll. Undefined when
+   the request is gone or already decided; "token-mismatch" when the
+   wizard's token doesn't match the host it names. */
+export function approvePairRequest(
+  id: string,
+  into?: { hostId: string; token: string },
+): { hostId: string } | "token-mismatch" | undefined {
   sweep(Date.now());
   const r = requests.get(id);
   if (!r || r.status !== "pending") return undefined;
-  const { host, token } = createHost(r.hostname, `auto-paired from ${r.tailscaleIp ?? "unknown address"}`);
+  let hostId: string;
+  let token: string;
+  if (into) {
+    if (!verifyAgentToken(into.hostId, into.token, "")) return "token-mismatch";
+    hostId = into.hostId;
+    token = into.token;
+  } else {
+    const created = createHost(r.hostname, `auto-paired from ${r.tailscaleIp ?? "unknown address"}`);
+    hostId = created.host.id;
+    token = created.token;
+  }
   r.status = "approved";
-  r.approved = { hostId: host.id, token };
+  r.approved = { hostId, token };
   announce("resolved", r);
-  return { hostId: host.id };
+  return { hostId };
 }
 
 export function denyPairRequest(id: string): boolean {

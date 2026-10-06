@@ -575,7 +575,15 @@ app.get("/api/pair/request/:id", async (req, reply) => {
 
 app.post("/api/pair/request/:id/approve", async (req, reply) => {
   const { id } = req.params as { id: string };
-  const r = approvePairRequest(id);
+  /* the wizard passes its own hostId + in-memory plaintext token so the
+     device pairs INTO the wizard's host and its waiting screen is the one
+     that flips (manual test: a fresh host per approval split one device
+     into two records and left the wizard waiting forever). The token is
+     verified against the host's hash like every delivery route. */
+  const { hostId, token } = (req.body ?? {}) as { hostId?: string; token?: string };
+  if (hostId && typeof token !== "string") return reply.code(400).send({ error: "hostId needs its token" });
+  const r = approvePairRequest(id, hostId ? { hostId, token: token! } : undefined);
+  if (r === "token-mismatch") return reply.code(403).send({ error: "token doesn't match this host" });
   if (!r) return reply.code(410).send({ error: "that pairing request is expired or already decided" });
   return { ok: true, hostId: r.hostId };
 });

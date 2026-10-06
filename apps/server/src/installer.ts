@@ -176,14 +176,16 @@ sh "$SCRIPT" "$TOKEN"
 
 /**
  * The browser pairing page (issue #111 review rounds), served at GET /p.
- * Minimum work, and no code anywhere: Download fetches the generic
- * auto-pairing installer (GET /i) under a FRESH random name and the page
- * then shows the run command with that exact name — a browser that dedupes
- * an earlier download ("t.sh (2)") can no longer strand the instruction on
- * the wrong file. The installer asks to join when it runs; the user
- * approves in the Truss UI:
+ * Minimum work, and no code anywhere: the page LEADS with the one command
+ * (`curl -fsSL <origin>/i | sh`, derived from its own origin so no wizard
+ * round-trip or embed is needed) — one paste in a terminal, the installer
+ * asks to join, the user approves in the Truss UI. The file download is
+ * the no-curl fallback; it fetches GET /i under a FRESH random name and
+ * shows the run command with that exact name, so a browser that dedupes an
+ * earlier download ("t.sh (2)", or Chrome holding an .sh entirely — both
+ * found in manual testing) can no longer strand the instruction:
  *
- *   open link / scan QR → Download → run the shown command → click Allow.
+ *   open link / scan QR → paste one command (or Download) → click Allow.
  *
  * The page embeds nothing at all (a fully static string: no interpolation,
  * no injection surface) and no state changes hands here: the download never
@@ -233,52 +235,65 @@ export function pairingPage(): string {
     </svg>
     <h1>Pair this device with Truss</h1>
   </div>
-  <p class="sub">Download, run, approve. That is the whole pairing.</p>
+  <p class="sub">One paste in a terminal, one click in Truss. Nothing to type.</p>
 
   <section class="step">
     <span class="n">1</span>
-    <div>
-      <p>Download the installer.</p>
-      <button class="dl" type="button" id="dl">
-        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3 v12"/><path d="M6 11 l6 6 6-6"/><path d="M4 21 h16"/></svg>
-        Download installer
-      </button>
-      <p class="hint">A couple of KB, and it carries no credentials: download it as many times as you like.</p>
-      <p id="err" role="alert" style="color:#ef6b5b;font-size:11.5px;margin:8px 0 0" hidden></p>
-    </div>
-  </section>
-
-  <section class="step" id="runstep" hidden>
-    <span class="n">2</span>
     <div style="flex:1">
-      <p>Run it in a terminal on this machine.</p>
+      <p>Paste this in a terminal on this machine.</p>
       <div class="cmd">
-        <code id="runcmd"></code>
+        <code id="runcmd">…</code>
         <button class="copy" id="copy" type="button">Copy</button>
       </div>
-      <p class="hint">The exact name of the file you just downloaded, so a browser rename can not break it. On a Mac the installer also registers itself to start at login, so this is the last command you will run.</p>
+      <p class="hint">It downloads the installer and runs it in one go, so no file ever lands in Downloads (browsers flag stray .sh files; the pipe skips all that). The installer asks this device to pair and waits.</p>
     </div>
   </section>
 
-  <section class="step" id="approvestep" hidden>
-    <span class="n">3</span>
+  <section class="step">
+    <span class="n">2</span>
     <div>
       <p>Click <b>Allow</b> in Truss when it asks.</p>
-      <p class="hint">The installer announces this device and waits. Approving in the Truss UI is the whole handshake: no code, nothing else to type. The agent then dials out over your tailnet; no inbound ports, nothing listens.</p>
+      <p class="hint">Approving in the Truss UI is the whole handshake: no code, nothing else to type. The agent then installs and starts itself (launchd on a Mac, systemd on Linux) and dials out over your tailnet; no inbound ports, nothing listens.</p>
+    </div>
+  </section>
+
+  <section class="step">
+    <span class="n">&#8226;</span>
+    <div style="flex:1">
+      <p style="color:#9b968c">No curl on this machine? Download the installer instead.</p>
+      <button class="copy" type="button" id="dl">Download installer</button>
+      <p class="hint" id="dlhint" hidden></p>
+      <p id="err" role="alert" style="color:#ef6b5b;font-size:11.5px;margin:8px 0 0" hidden></p>
     </div>
   </section>
 </main>
 <script>
-var dl = document.getElementById("dl"), err = document.getElementById("err"),
-    runStep = document.getElementById("runstep"), approveStep = document.getElementById("approvestep"),
-    runCmd = document.getElementById("runcmd"), copyBtn = document.getElementById("copy");
+var runCmd = document.getElementById("runcmd"),
+    copyBtn = document.getElementById("copy"),
+    dl = document.getElementById("dl"), dlHint = document.getElementById("dlhint"),
+    err = document.getElementById("err");
 
+/* the page is served by the truss server itself, so its origin IS the
+   server address — the command needs no wizard round-trip and no embed */
+var command = "curl -fsSL " + location.origin + "/i | sh";
+runCmd.textContent = command;
+
+copyBtn.addEventListener("click", function () {
+  var done = function () { copyBtn.textContent = "Copied"; setTimeout(function () { copyBtn.textContent = "Copy"; }, 1500); };
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(runCmd.textContent).then(done, function () { copyBtn.textContent = "Select it above"; });
+  } else {
+    copyBtn.textContent = "Select it above";
+  }
+});
+
+/* the no-curl fallback: download the installer under a fresh random name
+   (a browser that dedupes an earlier download to "t.sh (2)" left a static
+   instruction pointing at the wrong file — found in manual test), then
+   show the run command with that exact name */
 dl.addEventListener("click", function () {
   err.hidden = true;
   dl.disabled = true;
-  /* a fresh name per click (issue #111 review: a browser that dedupes an
-     earlier t.sh to "t.sh (2)" left the page's static instruction pointing
-     at the wrong file) — the run command below uses this exact name */
   var name = "truss-pair-" + Math.random().toString(36).slice(2, 6) + ".sh";
   fetch("/i").then(function (r) {
     if (!r.ok) throw new Error("http " + r.status);
@@ -292,24 +307,14 @@ dl.addEventListener("click", function () {
        (audit B1) — revoke lazily; one retained blob on a transient page is
        harmless, a missing file is not */
     setTimeout(function () { URL.revokeObjectURL(a.href); }, 10000);
-    runCmd.textContent = "sh ~/Downloads/" + name;
-    runStep.hidden = false;
-    approveStep.hidden = false;
+    dlHint.textContent = "Saved to Downloads. Run it with: sh ~/Downloads/" + name;
+    dlHint.hidden = false;
     dl.disabled = false;
   }).catch(function () {
     err.textContent = "Could not download the installer. Check the address, then retry.";
     err.hidden = false;
     dl.disabled = false;
   });
-});
-
-copyBtn.addEventListener("click", function () {
-  var done = function () { copyBtn.textContent = "Copied"; setTimeout(function () { copyBtn.textContent = "Copy"; }, 1500); };
-  if (navigator.clipboard && navigator.clipboard.writeText) {
-    navigator.clipboard.writeText(runCmd.textContent).then(done, function () { copyBtn.textContent = "Select it above"; });
-  } else {
-    copyBtn.textContent = "Select it above";
-  }
 });
 </script>
 </body>

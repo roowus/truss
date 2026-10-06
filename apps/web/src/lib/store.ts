@@ -736,10 +736,10 @@ class Store {
 
   /* auto-pairing (issue #111 review): the Allow/Deny click on a device that
      announced itself; either way the roster and the pending list refresh */
-  async approvePairRequest(id: string) {
+  async approvePairRequest(id: string, into?: { hostId: string; token: string }) {
     if (!this.be) return;
     try {
-      await this.be.approvePairRequest(id);
+      await this.be.approvePairRequest(id, into);
       this.toast("ok", "Pairing approved", "the device is installing itself now");
       await this.refreshHosts();
     } catch (e: any) {
