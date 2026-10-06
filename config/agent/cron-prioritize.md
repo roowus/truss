@@ -13,7 +13,14 @@ issue right now, and if so, which one. Cheap and deterministic: no wandering.
    adoption path covers existing PRs) before picking a new issue below.
 1. List candidates:
    `gh issue list --repo roowus/truss --state open --json number,title,labels,createdAt`
-2. Drop anything that:
+1b. **Backfill missing priorities first.** Any open bug/enhancement issue
+    with no `priority: *` label gets one from you right now (you are reading
+    them anyway): `gh issue edit <n> --add-label "priority: <level>"` with a
+    judgment call from the title/body. Intake sessions skip this step often
+    enough that the pipeline owns it. Never label `new feature` /
+    `area: platform` issues (excluded below; the developer prioritizes those
+    when they pull the label).
+ 2. Drop anything that:
    - is already being worked: a PR body or title references it
      (`gh pr list --repo roowus/truss --state open --json number,title,body`
      and match `#<issue>`), or a branch named for it exists
