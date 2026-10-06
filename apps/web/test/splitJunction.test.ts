@@ -14,9 +14,11 @@ import assert from "node:assert/strict";
    layout —
 
      splitJunctions(layout): Junction[]
-       Junction = { x, y, quadrants: { tl, tr, bl, br } }  // the four adjacent groups
-       — a junction exists only where BOTH axes cross with content in all
-         four quadrants (an L-shaped gap is no junction);
+       Junction = { x, y, quadrants: { tl, tr, bl, br } }  // the adjacent groups
+       — a junction exists where BOTH axes cross with at least three
+         distinct panels around the point: a four-quadrant +, or a T where
+         one panel spans and covers both quadrants on its side (#187).
+         A corner where only two panels meet is no junction;
 
      dragJunction(layout, junction, dx, dy): layout
        — the vertical boundary moves by dx, the horizontal by dy; the two
@@ -119,11 +121,32 @@ test("a 2×2 grid has exactly one junction at the crossing, naming all four quad
   assert.deepEqual([js[0].x, js[0].y], [500, 380], "at the boundary crossing");
   assert.deepEqual(js[0].quadrants, { tl: "TL", tr: "TR", bl: "BL", br: "BR" }, "all four neighbors named");
 
+  /* AMENDED (issue #187): T-junctions are junctions — a spanning panel
+     covers both quadrants on its side; the crossing still lets you drag
+     both axes (the split line moves, the full-width boundary moves). */
   const l = mod.splitJunctions(lShape());
-  assert.ok(
-    !l.some((j) => j.x === 500 && j.y === 380),
-    "no junction where a quadrant is missing (the L's crossing has a spanning panel)",
-  );
+  const tee = l.find((j) => j.x === 500 && j.y === 380);
+  assert.ok(tee, "a T-junction IS a junction — the spanning panel's split crossing is grabbable (issue #187)");
+  assert.equal(tee.quadrants.tl, "TOP-SPAN", "the spanning panel covers its side");
+  assert.equal(tee.quadrants.tr, "TOP-SPAN");
+  assert.equal(tee.quadrants.bl, "BL");
+  assert.equal(tee.quadrants.br, "BR");
+});
+
+test("dragJunction on a T: the split moves with x, the full-width boundary with y — spanning panel resizes vertically only", async () => {
+  const mod = await load();
+  assert.ok(mod, "splitJunction module must exist (see module test)");
+
+  const before = lShape();
+  const j = mod.splitJunctions(before).find((jj) => jj.x === 500 && jj.y === 380)!;
+  const after = mod.dragJunction(before, j, 60, -40);
+
+  const [top, bottomBranch] = (after.root as Branch).data as [Leaf, Branch];
+  assert.equal(top.size, 340, "the horizontal boundary moved: the spanning panel's height follows dy");
+  const [bl, br] = bottomBranch.data as [Leaf, Leaf];
+  assert.equal(bl.size, 560, "the split moved with dx");
+  assert.equal(br.size, 800 - 560, "its sibling absorbs");
+  assert.equal(after.width, 800, "width conserved — the spanning panel's WIDTH is untouched (it spans)");
 });
 
 test("dragJunction: both axes move, totals conserve, clamps hold, bystanders untouched", async () => {
@@ -157,6 +180,22 @@ test("dragJunction: both axes move, totals conserve, clamps hold, bystanders unt
   const cols = slammed.root.data as Branch[];
   for (const col of cols) for (const leaf of col.data as Leaf[]) assert.ok(leaf.size >= 50, `no panel collapses below the floor (got ${leaf.size})`);
   assert.equal(slammed.width, 800, "clamped drags still conserve");
+});
+
+test("a T layout yields exactly its one crossing; a crossing with only two panels around it is still no junction (#187)", async () => {
+  const mod = await load();
+  assert.ok(mod, "splitJunction module must exist (see module test)");
+
+  assert.equal(mod.splitJunctions(lShape()).length, 1, "the T is one junction, not a scatter of crossings");
+
+  /* the relaxation from four panels to three stops there: when the quadrant
+     samples name only TWO panels (each line's sides agree), the crossing is
+     a corner and stays ungrabbable */
+  const corner = grid2x2();
+  const [left, right] = corner.root.data as Branch[];
+  (left.data[1] as Leaf).data = "TL"; // bottom-left repeats top-left
+  (right.data[1] as Leaf).data = "TR"; // bottom-right repeats top-right
+  assert.deepEqual(mod.splitJunctions(corner), [], "two panels meeting at a point is a corner, not a junction");
 });
 
 test("degenerate inputs: empty layout → no junctions, no throws", async () => {
