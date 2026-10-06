@@ -68,3 +68,29 @@ export function markRead(readAt: Record<string, number>, id: string, at: number)
 export function sidebarAttention(session: UnreadSession, readAt: Record<string, number>, focusedId: string | null): "unread" | null {
   return isUnread(session, readAt, focusedId) ? "unread" : null;
 }
+
+/**
+ * The first-load baseline for a prefs doc that predates the feature:
+ * everything already listed counts as seen up to its own last activity, so
+ * the upgrade does not paint the whole sidebar unread. Sessions that appear
+ * afterwards start unmarked and speak for themselves.
+ */
+export function seedReadMarks(sessions: { id: string; updatedAt: number }[]): Record<string, number> {
+  const seed: Record<string, number> = {};
+  for (const s of sessions) seed[s.id] = s.updatedAt;
+  return seed;
+}
+
+/**
+ * Focus drives the marks: the session being opened counts as seen, and so
+ * does the one being left — anything that arrived while it was on screen
+ * goes with it. Returns null when focus is not actually changing, so the
+ * caller can skip the write.
+ */
+export function marksForFocusChange(readAt: Record<string, number>, prevId: string | undefined, nextId: string | undefined, now: number): Record<string, number> | null {
+  if (prevId === nextId) return null;
+  let next = readAt;
+  if (prevId) next = markRead(next, prevId, now);
+  if (nextId) next = markRead(next, nextId, now);
+  return next;
+}

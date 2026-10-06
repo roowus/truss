@@ -17,7 +17,7 @@ import {
 } from "./workspaceClose";
 import type { Backend } from "./backend";
 import { store, toMs } from "./store";
-import { markRead } from "./unread";
+import { marksForFocusChange, seedReadMarks } from "./unread";
 
 export interface Desktop {
   id: string;
@@ -110,7 +110,7 @@ function freshState(): DesktopState {
 }
 
 /* the doc crosses the wire — keep only sane session-id → ms-epoch entries */
-function parseReadAt(raw: unknown): Record<string, number> | undefined {
+export function parseReadAt(raw: unknown): Record<string, number> | undefined {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
   const out: Record<string, number> = {};
   for (const [k, v] of Object.entries(raw)) if (typeof v === "number" && Number.isFinite(v)) out[k] = v;
@@ -226,13 +226,18 @@ class DesktopManager {
     if (id === this.lastReadFocus) return;
     const prev = this.lastReadFocus;
     this.lastReadFocus = id;
-    let readAt = this.state.readAt;
-    const now = Date.now();
-    /* the session being left counts as seen too — anything that arrived
-       while it was on screen goes with it */
-    if (prev) readAt = markRead(readAt, prev, now);
-    if (id) readAt = markRead(readAt, id, now);
-    if (readAt !== this.state.readAt) {
+    /* the mark compares against server-stamped updated_at, so the client
+       clock alone is not enough (audit B3): a server running ahead of the
+       browser would put activity past the mark and the just-read badge
+       would reappear and never clear. Mark up to the newest activity the
+       rows on either side of the focus change are already showing. */
+    let now = Date.now();
+    for (const x of [prev, id]) {
+      const s = x ? store.state.sessions[x] : undefined;
+      if (s) now = Math.max(now, toMs(s.updated_at));
+    }
+    const readAt = marksForFocusChange(this.state.readAt, prev, id, now);
+    if (readAt) {
       this.set({ readAt });
       this.queueSave();
     }
@@ -245,18 +250,11 @@ class DesktopManager {
   private maybeSeedReadAt() {
     if (this.state.readAt !== undefined) return;
     if (!store.state.sessionsLoaded) return;
-    const seed: Record<string, number> = {};
-    for (const id of store.state.order) {
+    const listed = store.state.order.flatMap((id) => {
       const s = store.state.sessions[id];
-      if (s) seed[id] = toMs(s.updated_at);
-    }
-    this.set({ readAt: seed });
-    this.queueSave();
-  }
-
-  /** Explicit "seen it" (focusing does this via the store subscription). */
-  markSessionRead(id: string, at = Date.now()) {
-    this.set({ readAt: markRead(this.state.readAt ?? {}, id, at) });
+      return s ? [{ id, updatedAt: toMs(s.updated_at) }] : [];
+    });
+    this.set({ readAt: seedReadMarks(listed) });
     this.queueSave();
   }
 
