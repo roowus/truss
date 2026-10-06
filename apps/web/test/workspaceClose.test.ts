@@ -2,12 +2,15 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 /* SPEC-TESTS for closing whole workspaces — https://github.com/roowus/truss/issues/115
-   ("Allow me to close entire windows all together like Chrome can"). These
-   FAIL on purpose today: they pin the contract a fix must satisfy.
+   ("Allow me to close entire windows all together like Chrome can"). HISTORY:
+   written as pre-fix spec tests, they pinned the contract a fix had to
+   satisfy; the fix landed long ago (#120/#128) and the chord letters moved
+   again in #184 — the "Today" paragraph below is the pre-fix world, kept as
+   the spec's origin story. The binding contract underneath it is current.
 
-   Today: workspace close exists but is buried — right-click the workspace
-   tab → "Delete workspace" → "Confirm delete" (DesktopStrip.tsx), a
-   two-step menu. Chrome's model: a window's X closes everything in ONE
+   Pre-fix world: workspace close existed but was buried — right-click the
+   workspace tab → "Delete workspace" → "Confirm delete" (DesktopStrip.tsx),
+   a two-step menu. Chrome's model: a window's X closes everything in ONE
    gesture, Cmd+Shift+W closes the window, Cmd+Shift+T reopens what you
    just closed.
 
@@ -98,9 +101,9 @@ test("the chords: Alt+Shift+W closes, Alt+Shift+T reopens — and only those", a
 
   /* browsers reserve Cmd/Ctrl+Shift+W for their own window close (the keydown
      never reaches a plain tab — verified in #122), so the advertised close
-     chord is Alt+Shift+W: the strip's Alt+Shift+<letter> pattern (Alt+Shift+T
-     adds a tab), unreserved in Chrome/Firefox/Safari. Shift+W stays as a
-     legacy alias for keyboard-lock/embedded setups that pass it through. */
+     chord is Alt+Shift+W: Chrome's own shape with Alt for Ctrl, unreserved in
+     Chrome/Firefox/Safari. Shift+W stays as a legacy alias for
+     keyboard-lock/embedded setups that pass it through. */
   assert.ok(mod.isCloseWindowChord({ key: "w", altKey: true, shiftKey: true }), "the advertised close chord (issue #181)");
   assert.ok(mod.isCloseWindowChord({ key: "W", altKey: true, shiftKey: true }), "caps-tolerant");
   /* macOS: Option is a composer — Option+Shift+W reports a composed glyph as

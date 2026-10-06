@@ -6,9 +6,10 @@
  * everything in one gesture, Cmd+Shift+W closes the window, and a chord
  * reopens what you just closed — except Chrome quits on the last window and
  * truss always keeps at least one workspace. Chrome's own Cmd+Shift+T is
- * browser-reserved (the keydown never reaches a plain tab), so the reopen
- * chord is Cmd/Ctrl+Shift+Z — "undo the close" — with Shift+T kept as a
- * legacy alias for setups that do pass it through. Cmd+Shift+W is just as
+ * browser-reserved (the keydown never reaches a plain tab); the reopen chord
+ * was Cmd/Ctrl+Shift+Z — "undo the close" — before the Alt family below
+ * took over (it stays as a working alias), with Shift+T kept as a legacy
+ * alias for setups that do pass it through. Cmd+Shift+W is just as
  * browser-reserved (Chrome closes its own window — verified in #122), so
  * the advertised close chord is Alt+Shift+W, the strip's Alt+Shift+<letter>
  * pattern (issue #181), with Shift+W kept as its legacy alias.
