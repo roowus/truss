@@ -141,8 +141,48 @@ chmod 600 "$DEST/agent-${host.id}.env"
 echo
 echo "installed: $DEST/node-agent.mjs"
 echo
-echo "run it:        set -a; . \\"$DEST/agent-${host.id}.env\\"; set +a; node $DEST/node-agent.mjs"
-if command -v systemctl >/dev/null 2>&1 && systemctl --user >/dev/null 2>&1; then
+# the installer STARTS the agent wherever the platform allows (issue #111
+# review: "it just tells me another command to run" — a manual run line is
+# the fallback, never the happy path). macOS gets a launchd LaunchAgent
+# (no sudo, starts at login); the plist execs through the chmod-600 env
+# file so the token stays out of the 0644 plist.
+if [ "$(uname -s)" = "Darwin" ] && command -v launchctl >/dev/null 2>&1; then
+  PLIST="$HOME/Library/LaunchAgents/com.truss.agent-${host.id}.plist"
+  mkdir -p "$HOME/Library/LaunchAgents"
+  cat > "$PLIST" <<__PLIST__
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.truss.agent-${host.id}</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/sh</string>
+    <string>-c</string>
+    <string>set -a; . "$DEST/agent-${host.id}.env"; set +a; exec $(command -v node) "$DEST/node-agent.mjs"</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>$DEST/agent-${host.id}.log</string>
+  <key>StandardErrorPath</key>
+  <string>$DEST/agent-${host.id}.log</string>
+</dict>
+</plist>
+__PLIST__
+  launchctl bootstrap "gui/$(id -u)" "$PLIST" 2>/dev/null || launchctl load "$PLIST" 2>/dev/null || true
+  launchctl kickstart "gui/$(id -u)/com.truss.agent-${host.id}" 2>/dev/null || true
+  if launchctl print "gui/$(id -u)/com.truss.agent-${host.id}" >/dev/null 2>&1; then
+    echo "service up:   launchd agent com.truss.agent-${host.id} (running now, starts at login)"
+    echo "logs:         $DEST/agent-${host.id}.log"
+  else
+    echo "could not auto-start the agent (no console session?). Run it:"
+    echo "  set -a; . \\"$DEST/agent-${host.id}.env\\"; set +a; node $DEST/node-agent.mjs"
+  fi
+elif command -v systemctl >/dev/null 2>&1 && systemctl --user >/dev/null 2>&1; then
   UNIT="$HOME/.config/systemd/user/truss-agent-${host.id}.service"
   mkdir -p "$HOME/.config/systemd/user"
   cat > "$UNIT" <<__UNIT__
@@ -162,6 +202,9 @@ __UNIT__
   systemctl --user daemon-reload
   systemctl --user enable --now "truss-agent-${host.id}.service"
   echo "service up:   systemctl --user status truss-agent-${host.id}.service"
+else
+  echo "no launchd or systemd here. Run the agent yourself:"
+  echo "  set -a; . \\"$DEST/agent-${host.id}.env\\"; set +a; node $DEST/node-agent.mjs"
 fi
 echo
 echo "the agent dials OUT to ${wsUrl} — no inbound ports needed on this host."

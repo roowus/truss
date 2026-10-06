@@ -478,3 +478,29 @@ test("init fires the boot-time catalog probe once the harness list lands", async
     store.set(before);
   }
 });
+
+test("pair.changed refetches hosts; only a fresh ask toasts (the Allow click must not sit unseen)", () => {
+  /* issue #111 review: the auto-pair installer announces the device and the
+     server broadcasts pair.changed — the store must refetch /api/hosts (the
+     pendingPair list the sidebar renders) immediately, and toast only on
+     "requested" (a decision is the operator's own act — no toast) */
+  const s = store as unknown as {
+    onFrame: (f: { seq: number; ev: unknown }) => void;
+    refreshHosts: () => Promise<void>;
+  };
+  let refetches = 0;
+  const toastsBefore = store.state.toasts.length;
+  s.refreshHosts = async () => {
+    refetches++;
+  };
+  try {
+    s.onFrame({ seq: 40, ev: { type: "pair.changed", sessionId: "", event: "requested", request: { id: "x", hostname: "macmini", os: "macos", expiresAt: 0 } } as never });
+    assert.equal(refetches, 1, "the pending list refetches the moment a device asks");
+    assert.equal(store.state.toasts.length, toastsBefore + 1, "and the ask toasts");
+    s.onFrame({ seq: 41, ev: { type: "pair.changed", sessionId: "", event: "resolved", request: { id: "x", hostname: "macmini", os: "macos", expiresAt: 0 } } as never });
+    assert.equal(refetches, 2, "a decision refetches too (the row disappears)");
+    assert.equal(store.state.toasts.length, toastsBefore + 1, "but only the ask toasts");
+  } finally {
+    delete (s as Record<string, unknown>).refreshHosts;
+  }
+});

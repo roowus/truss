@@ -755,7 +755,9 @@ export function createDemoBackend(): Backend {
     gitGraph: async () => ({ graph: "* a1b2c3d (HEAD -> main) demo commit\n* e4f5g6h earlier work\n" }),
     gitDiff: async (_cwd, path) => ({ diff: `--- a/${path}\n+++ b/${path}\n@@ -1,1 +1,2 @@\n // demo\n+// changed\n` }),
     gitSwitch: async (_cwd, branch) => ({ branch }),
-    hosts: async () => ({ hosts: demoHosts }),
+    hosts: async () => ({ hosts: demoHosts, pendingPair: [] }),
+    approvePairRequest: async () => ({ ok: true, hostId: "demo-host" }),
+    denyPairRequest: async () => ({ ok: true }),
     createHost: async (label: string) => ({ host: { id: "new-host", label, tokenPrefix: "…demo02", createdAt: Date.now(), revoked: false, note: "", online: false } as never, token: "truss_agent_demo" }),
     setSessionModel: async () => ({ mode: "stored" as const }),
     trash: async () => ({ sessions: [] }),
@@ -777,11 +779,22 @@ export function createDemoBackend(): Backend {
       demoHosts = demoHosts.filter((h) => h.id !== id);
       return { ok: true };
     },
-    pairHost: async (_id, _t, serverUrl) => ({ code: "k3xm7q", expiresAt: Date.now() + 600_000, url: `${serverUrl}/i/k3xm7q`, command: `curl -fsSL ${serverUrl}/i/k3xm7q | sh` }),
+    renameHost: async (id, label) => {
+      await net(20);
+      const h = demoHosts.find((x) => x.id === id);
+      if (!h) throw new ApiError(404, `no such host: ${id}`);
+      const next = label.trim().slice(0, 64);
+      if (!next) throw new ApiError(400, "label must not be blank");
+      h.label = next;
+      return { ok: true };
+    },
+    pairHost: async (_id, _t, serverUrl) => ({ code: "k3xm", expiresAt: Date.now() + 600_000, url: `${serverUrl}/i/k3xm`, command: `curl -fsSL ${serverUrl}/i/k3xm | sh` }),
     taildropHost: async (id) => {
       const file = demoDropName(id);
       return { ok: true, file, command: `sh ~/Downloads/${file}`, typedChars: `sh ~/Downloads/${file}`.length };
     },
+    /* mirrors src/installer.ts deliveryOptions — the demo and the server must
+       never disagree (interactive auto-pairs: no code to type, issue #111) */
     deliveryOptions: async (id, peer, _t, serverUrl) => ({
       options: [
         ...(peer
@@ -790,7 +803,8 @@ export function createDemoBackend(): Backend {
               return [{ kind: "taildrop" as const, label: "Send the installer to the device, then run it", command, typedChars: command.length }];
             })()
           : []),
-        { kind: "pairing" as const, label: "Type a short command with a one-time code", command: `curl -fsSL ${serverUrl}/i/xxxxxx | sh`, typedChars: `curl -fsSL ${serverUrl}/i/xxxxxx | sh`.length },
+        { kind: "interactive" as const, label: "Type one short command; it asks to pair and you approve here", command: `curl -fsSL ${serverUrl}/i | sh`, typedChars: `curl -fsSL ${serverUrl}/i | sh`.length },
+        { kind: "pairing" as const, label: "Type a short command with a one-time code", command: `curl -fsSL ${serverUrl}/i/xxxx | sh`, typedChars: `curl -fsSL ${serverUrl}/i/xxxx | sh`.length },
       ].sort((a, b) => a.typedChars - b.typedChars),
     }),
     sshInstall: async () => ({ ok: true }),
@@ -871,6 +885,16 @@ export function createDemoBackend(): Backend {
     pinSession: async (id, pinned) => {
       const sess = sessions.get(id);
       if (sess) (sess.meta as any).pinned = pinned;
+      return { ok: true };
+    },
+    async renameSession(id, title) {
+      await net(20);
+      const sess = sessions.get(id);
+      if (!sess) throw new ApiError(404, `no such session: ${id}`);
+      const next = title.trim().slice(0, 64);
+      if (!next) throw new ApiError(400, "title must not be blank");
+      sess.meta.title = next;
+      emit(sess, { type: "session.updated", title: next });
       return { ok: true };
     },
     credentials: async () => ({ routes: [], service: "demo", serviceActive: false }),

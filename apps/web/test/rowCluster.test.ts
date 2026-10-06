@@ -93,14 +93,17 @@ test("archived rows unarchive instead of shell/archive; dead rows drop close", a
   const mod = await load();
   assert.ok(mod, "sessionRowActions must exist (see module test)");
 
+  /* "open-all" (issue #147) leads after the pin everywhere outside trash:
+     the row's old double-click (chat + trajectory + context) survives as an
+     explicit action now that the name's double-click is rename */
   const live = mod.sessionRowActions({ pinned: false });
-  assert.deepEqual(live.map((a) => a.id), ["pin", "shell", "archive", "close", "trash"], "the live row's full cluster");
+  assert.deepEqual(live.map((a) => a.id), ["pin", "open-all", "shell", "archive", "close", "trash"], "the live row's full cluster");
 
   const dead = mod.sessionRowActions({ pinned: false, dead: true });
-  assert.deepEqual(dead.map((a) => a.id), ["pin", "shell", "archive", "trash"], "a dead session has no process left to stop — no close");
+  assert.deepEqual(dead.map((a) => a.id), ["pin", "open-all", "shell", "archive", "trash"], "a dead session has no process left to stop — no close");
 
   const archived = mod.sessionRowActions({ pinned: false, archived: true });
-  assert.deepEqual(archived.map((a) => a.id), ["pin", "unarchive", "trash"], "an archived row restores, never re-archives");
+  assert.deepEqual(archived.map((a) => a.id), ["pin", "open-all", "unarchive", "trash"], "an archived row restores, never re-archives");
 
   for (const [name, acts] of Object.entries({ live, dead, archived })) {
     assert.equal(acts.at(-1)!.danger, true, `${name}: destructive still rides last`);
