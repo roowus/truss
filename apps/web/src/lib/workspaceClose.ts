@@ -131,6 +131,7 @@ export function freshPanels(panels: PanelDescriptor[], exists: (id: string) => b
 
 export interface ChordEvent {
   key: string;
+  code?: string;
   metaKey?: boolean;
   ctrlKey?: boolean;
   altKey?: boolean;
@@ -161,9 +162,17 @@ const chord = (e: ChordEvent, key: string) =>
   (e.metaKey === true || e.ctrlKey === true) && e.shiftKey === true && e.key.toLowerCase() === key;
 
 /* The strip's own pattern (Alt+Shift+T adds a tab): exactly Alt+Shift, no
-   Cmd/Ctrl — extra modifiers mean some other gesture. */
-const altChord = (e: ChordEvent, key: string) =>
-  e.altKey === true && e.shiftKey === true && e.metaKey !== true && e.ctrlKey !== true && e.key.toLowerCase() === key;
+   Cmd/Ctrl — extra modifiers mean some other gesture. Matches on the
+   physical code as well as the letter: on macOS Option is a composer, so
+   Option+Shift+W reports a composed glyph as e.key („ on US layouts) and a
+   letter-only match would be dead there — e.code ("KeyW") is
+   layout/composer-independent (PR #184 audit, B1). */
+const altChord = (e: ChordEvent, key: string, code: string) =>
+  e.altKey === true &&
+  e.shiftKey === true &&
+  e.metaKey !== true &&
+  e.ctrlKey !== true &&
+  (e.key.toLowerCase() === key || e.code === code);
 
 /**
  * Alt+Shift+W closes the active workspace — the chord browsers actually
@@ -174,7 +183,7 @@ const altChord = (e: ChordEvent, key: string) =>
  * mid-typing). The advertised Alt+Shift chord follows the strip pattern and,
  * like Alt+Shift+T, yields while typing. Plain Cmd+W stays the tab close.
  */
-export const isCloseWindowChord = (e: ChordEvent, typing = false) => chord(e, "w") || (altChord(e, "w") && !typing);
+export const isCloseWindowChord = (e: ChordEvent, typing = false) => chord(e, "w") || (altChord(e, "w", "KeyW") && !typing);
 
 /**
  * Cmd/Ctrl+Shift+Z reopens whatever closed last — a tab, a tab group, or a

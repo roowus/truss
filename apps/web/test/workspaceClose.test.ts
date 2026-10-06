@@ -19,9 +19,13 @@ import assert from "node:assert/strict";
        — closing the ACTIVE workspace activates the neighbor to its LEFT
          (Chrome's rule), falling back right; closing a background workspace
          keeps the active one;
-     isCloseWindowChord(e) / isReopenClosedChord(e)
-       — Cmd/Ctrl+Shift+W and Cmd/Ctrl+Shift+T, case-insensitive, unshifted
-         chords never fire;
+     isCloseWindowChord(e, typing?) / isReopenClosedChord(e, typing?)
+       — advertised chords browsers actually deliver: Alt+Shift+W closes
+         (yields while typing; mac-composed glyphs match via e.code) and
+         Cmd/Ctrl+Shift+Z reopens (stays text redo while typing); the
+         browser-reserved Cmd/Ctrl+Shift+W / Shift+T stay as legacy aliases
+         that fire window-level wherever a setup delivers them;
+         case-insensitive, unshifted chords never fire;
      pushClosed(stack, snapshot) / popClosed(stack)
        — the undo stack for "reopen what I closed" (capped; LIFO; the
          snapshot carries name + layout so the workspace returns as it was). */
@@ -33,6 +37,7 @@ interface Space {
 }
 interface ChordEv {
   key: string;
+  code?: string;
   metaKey?: boolean;
   ctrlKey?: boolean;
   altKey?: boolean;
@@ -84,6 +89,13 @@ test("the chords: Alt+Shift+W closes, Cmd/Ctrl+Shift+Z reopens — and only thos
      legacy alias for keyboard-lock/embedded setups that pass it through. */
   assert.ok(mod.isCloseWindowChord({ key: "w", altKey: true, shiftKey: true }), "the advertised close chord (issue #181)");
   assert.ok(mod.isCloseWindowChord({ key: "W", altKey: true, shiftKey: true }), "caps-tolerant");
+  /* macOS: Option is a composer — Option+Shift+W reports a composed glyph as
+     e.key („ on US layouts), so the chord also matches the physical e.code;
+     that same OR covers AZERTY, where the physical W cap is labeled Z */
+  assert.ok(mod.isCloseWindowChord({ key: "„", code: "KeyW", altKey: true, shiftKey: true }), "mac-composed glyph still fires via e.code (audit B1)");
+  assert.ok(!mod.isCloseWindowChord({ key: "„", code: "KeyW", altKey: true, shiftKey: true }, true), "the mac chord yields while typing too");
+  assert.ok(mod.isCloseWindowChord({ key: "z", code: "KeyW", altKey: true, shiftKey: true }), "AZERTY: the physical W cap is labeled Z");
+  assert.ok(!mod.isCloseWindowChord({ key: "x", code: "KeyX", altKey: true, shiftKey: true }), "neither letter nor code, no fire");
   assert.ok(!mod.isCloseWindowChord({ key: "w", altKey: true, shiftKey: true }, true), "Alt+Shift+W yields while typing, like Alt+Shift+T");
   assert.ok(mod.isCloseWindowChord({ key: "w", metaKey: true, shiftKey: true }), "legacy mac chord");
   assert.ok(mod.isCloseWindowChord({ key: "W", ctrlKey: true, shiftKey: true }), "legacy win/linux chord, caps-tolerant");
