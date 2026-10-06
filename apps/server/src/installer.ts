@@ -176,11 +176,14 @@ sh "$SCRIPT" "$TOKEN"
 
 /**
  * The browser pairing page (issue #111 review rounds), served at GET /p.
- * Minimum work, and no code anywhere: Download is a plain anchor to the
- * generic auto-pairing installer (GET /i with an attachment header), which
- * asks to join when it runs; the user approves in the Truss UI:
+ * Minimum work, and no code anywhere: Download fetches the generic
+ * auto-pairing installer (GET /i) under a FRESH random name and the page
+ * then shows the run command with that exact name — a browser that dedupes
+ * an earlier download ("t.sh (2)") can no longer strand the instruction on
+ * the wrong file. The installer asks to join when it runs; the user
+ * approves in the Truss UI:
  *
- *   open link / scan QR → Download → `sh ~/Downloads/t.sh` → click Allow.
+ *   open link / scan QR → Download → run the shown command → click Allow.
  *
  * The page embeds nothing at all (a fully static string: no interpolation,
  * no injection surface) and no state changes hands here: the download never
@@ -236,26 +239,28 @@ export function pairingPage(): string {
     <span class="n">1</span>
     <div>
       <p>Download the installer.</p>
-      <a class="dl" href="/i" download="t.sh">
+      <button class="dl" type="button" id="dl">
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3 v12"/><path d="M6 11 l6 6 6-6"/><path d="M4 21 h16"/></svg>
         Download installer
-      </a>
+      </button>
       <p class="hint">A couple of KB, and it carries no credentials: download it as many times as you like.</p>
+      <p id="err" role="alert" style="color:#ef6b5b;font-size:11.5px;margin:8px 0 0" hidden></p>
     </div>
   </section>
 
-  <section class="step">
+  <section class="step" id="runstep" hidden>
     <span class="n">2</span>
     <div style="flex:1">
       <p>Run it in a terminal on this machine.</p>
       <div class="cmd">
-        <code>sh ~/Downloads/t.sh</code>
+        <code id="runcmd"></code>
         <button class="copy" id="copy" type="button">Copy</button>
       </div>
+      <p class="hint">The exact name of the file you just downloaded, so a browser rename can not break it. On a Mac the installer also registers itself to start at login, so this is the last command you will run.</p>
     </div>
   </section>
 
-  <section class="step">
+  <section class="step" id="approvestep" hidden>
     <span class="n">3</span>
     <div>
       <p>Click <b>Allow</b> in Truss when it asks.</p>
@@ -264,11 +269,44 @@ export function pairingPage(): string {
   </section>
 </main>
 <script>
-var copyBtn = document.getElementById("copy");
+var dl = document.getElementById("dl"), err = document.getElementById("err"),
+    runStep = document.getElementById("runstep"), approveStep = document.getElementById("approvestep"),
+    runCmd = document.getElementById("runcmd"), copyBtn = document.getElementById("copy");
+
+dl.addEventListener("click", function () {
+  err.hidden = true;
+  dl.disabled = true;
+  /* a fresh name per click (issue #111 review: a browser that dedupes an
+     earlier t.sh to "t.sh (2)" left the page's static instruction pointing
+     at the wrong file) — the run command below uses this exact name */
+  var name = "truss-pair-" + Math.random().toString(36).slice(2, 6) + ".sh";
+  fetch("/i").then(function (r) {
+    if (!r.ok) throw new Error("http " + r.status);
+    return r.blob();
+  }).then(function (blob) {
+    var a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = name;
+    a.click();
+    /* Safari can abort the download when the blob URL dies in the same tick
+       (audit B1) — revoke lazily; one retained blob on a transient page is
+       harmless, a missing file is not */
+    setTimeout(function () { URL.revokeObjectURL(a.href); }, 10000);
+    runCmd.textContent = "sh ~/Downloads/" + name;
+    runStep.hidden = false;
+    approveStep.hidden = false;
+    dl.disabled = false;
+  }).catch(function () {
+    err.textContent = "Could not download the installer. Check the address, then retry.";
+    err.hidden = false;
+    dl.disabled = false;
+  });
+});
+
 copyBtn.addEventListener("click", function () {
   var done = function () { copyBtn.textContent = "Copied"; setTimeout(function () { copyBtn.textContent = "Copy"; }, 1500); };
   if (navigator.clipboard && navigator.clipboard.writeText) {
-    navigator.clipboard.writeText("sh ~/Downloads/t.sh").then(done, function () { copyBtn.textContent = "Select it above"; });
+    navigator.clipboard.writeText(runCmd.textContent).then(done, function () { copyBtn.textContent = "Select it above"; });
   } else {
     copyBtn.textContent = "Select it above";
   }

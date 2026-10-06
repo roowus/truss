@@ -139,22 +139,24 @@ test("GET /i with a metacharacter Host header refuses to embed it (400)", async 
 });
 
 /* review rounds (issue #111): the browser half of the floor — /p is a static
-   page whose Download button is a plain anchor to the generic /i script
-   (nothing burns, download it freely), and the handshake is the Allow click
-   in the Truss UI. */
-test("GET /p serves the browser pairing page: download, run, approve — no code anywhere", async () => {
+   page whose Download button fetches the generic /i script under a FRESH
+   random name (a browser that dedupes an earlier download to "t.sh (2)" left
+   the static instruction pointing at the wrong file — found in manual test),
+   and the page then shows the run command with that exact name. The
+   handshake is the Allow click in the Truss UI; no code anywhere. */
+test("GET /p serves the browser pairing page: download, run the exact-named file, approve", async () => {
   const res = await fetch(`${srv.base}/p`);
   assert.equal(res.status, 200, "the page exists");
   assert.match(res.headers.get("content-type") ?? "", /text\/html/, "a page, not a script");
   const body = await res.text();
   assert.ok(body.includes("<!doctype html"), "actually html");
-  assert.match(body, /href="\/i"[^>]*download="t\.sh"/, "the Download button is the generic auto-pair script, saved as t.sh");
-  assert.ok(!body.includes('"/i/"'), "no per-code redeem path survives in the page");
-  assert.ok(!/aria-label="pairing code"/.test(body), "no code box — the Allow click replaced it");
+  assert.match(body, /fetch\("\/i"\)/, "the Download button fetches the generic auto-pair script");
+  assert.match(body, /truss-pair-/, "downloads get a fresh name per click");
+  assert.match(body, /"sh ~\/Downloads\/" \+ name/, "the run command shows the exact downloaded name (dedup-proof)");
+  assert.ok(!body.includes("aria-label=\"pairing code\""), "no code box — the Allow click replaced it");
   assert.match(body, /Allow/, "the page names the approval step");
-  assert.match(body, /sh ~\/Downloads\/t\.sh/, "the terminal step is the short local path");
   assert.ok(!/truss_agent_[0-9a-f]{10,}/.test(body), "the page is token-free like the /i script");
 
   const script = await fetch(`${srv.base}/i`);
-  assert.match(script.headers.get("content-disposition") ?? "", /attachment; filename="t\.sh"/, "browsers download /i as t.sh (curl ignores it)");
+  assert.match(script.headers.get("content-disposition") ?? "", /attachment; filename="t\.sh"/, "browsers that land on /i directly still download (curl ignores it)");
 });
