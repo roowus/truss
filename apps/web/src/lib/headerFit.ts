@@ -58,10 +58,10 @@ export function planHeaderFit(
    regular members since issue #145 — roomy headers inline them next to
    trajectory, narrow headers collapse them into the ⋯ menu rightmost-first
    (shell first, trajectory last). The model Select left this cluster in
-   issue #143 — it lives in the composer bar now, so the header never plans
-   for it (not even as overflow).
-   `stop` and `more` are essential: the interrupt stays reachable and the ⋯
-   menu is the overflow trigger's home. That trigger is rendered on every
+   issue #143 and Stop left in issue #179 — both live in the composer bar
+   now, so the header never plans for them (not even as overflow).
+   `more` is essential: the ⋯ menu is the overflow trigger's home. That
+   trigger is rendered on every
    plan (its menu always carries the utility block — copy reference, resume,
    the id dump — so it is never the empty dead-weight button `needsMore`
    guards against), so it is priced here, once — ChatPanel reserves
@@ -72,7 +72,6 @@ export function planHeaderFit(
    cluster, so a width that drifts here fails there instead of quietly
    diverging from the rendered header. */
 export const HEADER_CLUSTER: HeaderFitItem[] = [
-  { id: "stop", width: 58, essential: true },
   { id: "trajectory", width: 28 },
   { id: "context", width: 28 },
   { id: "team", width: 28 },
