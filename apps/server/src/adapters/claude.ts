@@ -2,7 +2,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import type { ProtoEvent } from "@truss/proto";
 import type { AdapterHandle, HarnessAdapter, SessionOpts } from "./types.js";
 import { cwdFallbackNote, resolveCwd } from "./types.js";
-import { modelRouterBaseUrl, modelRouterEnabled } from "../router-resolve.js";
+import { claudeAnthropicBaseUrl } from "../router-resolve.js";
 
 /**
  * Claude Code adapter — bidirectional stream-json over stdio.
@@ -30,10 +30,9 @@ import { modelRouterBaseUrl, modelRouterEnabled } from "../router-resolve.js";
    derives TRUSS_MCP_BASE/TRUSS_CLAUDE_BASE_URL from its --server flag at
    startup, but ESM hoisting evaluates module scope before that code runs —
    module-scope reads would freeze the loopback defaults and point the perms
-   MCP at the agent's own dead loopback. */
-const anthropicBaseUrl = () =>
-  process.env.TRUSS_CLAUDE_BASE_URL ??
-  (modelRouterEnabled() ? modelRouterBaseUrl() : "http://127.0.0.1:45821/api/anthropic");
+   MCP at the agent's own dead loopback. The precedence itself lives in
+   router-resolve.ts (claudeAnthropicBaseUrl) so a test pins it (audit B4). */
+const anthropicBaseUrl = claudeAnthropicBaseUrl;
 const defaultModel = () => process.env.TRUSS_CLAUDE_MODEL ?? "glm-4.7";
 /** tests/ops can point at a different claude binary (issue #97) */
 const CLAUDE_BIN = process.env.TRUSS_CLAUDE_BIN ?? "claude";

@@ -155,6 +155,20 @@ test("request: orphan tool_result (its tool_use compacted away) degrades to user
   assert.match(out.messages[0].content, /partial output/);
 });
 
+test("request: a thinking-only assistant turn becomes empty-string content, not null (strict providers 400 bare null)", () => {
+  const out = anthropicToOpenaiRequest({
+    ...BASE_REQ,
+    messages: [
+      { role: "user", content: "go" },
+      { role: "assistant", content: [{ type: "thinking", thinking: "hmm", signature: "s" }] },
+      { role: "user", content: "continue" },
+    ],
+  }) as any;
+  assert.equal(out.messages[1].role, "assistant");
+  assert.equal(out.messages[1].content, "");
+  assert.ok(!("tool_calls" in out.messages[1]));
+});
+
 test("request: images map to image_url parts (base64 → data URL, url passthrough)", () => {
   const out = anthropicToOpenaiRequest({
     ...BASE_REQ,

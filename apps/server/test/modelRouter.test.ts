@@ -21,7 +21,14 @@ import http from "node:http";
      passes through on Anthropic routes and estimates on OpenAI ones. */
 
 import { assembleCatalog, createModelRouterHandler, type ProviderRoute } from "../src/model-router.js";
-import { modelRouterBaseUrl, modelRouterEnabled, modelRouterPort, resolveRoute, type RouteCatalogEntry } from "../src/router-resolve.js";
+import {
+  claudeAnthropicBaseUrl,
+  modelRouterBaseUrl,
+  modelRouterEnabled,
+  modelRouterPort,
+  resolveRoute,
+  type RouteCatalogEntry,
+} from "../src/router-resolve.js";
 
 interface FakeUpstream {
   url: string;
@@ -132,14 +139,41 @@ test("the rollout gate: TRUSS_MODEL_ROUTER switches claude's default base URL; a
     assert.equal(modelRouterBaseUrl(), "http://127.0.0.1:45826");
     process.env.TRUSS_MODEL_ROUTER_PORT = "45900";
     assert.equal(modelRouterBaseUrl(), "http://127.0.0.1:45900");
-    /* the adapter's precedence — explicit env beats the gate — is one line
-       in adapters/claude.ts:
-         TRUSS_CLAUDE_BASE_URL ?? (enabled ? router : zai)
-       so remote node-agents (which always set the env from --server) are
-       never rerouted by the gate */
   } finally {
     if (savedGate === undefined) delete process.env.TRUSS_MODEL_ROUTER;
     else process.env.TRUSS_MODEL_ROUTER = savedGate;
+    if (savedPort === undefined) delete process.env.TRUSS_MODEL_ROUTER_PORT;
+    else process.env.TRUSS_MODEL_ROUTER_PORT = savedPort;
+  }
+});
+
+test("claudeAnthropicBaseUrl: the adapter's precedence line, pinned (audit B4)", () => {
+  const savedGate = process.env.TRUSS_MODEL_ROUTER;
+  const savedExplicit = process.env.TRUSS_CLAUDE_BASE_URL;
+  const savedPort = process.env.TRUSS_MODEL_ROUTER_PORT;
+  try {
+    delete process.env.TRUSS_MODEL_ROUTER_PORT;
+
+    /* gate off → today's direct z.ai route, untouched */
+    delete process.env.TRUSS_MODEL_ROUTER;
+    delete process.env.TRUSS_CLAUDE_BASE_URL;
+    assert.equal(claudeAnthropicBaseUrl(), "http://127.0.0.1:45821/api/anthropic");
+
+    /* gate on → the router's loopback endpoint */
+    process.env.TRUSS_MODEL_ROUTER = "1";
+    assert.equal(claudeAnthropicBaseUrl(), "http://127.0.0.1:45826");
+
+    /* explicit env beats the gate — remote node-agents always set it from
+       --server, so the gate can never reroute them */
+    process.env.TRUSS_CLAUDE_BASE_URL = "http://100.64.0.1:45821/api/anthropic";
+    assert.equal(claudeAnthropicBaseUrl(), "http://100.64.0.1:45821/api/anthropic");
+    delete process.env.TRUSS_MODEL_ROUTER;
+    assert.equal(claudeAnthropicBaseUrl(), "http://100.64.0.1:45821/api/anthropic", "explicit env also beats the off-state default");
+  } finally {
+    if (savedGate === undefined) delete process.env.TRUSS_MODEL_ROUTER;
+    else process.env.TRUSS_MODEL_ROUTER = savedGate;
+    if (savedExplicit === undefined) delete process.env.TRUSS_CLAUDE_BASE_URL;
+    else process.env.TRUSS_CLAUDE_BASE_URL = savedExplicit;
     if (savedPort === undefined) delete process.env.TRUSS_MODEL_ROUTER_PORT;
     else process.env.TRUSS_MODEL_ROUTER_PORT = savedPort;
   }

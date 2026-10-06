@@ -246,7 +246,10 @@ function estimateTokens(body: any): number {
 export function createModelRouterHandler(deps: ModelRouterDeps = {}): http.RequestListener {
   const providers = deps.providers ?? MODEL_ROUTER_PROVIDERS;
   const fetchImpl = deps.fetchImpl ?? fetch;
-  const catalogFn = deps.catalogFn ?? (() => routerCatalog({ fetchImpl }));
+  /* the default catalog goes through the TTL cache (audit B1): passing
+     fetchImpl here would disable it, and every completion would pay a
+     config read + a blocking systemctl spawn + a live 9router probe */
+  const catalogFn = deps.catalogFn ?? (() => routerCatalog());
 
   const providerById = new Map(providers.map((p) => [p.id, p]));
   const fallback = providerById.get(FALLBACK_PROVIDER) ?? providers[0];

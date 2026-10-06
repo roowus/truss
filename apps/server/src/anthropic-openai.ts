@@ -146,7 +146,9 @@ function convertMessages(input: AnthropicRequest["messages"]): OpenAIMessage[] {
         /* thinking blocks are dropped: OpenAI-shaped providers own their
            reasoning and never verify anthropic signatures */
       }
-      out.push({ role, content: text || null, ...(calls.length ? { tool_calls: calls } : {}) });
+      /* content is null only when tool_calls ride along (spec-legal); a
+         thinking-only turn becomes "" — some providers 400 a bare null */
+      out.push({ role, content: text || (calls.length ? null : ""), ...(calls.length ? { tool_calls: calls } : {}) });
       pendingToolIds = calls.map((c) => c.id);
       continue;
     }

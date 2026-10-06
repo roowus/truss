@@ -50,3 +50,14 @@ export function modelRouterPort(): number {
 export function modelRouterBaseUrl(): string {
   return `http://127.0.0.1:${modelRouterPort()}`;
 }
+
+/** claude's Anthropic base URL: an explicit TRUSS_CLAUDE_BASE_URL always
+    wins (remote node-agents set it from --server, so the gate never
+    reroutes them); otherwise the gate decides between the router and
+    today's direct z.ai route (issue #188, step 3) */
+export function claudeAnthropicBaseUrl(): string {
+  return (
+    process.env.TRUSS_CLAUDE_BASE_URL ??
+    (modelRouterEnabled() ? modelRouterBaseUrl() : "http://127.0.0.1:45821/api/anthropic")
+  );
+}
