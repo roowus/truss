@@ -186,7 +186,10 @@ function ChatHeader({ id }: { id: string }) {
         {plan.visible.includes("context") && (
           <IconBtn icon="gauge" label="Context usage" onClick={() => openPanel("context", { sessionId: id })} />
         )}
-        {plan.visible.includes("team") && (
+        {/* double-gated like select/stop: the initial plan names team
+            visible, so without the capability check it would flash for one
+            paint on harnesses that never run subagents */}
+        {!!caps?.subagents && plan.visible.includes("team") && (
           <IconBtn icon="tree" label="Subagent team" onClick={() => openPanel("team", { sessionId: id })} />
         )}
         {plan.visible.includes("skills") && (
