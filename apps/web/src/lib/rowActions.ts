@@ -35,24 +35,21 @@ export interface SessionRowAction {
   visible: "always" | "hover";
 }
 
+/* The sidebar no longer renders trash rows — deleted chats are restored or
+   purged from the Trash tab (issue #146; the strip was removed on developer
+   feedback, PR #153), so sessionRowActions only models live/archived rows. */
 export function sessionRowActions(state: {
   pinned: boolean;
   archived?: boolean;
   dead?: boolean;
-  trashView?: boolean;
 }): SessionRowAction[] {
-  /* a trash row's session is out of the live list — pin/close/archive don't
-     apply; restore or purge are the only moves (and pin stays hidden there,
-     as before) */
-  if (state.trashView) {
-    return [
-      { id: "restore", icon: "retry", label: "Restore (back to the sidebar, history intact)", visible: "hover" },
-      { id: "purge", icon: "trash", label: "Delete forever (no undo)", danger: true, confirm: true, visible: "hover" },
-    ];
-  }
   const pin = pinAffordance(state.pinned);
   const actions: SessionRowAction[] = [
     { id: "pin", icon: pin.icon, label: pin.actionLabel, visible: pin.visible },
+    /* the displaced gesture (issue #147): the row's double-click used to
+       open chat + trajectory + context; the name's double-click is rename
+       now, so the layout open lives on as an explicit action */
+    { id: "open-all", icon: "layout", label: "Open chat + trajectory + context", visible: "hover" },
   ];
   if (state.archived) {
     actions.push({ id: "unarchive", icon: "archive", label: "Restore to the sidebar", visible: "hover" });
@@ -68,6 +65,17 @@ export function sessionRowActions(state: {
   }
   actions.push({ id: "trash", icon: "trash", label: "Move to trash (recoverable for 30 days)", danger: true, confirm: true, visible: "hover" });
   return actions;
+}
+
+/* Issue #140: how the session row's action cluster rests. A cluster with no
+   always-visible member hides wholesale until hover — nothing reserves
+   space, so the timestamp+dot sit at the row's true right edge (before this,
+   the unpinned pin kept a ~24px slot via opacity-0, floating the cluster off
+   the edge). A pinned row's cluster rests visible with ONLY the solid pin.
+   Hover members take zero layout space at rest. */
+export function clusterRestState(acts: SessionRowAction[]): { cls: string; resting: SessionRowAction[] } {
+  const resting = acts.filter((a) => a.visible === "always");
+  return { cls: resting.length > 0 ? "flex" : "hidden group-hover:flex", resting };
 }
 
 export function shellRowActions(shell: { id: string; alive?: boolean }): RowAction[] {

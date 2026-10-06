@@ -131,6 +131,18 @@ test("standaloneInstallScript embeds the token — a taildropped file runs with 
        delivery must not weaken the copy-command path's secrecy */
     const wizardScript = bundle.installScript(host.id, serverUrl);
     assert.ok(!wizardScript.includes(token), "installScript ($1-arg) still never embeds the token");
+
+    /* issue #111 review: "it just tells me another command to run" — the
+       installer must START the agent where the platform allows. macOS gets a
+       launchd LaunchAgent; the plist execs through the chmod-600 env file so
+       the token never lands in the 0644 plist; the manual run line survives
+       only as the fallback branch. */
+    assert.match(script, /Library\/LaunchAgents\/com\.truss\.agent-/, "macOS gets a launchd agent");
+    assert.match(script, /launchctl bootstrap/, "bootstrapped into the user's GUI session");
+    assert.match(script, /launchd agent .*running now, starts at login/, "and the output says so");
+    assert.ok(script.includes("systemctl --user"), "systemd user unit still covers Linux");
+    assert.ok(!/<string>[^<]*TRUSS_AGENT_TOKEN/.test(script), "the plist never carries the token — the env file does");
+    assert.ok(script.indexOf("Run the agent yourself") > 0 || script.indexOf("could not auto-start") > 0, "the manual command is the fallback, not the happy path");
   } finally {
     cleanup();
   }

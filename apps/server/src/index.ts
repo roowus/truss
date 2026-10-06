@@ -26,6 +26,7 @@ import {
   setBroadcaster,
   deleteSessions,
   purgeSession,
+  renameSession,
   restoreSession,
   type EventFrame,
 } from "./sessions.js";
@@ -47,10 +48,11 @@ import { listFeed, setFeedBroadcaster, setFeedState, shareFeedItem } from "./fee
 import { startFeedAutopost } from "./feed-autopost.js";
 import { startDoubletakePoll } from "./integrations/doubletake.js";
 import { composePractices, getGlobalPractices, saveGlobalPractices } from "./practices.js";
-import { createHost, deleteHost, getHost, isHostTombstoned, listHosts, rotateHostToken, setHostPinned, setHostRevoked, verifyAgentToken } from "./hosts.js";
+import { createHost, deleteHost, getHost, isHostTombstoned, listHosts, renameHost, rotateHostToken, setHostPinned, setHostRevoked, verifyAgentToken } from "./hosts.js";
 import { assertDialableServerUrl, netInfo, taildropToPeer, tailscalePeers, tailscaleServe, tailscaleSshOk, tailscaleSshRun } from "./net.js";
-import { deliveryOptions, installerDropName } from "./installer.js";
+import { deliveryOptions, installerDropName, interactiveInstallScript, pairingPage } from "./installer.js";
 import { mintPairing, redeemPairing, redeemRateOk } from "./pairing.js";
+import { approvePairRequest, createPairRequest, denyPairRequest, listPairRequests, pairRequestRateOk, readPairRequest, setPairBroadcaster } from "./pairrequests.js";
 import { agentBundleError, agentBundleHash, assertSafeServerUrl, ensureAgentBundle, standaloneInstallScript, installScript } from "./agentbundle.js";
 import { registerMcpPerms } from "./mcp-perms.js";
 import { importDshSessions } from "./import-dsh.js";
@@ -98,6 +100,8 @@ setBroadcaster((frame: EventFrame) => {
 /* feed/todo mutations ride the same bus as broadcast-only frames */
 setFeedBroadcaster((item) => broadcastRaw({ type: "feed.upsert", sessionId: item.sessionId ?? "", item }));
 setTodoBroadcaster((todo) => broadcastRaw({ type: "todo.upsert", sessionId: todo.sessionId ?? "", todo }));
+/* a device asking to pair must surface in the UI the moment it asks */
+setPairBroadcaster((event, request) => broadcastRaw({ type: "pair.changed", sessionId: "", event, request }));
 startFeedAutopost();
 /* doubletake research cards — a no-op until enabled in Settings */
 startDoubletakePoll();
@@ -438,6 +442,39 @@ app.post("/api/hosts/:id/ssh-install", async (req, reply) => {
   }
 });
 
+/* ── interactive pairing (issue #111): `curl -fsSL <host>/i | sh` is the
+   typing floor. The served script auto-pairs WhatsApp-style (review rounds):
+   it announces the device at POST /api/pair/request and polls until the user
+   clicks Allow in the UI, so nothing is typed and nothing secret is ever
+   baked into the command or the served file. ── */
+app.get("/i", async (req, reply) => {
+  /* the only embedded value is the address the client just used to reach us
+     (Host header + proxy proto) — client-controlled, so it goes through the
+     same shell-safe choke point as every other script embed */
+  const proto = req.headers["x-forwarded-proto"] === "https" ? "https" : "http";
+  const serverUrl = `${proto}://${req.headers.host ?? `127.0.0.1:${PORT}`}`;
+  try {
+    /* attachment + t.sh: a browser landing here (the /p page's Download
+       button) saves the generic script under the name the page says to run;
+       curl ignores the header, the pipe-to-sh contract is untouched */
+    return reply
+      .header("Content-Type", "text/x-shellscript; charset=utf-8")
+      .header("Content-Disposition", 'attachment; filename="t.sh"')
+      .send(interactiveInstallScript(serverUrl));
+  } catch (e: any) {
+    return reply.code(400).type("text/plain").send(`error: ${e.message ?? e}\n`);
+  }
+});
+
+/* the browser side of the same flow (issue #111 review rounds): open
+   <server>/p on the remote, click Download, run the saved file. The page
+   itself is static and token-free; the download is the generic auto-pair
+   installer from GET /i above, which asks to join and waits for the UI's
+   Allow click. */
+app.get("/p", async (_req, reply) => {
+  return reply.header("Content-Type", "text/html; charset=utf-8").send(pairingPage());
+});
+
 /* the pairing-code endpoint: redeem once, get the standalone script */
 app.get("/i/:code", async (req, reply) => {
   /* rate-limited per client (issue #1): the code keyspace is small by design,
@@ -449,7 +486,13 @@ app.get("/i/:code", async (req, reply) => {
   const entry = redeemPairing(code);
   if (!entry) return reply.code(410).type("text/plain").send("that install code is used up or expired — mint a fresh one from the Truss add-host wizard\n");
   try {
-    return reply.header("Content-Type", "text/x-shellscript; charset=utf-8").send(standaloneInstallScript(entry.hostId, entry.serverUrl, entry.token));
+    /* attachment + t.sh: a browser that lands here (from /p, or a directly
+       typed URL) downloads the installer under the name the pairing page
+       tells the user to run; curl ignores the header entirely */
+    return reply
+      .header("Content-Type", "text/x-shellscript; charset=utf-8")
+      .header("Content-Disposition", 'attachment; filename="t.sh"')
+      .send(standaloneInstallScript(entry.hostId, entry.serverUrl, entry.token));
   } catch (err) {
     return reply.code(400).type("text/plain").send(`error: ${err instanceof Error ? err.message : err}\n`);
   }
@@ -495,6 +538,62 @@ app.get("/api/metrics", async () => {
   return { local: { metrics: local, history: metricsHistory.get("local") ?? [] }, agents: agentsOut };
 });
 
+/* ── auto-pairing (issue #111, review rounds): the WhatsApp shape — the new
+   device announces itself, the user approves it in the UI, and the polling
+   installer receives the credentials exactly once. The Allow click is the
+   trust gate; the request itself carries only self-reported metadata. ── */
+app.get("/api/pair/ping", async () => ({ ok: true, name: "truss" })); // the installer's tailnet discovery probe
+
+app.post("/api/pair/request", async (req, reply) => {
+  if (!pairRequestRateOk(req.ip)) {
+    return reply.code(429).send({ error: "too many pairing requests. Wait a minute, then retry" });
+  }
+  const { hostname, os, tailscaleIp } = (req.body ?? {}) as { hostname?: string; os?: string; tailscaleIp?: string };
+  if (typeof hostname !== "string" || !hostname.trim()) return reply.code(400).send({ error: "hostname is required" });
+  /* the address the agent just used to reach us is the one it can dial home
+     to (same derivation as GET /i; client-controlled, so shell-check it) */
+  const proto = req.headers["x-forwarded-proto"] === "https" ? "https" : "http";
+  const serverUrl = `${proto}://${req.headers.host ?? `127.0.0.1:${PORT}`}`;
+  try {
+    assertSafeServerUrl(serverUrl);
+  } catch (e: any) {
+    return reply.code(400).send({ error: e.message });
+  }
+  /* req.ip is the one piece of evidence on the request the device did NOT
+     make up (audit round 8, B3) — the sidebar shows it beside the
+     self-reported hostname so an impersonator is visible before Allow */
+  const r = createPairRequest({ hostname, os: os ?? "", tailscaleIp }, serverUrl, req.ip);
+  return reply.code(202).send({ id: r.id, expiresAt: r.expiresAt });
+});
+
+app.get("/api/pair/request/:id", async (req, reply) => {
+  const { id } = req.params as { id: string };
+  const r = readPairRequest(id);
+  if (!r) return reply.code(410).send({ error: "that pairing request is expired, answered, or unknown" });
+  return r;
+});
+
+app.post("/api/pair/request/:id/approve", async (req, reply) => {
+  const { id } = req.params as { id: string };
+  /* the wizard passes its own hostId + in-memory plaintext token so the
+     device pairs INTO the wizard's host and its waiting screen is the one
+     that flips (manual test: a fresh host per approval split one device
+     into two records and left the wizard waiting forever). The token is
+     verified against the host's hash like every delivery route. */
+  const { hostId, token } = (req.body ?? {}) as { hostId?: string; token?: string };
+  if (hostId && typeof token !== "string") return reply.code(400).send({ error: "hostId needs its token" });
+  const r = approvePairRequest(id, hostId ? { hostId, token: token! } : undefined);
+  if (r === "token-mismatch") return reply.code(403).send({ error: "token doesn't match this host" });
+  if (!r) return reply.code(410).send({ error: "that pairing request is expired or already decided" });
+  return { ok: true, hostId: r.hostId };
+});
+
+app.post("/api/pair/request/:id/deny", async (req, reply) => {
+  const { id } = req.params as { id: string };
+  if (!denyPairRequest(id)) return reply.code(410).send({ error: "that pairing request is expired or already decided" });
+  return { ok: true };
+});
+
 /* ── registered remote hosts (registry + per-host tokens) ── */
 app.get("/api/hosts", async () => {
   const agentsNow = decoratedAgents();
@@ -505,6 +604,7 @@ app.get("/api/hosts", async () => {
       online: live.has(h.id),
       agent: agentsNow.find((a) => a.hostId === h.id),
     })),
+    pendingPair: listPairRequests(),
   };
 });
 app.post("/api/hosts", async (req, reply) => {
@@ -548,6 +648,17 @@ app.post("/api/hosts/:id/pin", async (req, reply) => {
     return { ok: true };
   } catch (e: any) {
     return reply.code(404).send({ error: e.message ?? String(e) });
+  }
+});
+/* the sidebar's double-click rename (issue #147) — the twin of the session
+   route from #141: trim, 64 cap, blank 400, ghost 404, the id untouched */
+app.post("/api/hosts/:id/rename", async (req, reply) => {
+  const { id } = req.params as { id: string };
+  const { label } = (req.body ?? {}) as { label?: string };
+  try {
+    return renameHost(id, String(label ?? ""));
+  } catch (e: any) {
+    return reply.code(e.status ?? 400).send({ error: e.message ?? String(e) });
   }
 });
 app.delete("/api/hosts/:id", async (req, reply) => {
@@ -731,6 +842,20 @@ app.post("/api/sessions/:id/pin", async (req, reply) => {
     return { ok: true };
   } catch (err) {
     return reply.code(404).send({ error: String(err) });
+  }
+});
+
+/* retitle a chat (issue #141): the tab's double-click rename lands here.
+   Blank is a 400 (a rename never erases a name), unknown id a 404; long
+   titles cap at 64 rather than reject — the terminal rule (#29) */
+app.post("/api/sessions/:id/rename", async (req, reply) => {
+  const { id } = req.params as { id: string };
+  const { title } = (req.body ?? {}) as { title?: string };
+  try {
+    return renameSession(id, String(title ?? ""));
+  } catch (err) {
+    const e = err as Error & { status?: number };
+    return reply.code(e.status ?? 400).send({ error: e.message ?? String(e) });
   }
 });
 

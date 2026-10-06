@@ -16,7 +16,7 @@ import assert from "node:assert/strict";
    The contract: session rows compose the same way — extend src/lib/rowActions.ts —
 
      sessionRowActions(state: {
-       pinned: boolean; archived?: boolean; dead?: boolean; trashView?: boolean;
+       pinned: boolean; archived?: boolean; dead?: boolean;
      }): RowAction[]
 
    where RowAction = { id, icon, label, danger?, visible: "always" | "hover" }.
@@ -38,7 +38,7 @@ interface RowAction {
   visible: "always" | "hover";
 }
 interface RowActionsModule {
-  sessionRowActions(state: { pinned: boolean; archived?: boolean; dead?: boolean; trashView?: boolean }): RowAction[];
+  sessionRowActions(state: { pinned: boolean; archived?: boolean; dead?: boolean }): RowAction[];
 }
 
 async function load(): Promise<RowActionsModule | null> {
@@ -84,37 +84,26 @@ test("destructive last (the #85 rule stands); badge/timestamps are NOT actions",
 
 /* ---- branch pins (added in PR #117 audit round 1) -------------------------
    The contract tests above only ever call sessionRowActions({ pinned }), so
-   the remaining input space — trashView, archived, dead — is pinned here.
-   The trash-view set matters most: it gates purgeSession, the row's only
-   permanently destructive action, and a silent regression there would
-   otherwise ship green. */
-
-test("trash view: exactly restore + purge, no pin, purge last and confirmed", async () => {
-  const mod = await load();
-  assert.ok(mod, "sessionRowActions must exist (see module test)");
-
-  for (const pinned of [true, false]) {
-    const acts = mod.sessionRowActions({ pinned, trashView: true });
-    assert.deepEqual(acts.map((a) => a.id), ["restore", "purge"], "trash rows offer exactly restore + purge — pin/close/archive don't apply to a session out of the live list");
-    const purge = acts.at(-1)!;
-    assert.equal(purge.danger, true, "purge is the destructive entry");
-    assert.equal(purge.confirm, true, "purge keeps the two-click confirm — dropping it makes purge a one-click permanent delete");
-    assert.ok(acts.every((a) => a.visible === "hover"), "no always-visible member in trash view, pinned or not");
-  }
-});
+   the remaining input space — archived, dead — is pinned here. (There was a
+   trashView branch for the sidebar's "recently deleted" strip; the strip is
+   gone — deleted chats restore/purge from the Trash tab, issue #146 — so the
+   branch and its pin left with it.) */
 
 test("archived rows unarchive instead of shell/archive; dead rows drop close", async () => {
   const mod = await load();
   assert.ok(mod, "sessionRowActions must exist (see module test)");
 
+  /* "open-all" (issue #147) leads after the pin everywhere outside trash:
+     the row's old double-click (chat + trajectory + context) survives as an
+     explicit action now that the name's double-click is rename */
   const live = mod.sessionRowActions({ pinned: false });
-  assert.deepEqual(live.map((a) => a.id), ["pin", "shell", "archive", "close", "trash"], "the live row's full cluster");
+  assert.deepEqual(live.map((a) => a.id), ["pin", "open-all", "shell", "archive", "close", "trash"], "the live row's full cluster");
 
   const dead = mod.sessionRowActions({ pinned: false, dead: true });
-  assert.deepEqual(dead.map((a) => a.id), ["pin", "shell", "archive", "trash"], "a dead session has no process left to stop — no close");
+  assert.deepEqual(dead.map((a) => a.id), ["pin", "open-all", "shell", "archive", "trash"], "a dead session has no process left to stop — no close");
 
   const archived = mod.sessionRowActions({ pinned: false, archived: true });
-  assert.deepEqual(archived.map((a) => a.id), ["pin", "unarchive", "trash"], "an archived row restores, never re-archives");
+  assert.deepEqual(archived.map((a) => a.id), ["pin", "open-all", "unarchive", "trash"], "an archived row restores, never re-archives");
 
   for (const [name, acts] of Object.entries({ live, dead, archived })) {
     assert.equal(acts.at(-1)!.danger, true, `${name}: destructive still rides last`);

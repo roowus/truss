@@ -8,6 +8,7 @@ import { buildModelOptions, modelValue, splitModelValue } from "@/lib/models";
 import { planHeaderFit, HEADER_CLUSTER, HEADER_GAP } from "@/lib/headerFit";
 import { CHAT_WIDTH_DEFAULT, chatHandleGeometry, commitChatWidth, dragDisplayWidth, readChatWidthPref, resolveChatWidth, writeChatWidthPref } from "@/lib/chatWidth";
 import { filesFromTransfer, isFileDrag } from "@/lib/attach";
+import { composerAlign, composerTextareaHeight } from "@/lib/composerFit";
 import { formatSessionRef } from "@/lib/sessionRef";
 import { resumeCommand } from "@/lib/resumeCommand";
 import { RAIL_INSET, activeRailIndex, railIndexAtOffset, railMarkTop, railNaturalHeight, turnRailItems } from "@/lib/turnRail";
@@ -78,7 +79,6 @@ function ChatHeader({ id }: { id: string }) {
   const since = useApp((s) => s.stateSince[id]);
   const caps = useApp((s) => capsOf(s, meta.harness));
   const hosts = useApp((s) => s.hosts);
-  const models = useApp((s) => s.models);
   const busy = meta.state === "running";
   const now = useNow(1000, busy || meta.state === "spawning");
   const abnormal = meta.state === "spawning" || meta.state === "error" || meta.state === "closed";
@@ -98,7 +98,7 @@ function ChatHeader({ id }: { id: string }) {
      the title gets a 56px reservation (it truncates beyond that). */
   const headerRef = useRef<HTMLDivElement>(null);
   const leftRef = useRef<HTMLSpanElement>(null);
-  const [plan, setPlan] = useState<{ visible: string[]; overflow: string[] }>({ visible: ["select", "stop", "trajectory", "context", "team", "skills", "more"], overflow: [] });
+  const [plan, setPlan] = useState<{ visible: string[]; overflow: string[] }>({ visible: ["stop", "trajectory", "context", "team", "skills", "more"], overflow: [] });
 
   /* which device this session runs on: bare harness id = this server,
      harness@hostId = that remote host (the user's alias wins, then the
@@ -113,23 +113,15 @@ function ChatHeader({ id }: { id: string }) {
   const resumeCmd = resumeCommand(meta.harness, meta.harness_ref);
   const resumeBase = baseHarness(meta.harness);
 
-  /* model picker: the catalog lists base harnesses; remote sessions share
-     the base harness's catalog */
-  const currentValue = modelValue(meta.provider, meta.model);
-  const modelOptions = buildModelOptions(models, meta.harness, meta.model, meta.provider);
-  const onModelPick = (v: string) => {
-    const { provider, model } = splitModelValue(v);
-    if (v && v !== currentValue) void store.switchModel(id, model, provider).catch(() => {});
-  };
-
-  const hasModel = modelOptions.length > 0;
+  /* the model picker left the header in issue #143 — it lives in the
+     composer bar now, so nothing here plans or renders for it */
   useEffect(() => {
     const el = headerRef.current;
     if (!el) return;
-    /* the model Select only when there is a catalog, Stop only while
-       running, the team shortcut only when the harness runs subagents
-       (issue #145: the panel shortcuts are cluster members now) */
-    const items = HEADER_CLUSTER.filter((it) => (it.id === "select" ? hasModel : it.id === "stop" ? busy : it.id === "team" ? !!caps?.subagents : true));
+    /* Stop only while running, the team shortcut only when the harness
+       runs subagents (issue #145: the panel shortcuts are cluster members
+       now) */
+    const items = HEADER_CLUSTER.filter((it) => (it.id === "stop" ? busy : it.id === "team" ? !!caps?.subagents : true));
     const measure = () => {
       const leftW = leftRef.current?.getBoundingClientRect().width ?? 200;
       const available = el.clientWidth - leftW - 56 /* title reservation */ - 24 /* paddings */;
@@ -143,7 +135,7 @@ function ChatHeader({ id }: { id: string }) {
     if (leftRef.current) ro.observe(leftRef.current);
     measure();
     return () => ro.disconnect();
-  }, [hasModel, busy, device, meta.state, caps?.subagents]);
+  }, [busy, device, meta.state, caps?.subagents]);
 
   return (
     <div ref={headerRef} className="relative shrink-0 flex items-center gap-2 px-3 h-10 border-b border-[var(--t-line)]">
@@ -164,17 +156,6 @@ function ChatHeader({ id }: { id: string }) {
       </span>
       <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-[var(--t-fg)]" title={tooltip}>{meta.title}</span>
       <div className="ml-auto flex items-center gap-1.5 shrink-0">
-        {hasModel && plan.visible.includes("select") && (
-          /* w-auto is load-bearing: the .t-input component width is 100% and
-             would otherwise fill the cluster. The planner reserves the cap. */
-          <Select
-            value={currentValue}
-            options={modelOptions}
-            onChange={onModelPick}
-            ariaLabel="Switch model"
-            className="!h-6 !px-2 !py-0 !text-[11px] font-mono text-[var(--t-mute)] w-auto max-w-[170px] shrink-0"
-          />
-        )}
         {busy && (
           <Btn variant="danger" size="xs" icon="stop" onClick={() => store.interrupt(id)} title="Interrupt (Esc in composer)">Stop</Btn>
         )}
@@ -206,17 +187,6 @@ function ChatHeader({ id }: { id: string }) {
         <>
           <div className="fixed inset-0 z-40" onClick={() => setMenu(false)} />
           <div className="absolute right-2 top-[42px] z-50 w-64 rounded-lg bg-[var(--t-bg2)] border border-[var(--t-line2)] shadow-2xl py-1 t-pop">
-            {plan.overflow.includes("select") && (
-              <div className="px-2 py-1.5" onClick={(e) => e.stopPropagation()}>
-                <Select
-                  value={currentValue}
-                  options={modelOptions}
-                  onChange={(v) => { onModelPick(v); }}
-                  ariaLabel="Switch model"
-                  className="w-full !h-7 !text-[11.5px] font-mono"
-                />
-              </div>
-            )}
             {plan.overflow.includes("trajectory") && (
               <button onClick={() => { setMenu(false); openPanel("trajectory", { sessionId: id }); }} className="w-full flex items-center gap-2.5 px-3 h-8 text-left text-[12.5px] text-[var(--t-fg2)] hover:bg-white/[0.05]">
                 <Icon name="wave" size={13} className="text-[var(--t-mute)]" />
@@ -591,6 +561,7 @@ function Composer({ id, active }: { id: string; active: boolean }) {
   const meta = useApp((s) => s.sessions[id]);
   const caps = useApp((s) => capsOf(s, meta.harness));
   const hosts = useApp((s) => s.hosts);
+  const models = useApp((s) => s.models);
   const hostPrefs = useDesktops((s) => s.hosts);
   const aliases = hostAliases(hostPrefs);
   const harnessName = harnessDisplay(meta.harness, hosts, aliases);
@@ -647,12 +618,56 @@ function Composer({ id, active }: { id: string; active: boolean }) {
     window.addEventListener("truss:draft", on);
     return () => window.removeEventListener("truss:draft", on);
   }, [id]);
-  useLayoutEffect(() => {
+  /* composer autosize (issue #139): measure collapsed, then apply the total
+     height directly — the textarea is border-box (Tailwind preflight), so
+     scrollHeight's padding is counted exactly once. The line count drives
+     the row alignment: one line → centered (placeholder and buttons share
+     the row), more → buttons sink to the bottom. */
+  const [taLines, setTaLines] = useState(1);
+  const measureTa = useCallback(() => {
     const el = ta.current;
     if (!el) return;
+    const cs = getComputedStyle(el);
+    const lineHeight = parseFloat(cs.lineHeight) || 20.25; // 13.5px * 1.5
+    const verticalPadding = parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom);
     el.style.height = "0px";
-    el.style.height = Math.min(220, el.scrollHeight) + "px";
-  }, [text]);
+    const total = composerTextareaHeight({ scrollHeight: el.scrollHeight, lineHeight, verticalPadding, cap: 220 });
+    el.style.height = total + "px";
+    setTaLines((n) => {
+      const next = Math.max(1, Math.round((total - verticalPadding) / lineHeight));
+      return next === n ? n : next;
+    });
+  }, []);
+  useLayoutEffect(measureTa, [text, measureTa]);
+  /* a rewrap without a text change (window resize, chat-width drag) must
+     re-measure too; the width guard keeps our own height writes from
+     re-entering the observer */
+  useEffect(() => {
+    const el = ta.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    let w = el.clientWidth;
+    const ro = new ResizeObserver(() => {
+      if (el.clientWidth === w) return;
+      w = el.clientWidth;
+      measureTa();
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [measureTa]);
+  const taAlignEnd = composerAlign(taLines) === "end";
+
+  /* model picker (issue #143): it lives in the composer bar — the control
+     you touch while writing a message. The catalog lists base harnesses;
+     remote sessions share the base harness's catalog. It is deliberately
+     NOT chained to the input lock below: the lock is about text mid-run,
+     and switching the model is not text input. */
+  const currentValue = modelValue(meta.provider, meta.model);
+  const modelOptions = buildModelOptions(models, meta.harness, meta.model, meta.provider);
+  const onModelPick = (v: string) => {
+    const { provider, model } = splitModelValue(v);
+    if (v && v !== currentValue) void store.switchModel(id, model, provider).catch(() => {});
+  };
+  const hasModel = modelOptions.length > 0;
 
   const hasPending = !!pending?.length;
   const running = meta.state === "running";
@@ -762,7 +777,7 @@ function Composer({ id, active }: { id: string; active: boolean }) {
         </div>
       )}
       <div
-        className={cn("flex items-end gap-1.5 rounded-xl border bg-[var(--t-bg0)] transition-colors focus-within:border-[var(--t-mute)] px-2 py-1.5", dead ? "border-dashed border-[var(--t-line2)]" : "border-[var(--t-line2)]")}
+        className={cn("flex gap-1.5 rounded-xl border bg-[var(--t-bg0)] transition-colors focus-within:border-[var(--t-mute)] px-2 py-1.5", taAlignEnd ? "items-end" : "items-center", dead ? "border-dashed border-[var(--t-line2)]" : "border-[var(--t-line2)]")}
         onDragOver={(e) => {
           if (isFileDrag(e.dataTransfer)) e.preventDefault();
         }}
@@ -782,13 +797,14 @@ function Composer({ id, active }: { id: string; active: boolean }) {
           aria-label="Attach files"
           onChange={(e) => { if (e.target.files?.length) void attachFiles(e.target.files); }}
         />
-        <IconBtn icon="clip" label={uploading ? "Uploading…" : "Attach files (they land in .truss-uploads/ in the workspace)"} disabled={uploading || sending} onClick={() => fileRef.current?.click()} className="mb-0.5 shrink-0" />
+        <IconBtn icon="clip" label={uploading ? "Uploading…" : "Attach files (they land in .truss-uploads/ in the workspace)"} disabled={uploading || sending} onClick={() => fileRef.current?.click()} className={cn("shrink-0", taAlignEnd && "mb-0.5")} />
         <button
           onClick={onMic}
           title={voiceTitle}
           aria-label={voiceTitle}
           className={cn(
-            "mb-0.5 shrink-0 inline-grid place-items-center w-7 h-7 rounded-md transition-colors",
+            "shrink-0 inline-grid place-items-center w-7 h-7 rounded-md transition-colors",
+            taAlignEnd && "mb-0.5",
             voiceState === "idle" && "text-[var(--t-mute)] hover:text-[var(--t-fg)] hover:bg-white/[0.06]",
             voiceState === "recording" && "text-[var(--t-amber)] bg-[color-mix(in_oklab,var(--t-amber)_12%,transparent)] t-pulse",
             voiceState === "transcribing" && "text-[var(--t-amber)]",
@@ -851,10 +867,24 @@ function Composer({ id, active }: { id: string; active: boolean }) {
           </div>
         )}
         </div>
+        {hasModel && (
+          /* right side of the row, next to send — the control you touch
+             while writing a message, like the chat apps issue #143 points
+             at. w-auto is load-bearing: the .t-input component width is
+             100% and would otherwise fill the row. Stays enabled while the
+             draft is locked mid-run — model switching is not text input. */
+          <Select
+            value={currentValue}
+            options={modelOptions}
+            onChange={onModelPick}
+            ariaLabel="Switch model"
+            className={cn("!h-7 !px-2 !py-0 !text-[11px] font-mono text-[var(--t-mute)] w-auto max-w-[160px] shrink-0", taAlignEnd && "mb-0.5")}
+          />
+        )}
         {running && !queues ? (
-          <Btn size="sm" variant="danger" icon="stop" onClick={() => store.interrupt(id)} title="Interrupt (Esc)" className="mb-0.5">Stop</Btn>
+          <Btn size="sm" variant="danger" icon="stop" onClick={() => store.interrupt(id)} title="Interrupt (Esc)" className={cn(taAlignEnd && "mb-0.5")}>Stop</Btn>
         ) : (
-          <Btn size="sm" variant={dead ? "outline" : "amber"} icon={dead ? "power" : "send"} disabled={!canSend} onClick={send} className="mb-0.5" title={dead ? "Resume the harness and send" : running ? "Queue after current step" : "Send (Enter)"}>
+          <Btn size="sm" variant={dead ? "outline" : "amber"} icon={dead ? "power" : "send"} disabled={!canSend} onClick={send} className={cn(taAlignEnd && "mb-0.5")} title={dead ? "Resume the harness and send" : running ? "Queue after current step" : "Send (Enter)"}>
             {sending ? "…" : dead ? "Resume" : running ? "Queue" : "Send"}
           </Btn>
         )}

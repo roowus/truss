@@ -207,6 +207,17 @@ export interface HostInfo {
   online: boolean;
   agent?: AgentInfo;
 }
+/** auto-pairing (issue #111 review): a device that ran the installer and is
+   waiting for the UI's Allow click. Self-reported metadata only. */
+export interface PairRequestInfo {
+  id: string;
+  hostname: string;
+  os: string;
+  tailscaleIp?: string;
+  /** the requester's real source address — the only non-self-reported field */
+  sourceIp: string;
+  expiresAt: number;
+}
 export interface TailscalePeer {
   hostName: string;
   dnsName: string;
@@ -230,9 +241,11 @@ export interface NetInfo {
 }
 
 /** installer last mile (issue #91): one way to get the agent onto the
-   remote, ordered by what the user must type there (ssh = 0 leads) */
+   remote, ordered by what the user must type there (ssh = 0 leads).
+   "interactive" (issue #111) is the pairing variant whose script prompts
+   for the code instead of embedding it in the command. */
 export interface DeliveryOption {
-  kind: "ssh" | "taildrop" | "pairing";
+  kind: "ssh" | "taildrop" | "interactive" | "pairing";
   label: string;
   command: string;
   typedChars: number;
@@ -287,6 +300,9 @@ export type ProtoEvent =
   /* the remote-host registry flipped (agent hello/bye) — refetch hosts +
      harnesses (issue #100 manual test) */
   | (Base & { type: "agents.changed" })
+  /* a device asked to auto-pair, or its request was decided (issue #111
+     review) — refetch hosts (the pendingPair list) and toast the ask */
+  | (Base & { type: "pair.changed"; event: "requested" | "resolved"; request?: PairRequestInfo })
   | (Base & { type: "models.updated"; harness: HarnessId })
   | (Base & { type: "msg.start"; messageId: string; role: "user" | "assistant" | "system"; at: At; attachments?: PromptAttachment[] })
   | (Base & { type: "msg.chunk"; messageId: string; text: string; channel?: string })
