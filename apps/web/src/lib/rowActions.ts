@@ -74,6 +74,17 @@ export function sessionRowActions(state: {
   return actions;
 }
 
+/* Issue #140: how the session row's action cluster rests. A cluster with no
+   always-visible member hides wholesale until hover — nothing reserves
+   space, so the timestamp+dot sit at the row's true right edge (before this,
+   the unpinned pin kept a ~24px slot via opacity-0, floating the cluster off
+   the edge). A pinned row's cluster rests visible with ONLY the solid pin.
+   Hover members take zero layout space at rest. */
+export function clusterRestState(acts: SessionRowAction[]): { cls: string; resting: SessionRowAction[] } {
+  const resting = acts.filter((a) => a.visible === "always");
+  return { cls: resting.length > 0 ? "flex" : "hidden group-hover:flex", resting };
+}
+
 export function shellRowActions(shell: { id: string; alive?: boolean }): RowAction[] {
   /* an exited shell is already dead — there is nothing to kill, only a
      ghost row to remove */
