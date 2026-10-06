@@ -617,13 +617,13 @@ function Composer({ id, active }: { id: string; active: boolean }) {
     window.addEventListener("truss:draft", on);
     return () => window.removeEventListener("truss:draft", on);
   }, [id]);
-  /* composer autosize (issue #139): measure collapsed, then apply the
-     content-box height WITHOUT the padding — scrollHeight carries it and
-     the box re-adds it, so padding must be counted exactly once. The line
-     count drives the row alignment: one line → centered (placeholder and
-     buttons share the row), more → buttons sink to the bottom. */
+  /* composer autosize (issue #139): measure collapsed, then apply the total
+     height directly — the textarea is border-box (Tailwind preflight), so
+     scrollHeight's padding is counted exactly once. The line count drives
+     the row alignment: one line → centered (placeholder and buttons share
+     the row), more → buttons sink to the bottom. */
   const [taLines, setTaLines] = useState(1);
-  useLayoutEffect(() => {
+  const measureTa = useCallback(() => {
     const el = ta.current;
     if (!el) return;
     const cs = getComputedStyle(el);
@@ -631,12 +631,28 @@ function Composer({ id, active }: { id: string; active: boolean }) {
     const verticalPadding = parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom);
     el.style.height = "0px";
     const total = composerTextareaHeight({ scrollHeight: el.scrollHeight, lineHeight, verticalPadding, cap: 220 });
-    el.style.height = total - verticalPadding + "px";
+    el.style.height = total + "px";
     setTaLines((n) => {
       const next = Math.max(1, Math.round((total - verticalPadding) / lineHeight));
       return next === n ? n : next;
     });
-  }, [text]);
+  }, []);
+  useLayoutEffect(measureTa, [text, measureTa]);
+  /* a rewrap without a text change (window resize, chat-width drag) must
+     re-measure too; the width guard keeps our own height writes from
+     re-entering the observer */
+  useEffect(() => {
+    const el = ta.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    let w = el.clientWidth;
+    const ro = new ResizeObserver(() => {
+      if (el.clientWidth === w) return;
+      w = el.clientWidth;
+      measureTa();
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [measureTa]);
   const taAlignEnd = composerAlign(taLines) === "end";
 
   const hasPending = !!pending?.length;

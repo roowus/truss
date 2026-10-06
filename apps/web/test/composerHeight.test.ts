@@ -71,3 +71,20 @@ test("read-through: the composer actually uses the contract", () => {
   assert.ok(/composerAlign\(/.test(src), "the composer row's alignment must come from composerAlign — today it's a static items-end with a mismeasured textarea");
   assert.ok(/composerTextareaHeight\(/.test(src), "the autosize must go through composerTextareaHeight (padding counted once)");
 });
+
+test("read-through: the applied height is the total directly — the textarea is border-box", () => {
+  /* audit round 1 (B1): Tailwind's preflight makes the textarea border-box,
+     so scrollHeight's padding is counted once; subtracting it again renders
+     every draft a padding-row short and clips the text line */
+  const src = readFileSync(new URL("../src/panels/ChatPanel.tsx", import.meta.url), "utf8");
+  assert.ok(/style\.height = total \+ "px"/.test(src), "the border-box textarea takes the total height as-is — subtracting the padding clips the line");
+  assert.ok(!/style\.height = total - verticalPadding/.test(src), "never subtract the padding from a border-box height");
+});
+
+test("read-through: a rewrap without a text change re-measures (resize observer)", () => {
+  /* audit round 1 (B2): dragging the chat width or resizing the window
+     rewraps the draft without firing the [text] effect — height and the
+     center/end switch would go stale until the next keystroke */
+  const src = readFileSync(new URL("../src/panels/ChatPanel.tsx", import.meta.url), "utf8");
+  assert.ok(/ResizeObserver/.test(src), "the autosize must re-run when the textarea's width changes, not only on keystrokes");
+});

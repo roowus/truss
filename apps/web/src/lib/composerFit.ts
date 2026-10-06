@@ -2,10 +2,11 @@
  * Composer resting height and row alignment (issue #139).
  *
  * The bug: the composer textarea autosized with
- * `height = 0; height = min(220, scrollHeight)`. scrollHeight includes the
- * vertical padding, and with content-box sizing that padding is then added
- * AGAIN by the box — so an empty draft rested a row too tall and its
- * placeholder floated a line above the bottom-aligned buttons.
+ * `height = 0; height = min(220, scrollHeight)` and the row was statically
+ * `items-end`, so the placeholder's line floated above the bottom-aligned
+ * buttons. (The textarea is border-box under the Tailwind preflight, so
+ * scrollHeight's padding was NOT double-counted — the audit of this change
+ * confirmed the cascade; the pure contract below is what pins the geometry.)
  *
  * The contract, pure:
  * - composerTextareaHeight: the textarea's TOTAL height (content + padding,
@@ -17,10 +18,10 @@
 
 /**
  * The total height the textarea should occupy. The caller measures with the
- * element collapsed (height 0), so scrollHeight is content + padding; the
- * caller then applies `total - verticalPadding` as the content-box style
- * height, and the box re-adds the padding itself — counted exactly once.
- * Never below one line + padding, never above the cap.
+ * element collapsed (height 0), so scrollHeight is content + padding, and
+ * applies the result directly as the (border-box) style height — the
+ * padding is counted exactly once. Never below one line + padding, never
+ * above the cap.
  */
 export function composerTextareaHeight(input: {
   scrollHeight: number;
