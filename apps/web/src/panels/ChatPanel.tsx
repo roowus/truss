@@ -98,7 +98,7 @@ function ChatHeader({ id }: { id: string }) {
      the title gets a 56px reservation (it truncates beyond that). */
   const headerRef = useRef<HTMLDivElement>(null);
   const leftRef = useRef<HTMLSpanElement>(null);
-  const [plan, setPlan] = useState<{ visible: string[]; overflow: string[] }>({ visible: ["stop", "trajectory", "more"], overflow: [] });
+  const [plan, setPlan] = useState<{ visible: string[]; overflow: string[] }>({ visible: ["stop", "trajectory", "context", "team", "skills", "shell", "more"], overflow: [] });
 
   /* which device this session runs on: bare harness id = this server,
      harness@hostId = that remote host (the user's alias wins, then the
@@ -115,11 +115,17 @@ function ChatHeader({ id }: { id: string }) {
 
   /* the model picker left the header in issue #143 — it lives in the
      composer bar now, so nothing here plans or renders for it */
-  useEffect(() => {
+  /* layout effect, not effect: the first measure must land before the first
+     paint — the optimistic initial plan names every member visible, so a
+     post-paint measure would flash an overflowing row on narrow panels
+     (audit round 3, B1) */
+  useLayoutEffect(() => {
     const el = headerRef.current;
     if (!el) return;
-    /* Stop only while running */
-    const items = HEADER_CLUSTER.filter((it) => (it.id === "stop" ? busy : true));
+    /* Stop only while running, the team shortcut only when the harness
+       runs subagents (issue #145: the panel shortcuts are cluster members
+       now) */
+    const items = HEADER_CLUSTER.filter((it) => (it.id === "stop" ? busy : it.id === "team" ? !!caps?.subagents : true));
     const measure = () => {
       const leftW = leftRef.current?.getBoundingClientRect().width ?? 200;
       const available = el.clientWidth - leftW - 56 /* title reservation */ - 24 /* paddings */;
@@ -133,7 +139,7 @@ function ChatHeader({ id }: { id: string }) {
     if (leftRef.current) ro.observe(leftRef.current);
     measure();
     return () => ro.disconnect();
-  }, [busy, device, meta.state]);
+  }, [busy, device, meta.state, caps?.subagents]);
 
   return (
     <div ref={headerRef} className="relative shrink-0 flex items-center gap-2 px-3 h-10 border-b border-[var(--t-line)]">
@@ -160,6 +166,28 @@ function ChatHeader({ id }: { id: string }) {
         {plan.visible.includes("trajectory") && (
           <IconBtn icon="wave" label="Trajectory" onClick={() => openPanel("trajectory", { sessionId: id })} />
         )}
+        {/* the panel shortcuts inline (issue #145); whatever the planner
+            collapses reappears inside the ⋯ menu below */}
+        {plan.visible.includes("context") && (
+          <IconBtn icon="gauge" label="Context usage" onClick={() => openPanel("context", { sessionId: id })} />
+        )}
+        {/* double-gated like select/stop: the initial plan names team
+            visible, so without the capability check it would flash for one
+            paint on harnesses that never run subagents */}
+        {!!caps?.subagents && plan.visible.includes("team") && (
+          <IconBtn icon="tree" label="Subagent team" onClick={() => openPanel("team", { sessionId: id })} />
+        )}
+        {plan.visible.includes("skills") && (
+          <IconBtn icon="spark" label="Skills" onClick={() => openPanel("skills", { sessionId: id, cwd: meta.cwd })} />
+        )}
+        {plan.visible.includes("shell") && (
+          <IconBtn icon="term" label="Shell in this cwd" onClick={() => openAgentShell(id)} />
+        )}
+        {/* the trigger renders unconditionally: its menu always carries the
+            utility block (copy reference, resume, the id dump), so it is
+            never the empty dead-weight button issue #145 guards against.
+            planHeaderFit still reports needsMore — if the utilities ever
+            move out, gate this on it. */}
         <IconBtn icon="dots" label="More panels" active={menu} onClick={() => setMenu((m) => !m)} />
       </div>
       {menu && (
@@ -172,19 +200,25 @@ function ChatHeader({ id }: { id: string }) {
                 Trajectory
               </button>
             )}
-            {plan.overflow.length > 0 && <div className="my-1 border-t border-[var(--t-line)]" />}
+            {/* the collapsed shortcuts rejoin their overflowed siblings
+                here (issue #145) — each is inline whenever the planner
+                keeps it visible */}
             {[
-              { icon: "gauge", label: "Context usage", run: () => openPanel("context", { sessionId: id }) },
-              ...(caps?.subagents ? [{ icon: "tree", label: "Subagent team", run: () => openPanel("team", { sessionId: id }) }] : []),
-              { icon: "spark", label: "Skills", run: () => openPanel("skills", { sessionId: id, cwd: meta.cwd }) },
-              { icon: "term", label: "Shell in this cwd", run: () => openAgentShell(id) },
+              ...(plan.overflow.includes("context") ? [{ icon: "gauge", label: "Context usage", run: () => openPanel("context", { sessionId: id }) }] : []),
+              ...(plan.overflow.includes("team") ? [{ icon: "tree", label: "Subagent team", run: () => openPanel("team", { sessionId: id }) }] : []),
+              ...(plan.overflow.includes("skills") ? [{ icon: "spark", label: "Skills", run: () => openPanel("skills", { sessionId: id, cwd: meta.cwd }) }] : []),
+              ...(plan.overflow.includes("shell") ? [{ icon: "term", label: "Shell in this cwd", run: () => openAgentShell(id) }] : []),
             ].map((it) => (
               <button key={it.label} onClick={() => { setMenu(false); it.run(); }} className="w-full flex items-center gap-2.5 px-3 h-8 text-left text-[12.5px] text-[var(--t-fg2)] hover:bg-white/[0.05]">
                 <Icon name={it.icon} size={13} className="text-[var(--t-mute)]" />
                 {it.label}
               </button>
             ))}
-            <div className="my-1 border-t border-[var(--t-line)]" />
+            {plan.overflow.length > 0 && <div className="my-1 border-t border-[var(--t-line)]" />}
+            {/* the utility block — always present, which is why the ⋯
+                trigger renders unconditionally: the menu is never the empty
+                button issue #145 calls dead weight (developer call: option
+                A on the issue) */}
             <button
               onClick={() => {
                 const refText = formatSessionRef(meta, hosts);

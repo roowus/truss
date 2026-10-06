@@ -108,6 +108,39 @@ body {
 .truss-dock .dv-tab { flex-shrink: 1; min-width: 0; overflow: hidden; }
 .truss-dock .dv-watermark { background: var(--t-bg1); }
 
+/* ── splitter junction handles (issue #148, components/SplitJunctions.tsx):
+   where a vertical and a horizontal sash cross, the crossing is a grabbable
+   vertex that resizes the four adjacent panels at once. Hover-revealed like
+   the sashes themselves (same amber, same 0.15s delay). The hit box stays
+   small on purpose: the crossing sits at the top edge of the lower groups'
+   tab strips, and a fat invisible box would swallow tab clicks (audit B1). ── */
+.truss-junction {
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  transform: translate(-50%, -50%);
+  pointer-events: auto;
+  cursor: move;
+  display: grid;
+  place-items: center;
+  touch-action: none;
+}
+.truss-junction::before {
+  content: "";
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+  background: var(--t-amber);
+  box-shadow: 0 0 0 2px var(--t-bg0);
+  opacity: 0;
+  transition: opacity 0.12s ease 0.15s;
+}
+.truss-junction:hover::before,
+.truss-junction:active::before {
+  opacity: 0.95;
+  transition-delay: 0s;
+}
+
 /* ---------------- utilities ---------------- */
 /* text that fades out at its right cut instead of an ellipsis (tab titles) */
 .t-fade-r {

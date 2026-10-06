@@ -31,6 +31,12 @@ export default defineConfig({
         "/api/terminal": { target: srv, ws: true },
         "/api": srv,
         "/events": { target: srv.replace(/^http/, "ws"), ws: true },
+        /* the server's own standalone routes (issue #164): the pairing
+           landing page and the installer script it hands out — without
+           these the preview domain serves the SPA fallback for /p and
+           the pairing flow can't be exercised there */
+        "/i": srv,
+        "/p": srv,
       };
     })(),
   },

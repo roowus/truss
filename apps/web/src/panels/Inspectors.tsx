@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { IDockviewPanelProps } from "dockview-react";
 import { store, useApp, useNow, capsOf, type Agent, type SessionView } from "@/lib/store";
 import { baseHarness, fmtCost, fmtMs, fmtTokens, shortPath, ago } from "@/lib/format";
@@ -6,6 +6,7 @@ import { harnessDisplay, hostAliases } from "@/lib/device";
 import { useDesktops } from "@/lib/desktops";
 import { Btn, Empty, HarnessMark, Icon, Kbd, Select, Spinner, StateDot, TrussLogo } from "@/components/ui";
 import { openDailyDriver, openFreeShell } from "@/lib/workspace";
+import { costsRefreshDue, clampTipPos, heatTooltip } from "@/lib/heatGrid";
 import { sparkHoverIndex, sparkPointLabel, sparkScale } from "@/lib/sparkline";
 import type { SkillInfo } from "@/lib/proto";
 import { cn } from "@/utils/cn";
@@ -538,6 +539,14 @@ export function CostPanel() {
   /* live-ish: refetch when a llm.call.done lands anywhere */
   const tick = useApp((s) => Object.values(s.views).reduce((n, v) => n + v.callOrder.filter((c) => v.calls[c].done).length, 0));
   useEffect(() => { if (tick > 0) load(); }, [tick]);
+  /* time-based refetch (issue #158): the tick only counts dones in hydrated
+     views, so work in chats you haven't opened never landed, and a panel
+     left open overnight showed yesterday forever. The 30s clock re-checks
+     the staleness window, so new usage shows up within a couple minutes
+     regardless of which chats are open. */
+  useEffect(() => {
+    if (at > 0 && costsRefreshDue({ lastFetchAt: at, now })) load();
+  }, [now, at]);
 
   if (err) return <Empty icon="alert" title="Couldn't load costs">{err}</Empty>;
   if (!data) return <div className="h-full grid place-items-center"><Spinner /></div>;
@@ -570,7 +579,7 @@ export function CostPanel() {
           </div>
           {days && days.length > 0 && <DayTotals days={days} />}
         </div>
-        {days && days.length > 0 && <HeatGrid days={days} />}
+        {days && days.length > 0 && <HeatGrid days={days} now={now} />}
         {!t.hasCost && (
           <div className="mx-4 mb-3 rounded-md border border-[var(--t-line)] bg-[var(--t-bg2)] px-3 py-2 text-[11px] text-[var(--t-mute)]">
             No harness has reported cost yet — pi and claude-code report per-call cost; dsh and hermes report tokens only. Token columns are always real.
@@ -639,11 +648,46 @@ function DayTotals({ days }: { days: DayRow[] }) {
   );
 }
 
-/** Codex-style 5-week usage heat grid (intensity = total tokens that day). */
-function HeatGrid({ days }: { days: DayRow[] }) {
+/** Codex-style 5-week usage heat grid (intensity = total tokens that day).
+    `now` comes in as a prop (the panel's 30s tick), so "today" rolls at
+    midnight without a data change. One shared tooltip is drawn for the
+    hovered (or keyboard-focused) cell, centered on it and clamped inside
+    the grid wrapper — per-cell tooltips clipped at the panel edge on
+    narrow docks (developer-reported on PR #165, session 2026-10-06). */
+function HeatGrid({ days, now }: { days: DayRow[]; now: number }) {
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const tipRef = useRef<HTMLSpanElement>(null);
+  const [hover, setHover] = useState<{ day: DayRow; left: number; top: number; w: number; h: number } | null>(null);
+  const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
+  useLayoutEffect(() => {
+    /* measure after the tooltip renders but before paint — no flicker */
+    if (!hover || !wrapRef.current || !tipRef.current) { setPos(null); return; }
+    const wrap = wrapRef.current.getBoundingClientRect();
+    setPos(clampTipPos(
+      { left: hover.left, top: hover.top, width: hover.w, height: hover.h },
+      { width: tipRef.current.offsetWidth, height: tipRef.current.offsetHeight },
+      { width: wrap.width, height: wrap.height },
+    ));
+  }, [hover]);
+  useEffect(() => {
+    /* the panel scrolls under a held hover: drop the tooltip rather than
+       let it sit stranded away from its cell */
+    if (!hover) return;
+    const clear = () => setHover(null);
+    window.addEventListener("scroll", clear, true);
+    window.addEventListener("resize", clear);
+    return () => { window.removeEventListener("scroll", clear, true); window.removeEventListener("resize", clear); };
+  }, [hover]);
+  const show = (el: HTMLElement, day: DayRow) => {
+    const wrap = wrapRef.current;
+    if (!wrap) return;
+    const r = el.getBoundingClientRect();
+    const wr = wrap.getBoundingClientRect();
+    setHover({ day, left: r.left - wr.left, top: r.top - wr.top, w: r.width, h: r.height });
+  };
   const byDay = new Map(days.map((d) => [d.day, d]));
   /* build 35 cells ending today, week-aligned (oldest first, column per week) */
-  const todayD = new Date();
+  const todayD = new Date(now);
   const cells: (DayRow | null)[] = [];
   const start = new Date(todayD);
   start.setDate(start.getDate() - (34 + todayD.getDay() % 7));
@@ -658,20 +702,28 @@ function HeatGrid({ days }: { days: DayRow[] }) {
   const weeks: (DayRow | null)[][] = [];
   for (let i = 0; i < cells.length; i += 7) weeks.push(cells.slice(i, i + 7));
   return (
-    <div className="px-4 pb-3">
+    <div ref={wrapRef} className="relative px-4 pb-3" onMouseLeave={() => setHover(null)} onBlur={() => setHover(null)}>
       <div className="text-[10.5px] font-medium uppercase tracking-[0.08em] text-[var(--t-dim)] mb-1.5">last 5 weeks</div>
       <div className="flex gap-[3px]">
         {weeks.map((w, i) => (
           <div key={i} className="flex flex-col gap-[3px]">
-            {w.map((d) => {
-              if (!d) return <span key={Math.random()} className="w-3 h-3" />;
+            {w.map((d, j) => {
+              if (!d) return <span key={`pad${j}`} className="w-3 h-3" />;
               const tok = d.tokensIn + d.tokensOut;
               const p = tok === 0 ? 0 : Math.max(0.18, tok / max);
+              const tip = heatTooltip(d);
               return (
+                /* role + tabIndex keep the cell's info reachable from the
+                   keyboard and screen readers (audit round 1 B1) — the
+                   native title this replaces was at least focus-surfaced */
                 <span
                   key={d.day}
-                  title={`${d.day}\n${d.calls} calls · ${fmtTokens(tok)} tokens${d.costUsd != null ? ` · ${fmtCost(d.costUsd)}` : ""}`}
-                  className="w-3 h-3 rounded-[3px] border border-[var(--t-line)]/60"
+                  role="img"
+                  aria-label={tip}
+                  tabIndex={0}
+                  onMouseEnter={(e) => show(e.currentTarget, d)}
+                  onFocus={(e) => show(e.currentTarget, d)}
+                  className="block w-3 h-3 rounded-[3px] border border-[var(--t-line)]/60 hover:border-[var(--t-amber)] focus-visible:outline-1 focus-visible:outline-[var(--t-amber)]"
                   style={{ background: tok === 0 ? "var(--t-bg0)" : `color-mix(in oklab, var(--t-amber) ${Math.round(p * 100)}%, var(--t-bg0))` }}
                 />
               );
@@ -679,6 +731,15 @@ function HeatGrid({ days }: { days: DayRow[] }) {
           </div>
         ))}
       </div>
+      {hover && (
+        <span
+          ref={tipRef}
+          style={{ left: pos?.left ?? -1000, top: pos?.top ?? -1000 }}
+          className="pointer-events-none absolute z-40 max-w-full rounded-md px-2 py-1 text-[10.5px] leading-4 font-medium text-white bg-[#24292e] shadow-md"
+        >
+          {heatTooltip(hover.day)}
+        </span>
+      )}
     </div>
   );
 }

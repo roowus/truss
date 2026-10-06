@@ -63,19 +63,42 @@ test("msg.chunk: implicit create, same-channel chunks merge, thinking splits seg
     { channel: "text", text: "answer" },
   ]);
   assert.deepEqual(v.items, [{ kind: "msg", id: "m1" }]); // single item, appended on first chunk
+
+  /* issue #142 audit (B8): when the chunk carries the sink's stamp, the
+     implicit create takes it — not the client frame clock — so the message
+     stays on one clock with its doneAt */
+  let v2 = emptyView();
+  const S = 1_760_000_000_000; // ms-scale stamp (toMs treats <1e12 as seconds)
+  v2 = reduce(v2, { sessionId: "s", type: "msg.chunk", messageId: "m9", text: "x", at: S }, 111);
+  assert.equal(v2.msgs.m9.at, S);
 });
 
 test("msg.done: marks done and preserves stopReason verbatim (provider errors survive to the UI pill)", () => {
   let v = emptyView();
   v = reduce(v, { sessionId: "s", type: "msg.start", messageId: "m1", role: "assistant", at: 0 }, T0);
-  v = reduce(v, { sessionId: "s", type: "msg.done", messageId: "m1", stopReason: "error: 400 Unknown Model" }, T0);
+  v = reduce(v, { sessionId: "s", type: "msg.done", messageId: "m1", stopReason: "error: 400 Unknown Model" }, T0 + 250);
   const m = v.msgs.m1;
   assert.equal(m.done, true);
+  assert.equal(m.doneAt, T0 + 250); // issue #142: the trajectory timeline measures the real assistant span
   assert.equal(m.stopReason, "error: 400 Unknown Model"); // regression: must not be mangled/dropped
   // msg.done for an unknown message is a no-op (no implicit creation)
   const v2 = reduce(v, { sessionId: "s", type: "msg.done", messageId: "ghost", stopReason: "x" }, T0);
   assert.equal(v2, v);
   assert.equal(v2.msgs.ghost, undefined);
+});
+
+test("msg.done: the event's own stamp beats frameTime (one server clock for the whole span, issue #142 audit)", () => {
+  /* the sink stamps `at` on every event that lacks one; when it is present
+     the reducer must use it, or the assistant span mixes the server clock
+     (msg.start's at) with the client's (frameTime) and skew can bend or
+     negate the duration. Server-shaped replay: at present, frameTime just
+     the replay clock. */
+  let v = emptyView();
+  const S = 1_760_000_000_000; // ms-scale server stamp (toMs treats <1e12 as seconds)
+  v = reduce(v, { sessionId: "s", type: "msg.start", messageId: "m1", role: "assistant", at: S }, T0);
+  v = reduce(v, { sessionId: "s", type: "msg.done", messageId: "m1", at: S + 400 }, T0);
+  assert.equal(v.msgs.m1.doneAt, S + 400, "done time comes from the event, not the frame clock");
+  assert.equal(v.msgs.m1.doneAt! - v.msgs.m1.at, 400, "a real, same-clock span");
 });
 
 test("interleaving: concurrently streaming messages keep their own segments", () => {
@@ -126,6 +149,22 @@ test("tool.call/update/done: run lifecycle, status, explicit and derived duratio
   assert.equal(v.tools.t2.output, "kept");
   // done for an unknown tool is a no-op
   assert.equal(reduce(v, { sessionId: "s", type: "tool.done", toolCallId: "ghost", ok: true }, 2600), v);
+});
+
+test("tool.call/done: sink-stamped at beats frameTime on both ends (issue #142 audit)", () => {
+  /* with the sink stamping `at`, a tool's span is server-clock on both
+     ends — startedAt and the derived durationMs alike — so the timeline
+     never mixes client and server clocks inside one span */
+  let v = emptyView();
+  const S = 1_760_000_000_000; // ms-scale server stamp (toMs treats <1e12 as seconds)
+  v = reduce(v, { sessionId: "s", type: "tool.call", toolCallId: "t1", name: "bash", args: {}, at: S }, 1000);
+  assert.equal(v.tools.t1.startedAt, S);
+  v = reduce(v, { sessionId: "s", type: "tool.done", toolCallId: "t1", ok: true, at: S + 345 }, 1001);
+  assert.equal(v.tools.t1.durationMs, 345, "derived from the pair of stamps, not the frame clock");
+  // explicit harness-reported durationMs still wins over any derivation
+  v = reduce(v, { sessionId: "s", type: "tool.call", toolCallId: "t2", name: "read", args: {}, at: S }, 1002);
+  v = reduce(v, { sessionId: "s", type: "tool.done", toolCallId: "t2", ok: true, durationMs: 7, at: S + 345 }, 1003);
+  assert.equal(v.tools.t2.durationMs, 7);
 });
 
 test("perm.request/resolve: card lifecycle, pending queue, unknown resolve is harmless", () => {

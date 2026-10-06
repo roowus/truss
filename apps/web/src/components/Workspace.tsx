@@ -2,6 +2,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   DockviewReact,
   themeDark,
+  type DockviewApi,
   type DockviewReadyEvent,
   type IDockviewPanelHeaderProps,
   type IDockviewHeaderActionsProps,
@@ -29,6 +30,7 @@ import { HostPanel } from "@/panels/HostPanel";
 import { SettingsPanel } from "@/panels/SettingsPanel";
 import { TrashPanel } from "@/panels/TrashPanel";
 import { DesktopStrip } from "./DesktopStrip";
+import { SplitJunctionHandles } from "./SplitJunctions";
 import { chromeTabLayout, chromeTabsAvailableWidth, tabTrailingReserve, type ChromeTabView } from "@/lib/chromeTabs";
 import { tabClosePlacement } from "@/lib/tabClose";
 import { TabPicker } from "./TabPicker";
@@ -396,6 +398,7 @@ function Watermark() {
 
 const DesktopCanvas = memo(function DesktopCanvas({ id, visible }: { id: string; visible: boolean }) {
   const dispose = useRef<(() => void) | null>(null);
+  const [dockApi, setDockApi] = useState<DockviewApi | null>(null);
   const actions = useMemo(() => (props: IDockviewHeaderActionsProps) => <GroupActions props={props} spaceId={id} />, [id]);
   const contextMenu = useCallback(({ panel }: GetTabContextMenuItemsParams): (BuiltInContextMenuItem | ReactContextMenuItemConfig)[] => {
     const others = desktops.state.spaces.filter((s) => s.id !== id);
@@ -427,13 +430,16 @@ const DesktopCanvas = memo(function DesktopCanvas({ id, visible }: { id: string;
         rightHeaderActionsComponent={actions}
         watermarkComponent={Watermark}
         getTabContextMenuItems={contextMenu}
-        onReady={(e: DockviewReadyEvent) => { dispose.current = desktops.register(id, e.api); }}
+        onReady={(e: DockviewReadyEvent) => { dispose.current = desktops.register(id, e.api); setDockApi(e.api); }}
         theme={theme}
         /* no chevron-arrow overflow dropdown: tabs share one uniform clamped
            width (lib/chromeTabs.ts), and past the icon floor the strip clips
            by design — overflowed tabs stay reachable via the + picker */
         disableTabsOverflowList
       />
+      {/* grab handles where two sashes cross (issue #148) — the theme gap
+          recenters the handle on the visual crossing */}
+      {dockApi && <SplitJunctionHandles api={dockApi} gap={theme.gap ?? 0} />}
     </div>
   );
 });

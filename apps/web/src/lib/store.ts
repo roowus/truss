@@ -23,7 +23,7 @@ export const toMs = (at: string | number | undefined): number => {
 
 /* ---------------- view model ---------------- */
 export interface Segment { channel: string; text: string }
-export interface Msg { id: string; role: "user" | "assistant" | "system"; segments: Segment[]; done: boolean; stopReason?: string; at: number; attachments?: import("./proto").PromptAttachment[] }
+export interface Msg { id: string; role: "user" | "assistant" | "system"; segments: Segment[]; done: boolean; stopReason?: string; at: number; doneAt?: number; attachments?: import("./proto").PromptAttachment[] }
 export interface ToolRun { id: string; name: string; args: unknown; callId?: string; output?: string; status: "running" | "ok" | "fail"; durationMs?: number; startedAt: number }
 export interface Perm { requestId: string; tool: string; reason: string; options: string[]; choice?: string; at: number }
 export interface Call {
@@ -105,7 +105,10 @@ export function reduce(v: SessionView, ev: ProtoEvent, frameTime: number): Sessi
       let m = v.msgs[ev.messageId];
       let items = v.items;
       if (!m) {
-        m = { id: ev.messageId, role: "assistant", segments: [], done: false, at: frameTime };
+        /* defensive path (the server emits msg.start first): prefer the
+           event's stamp over the client clock here too, so a message born
+           from a bare chunk still shares one clock with its doneAt */
+        m = { id: ev.messageId, role: "assistant", segments: [], done: false, at: ev.at !== undefined ? toMs(ev.at) : frameTime };
         items = [...items, { kind: "msg", id: ev.messageId }];
       }
       const ch = ev.channel === "thinking" ? "thinking" : ev.channel || "text";
@@ -118,11 +121,16 @@ export function reduce(v: SessionView, ev: ProtoEvent, frameTime: number): Sessi
     case "msg.done": {
       const m = v.msgs[ev.messageId];
       if (!m) return v;
-      return { ...v, msgs: { ...v.msgs, [m.id]: { ...m, done: true, stopReason: ev.stopReason } } };
+      /* doneAt feeds the trajectory timeline's assistant span (issue #142).
+         Prefer the event's own stamp (server clock, like msg.start's at) so
+         the span never mixes two clocks; frameTime stays the fallback for
+         payloads that predate sink-side stamping. */
+      const doneAt = ev.at !== undefined ? toMs(ev.at) : frameTime;
+      return { ...v, msgs: { ...v.msgs, [m.id]: { ...m, done: true, doneAt, stopReason: ev.stopReason } } };
     }
     case "tool.call": {
       if (v.tools[ev.toolCallId]) return v;
-      const t: ToolRun = { id: ev.toolCallId, name: ev.name, args: ev.args, callId: ev.callId, status: "running", startedAt: frameTime };
+      const t: ToolRun = { id: ev.toolCallId, name: ev.name, args: ev.args, callId: ev.callId, status: "running", startedAt: ev.at !== undefined ? toMs(ev.at) : frameTime };
       let calls = v.calls;
       let cid = ev.callId && v.calls[ev.callId] ? ev.callId : undefined;
       if (!cid) {
@@ -145,7 +153,7 @@ export function reduce(v: SessionView, ev: ProtoEvent, frameTime: number): Sessi
         ...v,
         tools: {
           ...v.tools,
-          [t.id]: { ...t, status: ev.ok ? "ok" : "fail", durationMs: ev.durationMs ?? frameTime - t.startedAt, output: ev.output ?? t.output },
+          [t.id]: { ...t, status: ev.ok ? "ok" : "fail", durationMs: ev.durationMs ?? (ev.at !== undefined ? toMs(ev.at) : frameTime) - t.startedAt, output: ev.output ?? t.output },
         },
       };
     }

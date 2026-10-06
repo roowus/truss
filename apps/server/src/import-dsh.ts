@@ -86,8 +86,9 @@ function textOfContent(content: any): string {
     .join("\n");
 }
 
-/** map one dsh log to proto events (import-prefixed ids, original timestamps) */
-function mapLog(recs: DshRec[], sessionId: string): { events: ProtoEvent[]; title: string; cwd: string; createdAt: number } {
+/** map one dsh log to proto events (import-prefixed ids, original timestamps).
+    Exported for the import tests — it is a pure function of the records. */
+export function mapLog(recs: DshRec[], sessionId: string): { events: ProtoEvent[]; title: string; cwd: string; createdAt: number } {
   const events: ProtoEvent[] = [];
   let title = "";
   let firstUserText = "";
@@ -100,9 +101,13 @@ function mapLog(recs: DshRec[], sessionId: string): { events: ProtoEvent[]; titl
   let openCallAt = 0;
   let pendingUsage: { inputTokens?: number; outputTokens?: number } | null = null;
 
+  /* every event carries the record's own time, dones included — the import
+     bypasses the sink (which would stamp `at`), and an unstamped done
+     replays with its message's start time, collapsing the span to a fake
+     0ms in the trajectory timeline (issue #142 audit) */
   const closeMsg = (at: number) => {
     if (openMsg) {
-      events.push({ type: "msg.done", sessionId, messageId: openMsg });
+      events.push({ type: "msg.done", sessionId, messageId: openMsg, at });
       openMsg = null;
     }
   };
@@ -128,8 +133,8 @@ function mapLog(recs: DshRec[], sessionId: string): { events: ProtoEvent[]; titl
         if (!firstUserText) firstUserText = text;
         const id = `imp-u-${msgN++}`;
         events.push({ type: "msg.start", sessionId, messageId: id, role: "user", at: t });
-        events.push({ type: "msg.chunk", sessionId, messageId: id, text });
-        events.push({ type: "msg.done", sessionId, messageId: id });
+        events.push({ type: "msg.chunk", sessionId, messageId: id, text, at: t });
+        events.push({ type: "msg.done", sessionId, messageId: id, at: t });
         break;
       }
       case "assistant/message": {
@@ -141,9 +146,9 @@ function mapLog(recs: DshRec[], sessionId: string): { events: ProtoEvent[]; titl
         if (Array.isArray(content)) {
           for (const block of content) {
             if (block?.type === "text" && typeof block.text === "string" && block.text) {
-              events.push({ type: "msg.chunk", sessionId, messageId: id, text: block.text, channel: "text" });
+              events.push({ type: "msg.chunk", sessionId, messageId: id, text: block.text, channel: "text", at: t });
             } else if (block?.type === "reasoning" && typeof block.text === "string" && block.text) {
-              events.push({ type: "msg.chunk", sessionId, messageId: id, text: block.text, channel: "thinking" });
+              events.push({ type: "msg.chunk", sessionId, messageId: id, text: block.text, channel: "thinking", at: t });
             }
           }
         }
@@ -157,6 +162,7 @@ function mapLog(recs: DshRec[], sessionId: string): { events: ProtoEvent[]; titl
             type: "llm.call.done", sessionId, callId: openCall, status: 200,
             latencyMs: Math.max(0, t - openCallAt),
             tokensIn: pendingUsage?.inputTokens, tokensOut: pendingUsage?.outputTokens,
+            at: t,
           });
           pendingUsage = null;
         }
@@ -171,6 +177,7 @@ function mapLog(recs: DshRec[], sessionId: string): { events: ProtoEvent[]; titl
             type: "llm.call.done", sessionId, callId: openCall, status: 200,
             latencyMs: Math.max(0, t - openCallAt),
             tokensIn: pendingUsage?.inputTokens, tokensOut: pendingUsage?.outputTokens,
+            at: t,
           });
           pendingUsage = null;
           openCall = null;
@@ -182,7 +189,7 @@ function mapLog(recs: DshRec[], sessionId: string): { events: ProtoEvent[]; titl
         if (!d.callId) break;
         events.push({
           type: "tool.call", sessionId, toolCallId: String(d.callId),
-          name: d.name ?? "tool", args: d.arguments, callId: openCall ?? undefined,
+          name: d.name ?? "tool", args: d.arguments, callId: openCall ?? undefined, at: t,
         });
         break;
       }
@@ -192,7 +199,7 @@ function mapLog(recs: DshRec[], sessionId: string): { events: ProtoEvent[]; titl
         if (!link?.toolCallId) break;
         events.push({
           type: "tool.done", sessionId, toolCallId: String(link.toolCallId),
-          ok: !link.isError, output: textOfContent(link.content ?? content) || undefined,
+          ok: !link.isError, output: textOfContent(link.content ?? content) || undefined, at: t,
         });
         break;
       }
@@ -200,11 +207,13 @@ function mapLog(recs: DshRec[], sessionId: string): { events: ProtoEvent[]; titl
         break;
     }
   }
-  closeMsg(recs[recs.length - 1]?.time ?? createdAt);
+  const endAt = recs[recs.length - 1]?.time ?? createdAt;
+  closeMsg(endAt);
   if (openCall) {
     events.push({
       type: "llm.call.done", sessionId, callId: openCall, status: 200,
       latencyMs: 0, tokensIn: pendingUsage?.inputTokens, tokensOut: pendingUsage?.outputTokens,
+      at: endAt,
     });
   }
   if (!title && firstUserText) {

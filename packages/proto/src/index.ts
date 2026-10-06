@@ -165,12 +165,16 @@ export interface MsgChunk {
   text: string;
   /** text = visible reply; thinking = model reasoning (rendered as dimmed scaffold) */
   channel?: "text" | "thinking";
+  /** sink-stamped wall-clock (issue #142 audit); absent only in pre-stamp payloads */
+  at?: number;
 }
 export interface MsgDone {
   type: "msg.done";
   sessionId: string;
   messageId: string;
   stopReason?: string;
+  /** sink-stamped wall-clock (issue #142 audit); absent only in pre-stamp payloads */
+  at?: number;
 }
 
 /* ── tool lifecycle ── */
@@ -182,6 +186,8 @@ export interface ToolCall {
   args: unknown;
   /** the llm.call (turn) this tool execution belongs to, when known */
   callId?: string;
+  /** sink-stamped wall-clock (issue #142 audit); absent only in pre-stamp payloads */
+  at?: number;
 }
 export interface ToolUpdate {
   type: "tool.update";
@@ -189,6 +195,8 @@ export interface ToolUpdate {
   toolCallId: string;
   status: "in_progress";
   output?: string;
+  /** sink-stamped wall-clock (issue #142 audit); absent only in pre-stamp payloads */
+  at?: number;
 }
 export interface ToolDone {
   type: "tool.done";
@@ -197,6 +205,8 @@ export interface ToolDone {
   ok: boolean;
   durationMs?: number;
   output?: string;
+  /** sink-stamped wall-clock (issue #142 audit); absent only in pre-stamp payloads */
+  at?: number;
 }
 
 /* ── permission round-trip (agent → user) ── */
@@ -236,6 +246,8 @@ export interface LlmCallDone {
   cacheRead?: number;
   cacheWrite?: number;
   retryOf?: string;
+  /** sink-stamped wall-clock (issue #142 audit); absent only in pre-stamp payloads */
+  at?: number;
 }
 
 /* ── subagent tree ── */
