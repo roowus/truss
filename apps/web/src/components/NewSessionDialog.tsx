@@ -418,21 +418,28 @@ function DirPicker({ anchorRef, onPick, onClose }: { anchorRef: { current: HTMLD
   /* anchor the overlay under the cwd field; follow any scroll (the dialog
      itself can scroll on short viewports — capture phase, scroll doesn't
      bubble) or resize. Flip above the field when the window has no room
-     below: the dropdown is ~300px at its tallest (header 36 + list 224 +
-     footer 40). */
+     below; the dropdown's tallest form is ~310px (header 36 + list padding
+     8 + list 224 + footer 40 + border 2), so below needs ≥312 to fit. The
+     flip clamps BOTH edges: bottom ≥ 4 keeps it off the viewport's bottom
+     edge, and capping bottom at innerHeight - 316 keeps the header row (up,
+     breadcrumbs, .* toggle, close) below the viewport's top (audit round 3,
+     B5). The setState is skipped when the rect is unchanged — a capture-
+     phase listener sees every scroll tick, including inside the picker's
+     own list, and a fresh anchor object each tick would re-render and
+     re-diff the whole unvirtualized listing per wheel event (B4). */
+  const MAXH = 312;
   const [anchor, setAnchor] = useState<{ left: number; top?: number; bottom?: number; width: number } | null>(null);
   useLayoutEffect(() => {
     const update = () => {
       const r = anchorRef.current?.getBoundingClientRect();
       if (!r || r.width === 0) return;
       const base = { left: r.left, width: r.width };
-      setAnchor(
-        window.innerHeight - r.bottom >= 304
-          ? { ...base, top: r.bottom + 4 }
-          : /* flip above; clamp so the dropdown never dips past the
-               viewport's bottom edge when the field itself is scrolled
-               out of view */
-            { ...base, bottom: Math.max(4, window.innerHeight - r.top + 4) },
+      const next =
+        window.innerHeight - r.bottom >= MAXH
+          ? { ...base, top: r.bottom + 4, bottom: undefined }
+          : { ...base, top: undefined, bottom: Math.min(Math.max(4, window.innerHeight - r.top + 4), Math.max(4, window.innerHeight - MAXH - 4)) };
+      setAnchor((cur) =>
+        cur && cur.left === next.left && cur.width === next.width && cur.top === next.top && cur.bottom === next.bottom ? cur : next,
       );
     };
     update();
