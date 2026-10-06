@@ -7,6 +7,7 @@ import { openAgentShell, openDailyDriver, openFreeShell, openPanel, openSession 
 import { HarnessMark, Icon, IconBtn, StateDot, TrussLogo, Spinner, STATE_META } from "./ui";
 import type { HostInfo, SessionMeta, TerminalInfo } from "@/lib/proto";
 import { hostRowActions, sessionRowActions, shellRowActions, type SessionRowAction } from "@/lib/rowActions";
+import { rowRenameTarget } from "@/lib/rowRename";
 import { sortWithPinned } from "@/lib/pinSort";
 import { pinAffordance, pinVisibilityCls } from "@/lib/pinAffordance";
 import { cn } from "@/utils/cn";
@@ -212,6 +213,16 @@ function SessionRow({ s, now, archived, trashView }: { s: SessionMeta; now: numb
     const t = setTimeout(() => setConfirm(false), 3000);
     return () => clearTimeout(t);
   }, [confirm]);
+  /* double-click the name to rename inline (issue #147); a trash row's
+     session is out of the live list, so only restore/purge apply there */
+  const [editing, setEditing] = useState(false);
+  const [name, setName] = useState("");
+  const renameTarget = trashView ? null : rowRenameTarget({ kind: "session", id: s.id });
+  const finishRename = () => {
+    const next = name.trim();
+    setEditing(false);
+    if (next && next !== s.title) void store.renameSession(s.id, next);
+  };
   const dead = s.state === "closed" || s.state === "error";
   /* trash rows don't open a chat panel: the session is not in the live list,
      so the panel would only claim it no longer exists. Restore is the way
@@ -232,6 +243,8 @@ function SessionRow({ s, now, archived, trashView }: { s: SessionMeta; now: numb
     }
     switch (a.id) {
       case "pin": return void store.pinSession(s.id, !s.pinned);
+      /* the displaced double-click (issue #147): chat + trajectory + context */
+      case "open-all": return openDailyDriver(s.id);
       case "shell": return openAgentShell(s.id);
       case "archive": return void store.archiveSession(s.id, true);
       case "unarchive": return void store.archiveSession(s.id, false);
@@ -244,13 +257,30 @@ function SessionRow({ s, now, archived, trashView }: { s: SessionMeta; now: numb
   return (
     <div
       onClick={openable ? () => openSession(s.id) : undefined}
-      onDoubleClick={openable ? () => openDailyDriver(s.id) : undefined}
       className={cn("group relative mx-0.5 flex items-center gap-2 px-2 t-session-row rounded-md transition-colors", openable ? "cursor-pointer" : "cursor-default", focused ? "bg-[var(--t-bg2)]" : "hover:bg-white/[0.03]")}
-      title={`${s.title}\n${harnessDisplay(s.harness, hosts, hostAliases(hostPrefs))}${s.model ? ` · ${s.model}` : ""}\n${shortPath(s.cwd)}\n${STATE_META[s.state]?.hint ?? s.state}${archived ? "\narchived — hidden from the main list" : ""}${openable ? "\n(double-click: chat + trajectory + context)" : ""}`}
+      title={`${s.title}\n${harnessDisplay(s.harness, hosts, hostAliases(hostPrefs))}${s.model ? ` · ${s.model}` : ""}\n${shortPath(s.cwd)}\n${STATE_META[s.state]?.hint ?? s.state}${archived ? "\narchived — hidden from the main list" : ""}${renameTarget ? "\n(double-click the name to rename)" : ""}`}
     >
       {focused && <span className="absolute left-0 top-2 bottom-2 w-[2px] rounded-full bg-[var(--t-amber)]" />}
       <HarnessMark harness={s.harness} size={17} className={dead ? "opacity-45" : ""} />
-      <span className={cn("flex-1 min-w-0 truncate text-[12.5px]", dead ? "text-[var(--t-mute)]" : "text-[var(--t-fg)]", archived && "opacity-60")}>{s.title}</span>
+      {editing ? (
+        <input
+          autoFocus
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          onClick={(e) => e.stopPropagation()}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") finishRename();
+            else if (e.key === "Escape") setEditing(false);
+          }}
+          onBlur={finishRename}
+          className="flex-1 min-w-0 bg-[var(--t-bg1)] border border-[var(--t-line2)] rounded px-1 text-[12.5px] text-[var(--t-fg)] outline-none"
+        />
+      ) : (
+        <span
+          onDoubleClick={renameTarget ? () => { setName(s.title); setEditing(true); } : undefined}
+          className={cn("flex-1 min-w-0 truncate text-[12.5px]", dead ? "text-[var(--t-mute)]" : "text-[var(--t-fg)]", archived && "opacity-60")}
+        >{s.title}</span>
+      )}
       {pending > 0 && (
         <span className="shrink-0 inline-grid place-items-center w-4 h-4 rounded-full bg-[var(--t-amber)] text-[#1b1305] text-[9.5px] font-bold t-pulse-soft" title="Permission waiting">{pending}</span>
       )}
@@ -365,7 +395,11 @@ function ShellRow({ t }: { t: TerminalInfo }) {
           className="flex-1 min-w-0 bg-[var(--t-bg1)] border border-[var(--t-line2)] rounded px-1 text-[12px] text-[var(--t-fg)] outline-none"
         />
       ) : (
-        <span className="text-[12px] text-[var(--t-fg2)] truncate">{t.title ?? t.id}</span>
+        <span
+          onDoubleClick={rowRenameTarget({ kind: "terminal", id: t.id }) ? () => { setName(t.title ?? ""); setEditing(true); } : undefined}
+          title="Double-click to rename"
+          className="text-[12px] text-[var(--t-fg2)] truncate"
+        >{t.title ?? t.id}</span>
       )}
       {/* one cluster, one gap (issue #110): the pin leads the same container
           as the other actions — its opacity rule keeps the slot and the tab
@@ -408,6 +442,16 @@ function HostRow({ h, alias }: { h: HostInfo; alias?: string }) {
   const [confirm, confirmClick] = useTwoClickConfirm();
   const hosts = useApp((st) => st.hosts);
   const hostPrefs = useDesktops((st) => st.hosts);
+  /* double-click the name to rename the host's label inline (issue #147);
+     the id is the identity and never changes */
+  const [editing, setEditing] = useState(false);
+  const [name, setName] = useState("");
+  const renameTarget = rowRenameTarget({ kind: "host", id: h.id });
+  const finishRename = () => {
+    const next = name.trim();
+    setEditing(false);
+    if (next && next !== (alias || h.label)) void store.renameHost(h.id, next);
+  };
 
   const actions = hostRowActions(h);
   const del = actions.find((a) => a.dangerous);
@@ -436,7 +480,26 @@ function HostRow({ h, alias }: { h: HostInfo; alias?: string }) {
     >
       <span className={cn("w-1.5 h-1.5 rounded-full shrink-0", h.online ? "bg-[var(--t-teal)]" : "bg-[var(--t-line2)]")} />
       <Icon name="host" size={12} className={h.online ? "text-[var(--t-sky)]" : "text-[var(--t-dim)]"} />
-      <span className={cn("flex-1 truncate", !h.online && "opacity-50")}>{alias || h.label}</span>
+      {editing ? (
+        <input
+          autoFocus
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          onClick={(e) => e.stopPropagation()}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") finishRename();
+            else if (e.key === "Escape") setEditing(false);
+          }}
+          onBlur={finishRename}
+          className="flex-1 min-w-0 bg-[var(--t-bg1)] border border-[var(--t-line2)] rounded px-1 text-[12px] text-[var(--t-fg)] outline-none"
+        />
+      ) : (
+        <span
+          onDoubleClick={renameTarget ? () => { setName(alias || h.label); setEditing(true); } : undefined}
+          title={renameTarget ? "Double-click to rename" : undefined}
+          className={cn("flex-1 truncate", !h.online && "opacity-50")}
+        >{alias || h.label}</span>
+      )}
       {h.revoked && !confirm && <span className="text-[8.5px] font-mono uppercase text-[var(--t-red)] shrink-0 group-hover:hidden">revoked</span>}
       {/* one cluster, one gap (issue #110): the pin leads the same container
           as delete — its opacity rule keeps the slot and the tab order (#86),

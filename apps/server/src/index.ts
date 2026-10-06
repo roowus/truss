@@ -47,7 +47,7 @@ import { listFeed, setFeedBroadcaster, setFeedState, shareFeedItem } from "./fee
 import { startFeedAutopost } from "./feed-autopost.js";
 import { startDoubletakePoll } from "./integrations/doubletake.js";
 import { composePractices, getGlobalPractices, saveGlobalPractices } from "./practices.js";
-import { createHost, deleteHost, getHost, isHostTombstoned, listHosts, rotateHostToken, setHostPinned, setHostRevoked, verifyAgentToken } from "./hosts.js";
+import { createHost, deleteHost, getHost, isHostTombstoned, listHosts, renameHost, rotateHostToken, setHostPinned, setHostRevoked, verifyAgentToken } from "./hosts.js";
 import { assertDialableServerUrl, netInfo, taildropToPeer, tailscalePeers, tailscaleServe, tailscaleSshOk, tailscaleSshRun } from "./net.js";
 import { deliveryOptions, installerDropName } from "./installer.js";
 import { mintPairing, redeemPairing, redeemRateOk } from "./pairing.js";
@@ -548,6 +548,17 @@ app.post("/api/hosts/:id/pin", async (req, reply) => {
     return { ok: true };
   } catch (e: any) {
     return reply.code(404).send({ error: e.message ?? String(e) });
+  }
+});
+/* the sidebar's double-click rename (issue #147) — the twin of the session
+   route from #141: trim, 64 cap, blank 400, ghost 404, the id untouched */
+app.post("/api/hosts/:id/rename", async (req, reply) => {
+  const { id } = req.params as { id: string };
+  const { label } = (req.body ?? {}) as { label?: string };
+  try {
+    return renameHost(id, String(label ?? ""));
+  } catch (e: any) {
+    return reply.code(e.status ?? 400).send({ error: e.message ?? String(e) });
   }
 });
 app.delete("/api/hosts/:id", async (req, reply) => {
