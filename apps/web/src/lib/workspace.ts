@@ -3,7 +3,7 @@ import { store } from "./store";
 import { desktops } from "./desktops";
 
 /** Bridge between the rest of the app and the Dockview instance (the "dockBus"). */
-export type PanelKind = "chat" | "trajectory" | "terminal" | "context" | "team" | "skills" | "files" | "git" | "tasks" | "todos" | "feed" | "monitor" | "welcome" | "host" | "settings" | "cost" | "credentials" | "router";
+export type PanelKind = "chat" | "trajectory" | "terminal" | "context" | "team" | "skills" | "files" | "git" | "tasks" | "todos" | "feed" | "monitor" | "welcome" | "host" | "settings" | "cost" | "credentials" | "router" | "trash";
 
 export const getDockApi = (spaceId?: string) => desktops.getApi(spaceId);
 
@@ -26,6 +26,7 @@ const TITLES: Record<PanelKind, string> = {
   cost: "Cost",
   credentials: "Credentials",
   router: "Router",
+  trash: "Trash",
 };
 
 export function panelId(kind: PanelKind, key?: string) {
@@ -60,7 +61,7 @@ export function openPanel(kind: PanelKind, opts: OpenPanelOptions = {}) {
     : kind === "host" ? opts.hostId
     : kind === "skills" || kind === "files" || kind === "git" ? opts.sessionId ?? opts.cwd
     : kind === "tasks" ? (opts.sessionId ?? opts.cwd ?? "global")
-    : kind === "todos" || kind === "feed" || kind === "monitor" ? undefined
+    : kind === "todos" || kind === "feed" || kind === "monitor" || kind === "trash" ? undefined
     
     : opts.sessionId;
   const id = panelId(kind, key);

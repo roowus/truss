@@ -173,6 +173,37 @@ export function popClosed<T>(stack: T[]): { snapshot: T; rest: T[] } | null {
   return { snapshot: stack[stack.length - 1], rest: stack.slice(0, -1) };
 }
 
+/* The PERSISTED undo stack (issue #146) is smaller than the live one: reload
+   insurance, not a second archive. Ten deep covers "I closed the wrong
+   workspace and restarted" without growing the layout doc forever. */
+export const CLOSED_PERSIST_CAP = 10;
+
+/** A row survives the round-trip when it has a type tag and a timestamp; the
+    restore path drops types it cannot handle, so unknown rows never wedge it. */
+function closedRowOk(e: unknown): e is ClosedEntry {
+  if (!e || typeof e !== "object") return false;
+  const row = e as { type?: unknown; at?: unknown };
+  return typeof row.type === "string" && typeof row.at === "number" && Number.isFinite(row.at);
+}
+
+/** Serialize the undo stack for the layout doc: valid rows only, newest CLOSED_PERSIST_CAP kept. */
+export function serializeClosed(stack: readonly unknown[] | null | undefined): string {
+  const list = Array.isArray(stack) ? stack.filter(closedRowOk).slice(-CLOSED_PERSIST_CAP) : [];
+  return JSON.stringify(list);
+}
+
+/** Read a persisted undo stack back: garbage in, empty stack out — never a crash. */
+export function parseClosed(raw: unknown): ClosedEntry[] {
+  if (typeof raw !== "string") return [];
+  try {
+    const data: unknown = JSON.parse(raw);
+    if (!Array.isArray(data)) return [];
+    return data.filter(closedRowOk).slice(-CLOSED_PERSIST_CAP);
+  } catch {
+    return [];
+  }
+}
+
 /**
  * Chrome's tab-X visibility, mapped onto workspace tabs: the ACTIVE workspace
  * pins its X (always visible, like Chrome's active tab), the rest reveal on

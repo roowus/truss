@@ -476,15 +476,18 @@ function TrashSection() {
   if (trash.length === 0) return null;
   return (
     <div className="mt-2">
-      <button
-        className="w-full flex items-center gap-1.5 px-2 h-7 text-[10.5px] font-medium uppercase tracking-[0.08em] text-[var(--t-dim)] hover:text-[var(--t-mute)]"
-        onClick={() => setOpen((o) => !o)}
-      >
-        <Icon name="chev" size={9} className={cn("transition-transform", open && "rotate-90")} />
-        <Icon name="trash" size={10} />
-        <span>recently deleted</span>
+      <div className="w-full flex items-center gap-1.5 px-2 h-7 text-[10.5px] font-medium uppercase tracking-[0.08em] text-[var(--t-dim)]">
+        <button className="flex items-center gap-1.5 hover:text-[var(--t-mute)]" onClick={() => setOpen((o) => !o)}>
+          <Icon name="chev" size={9} className={cn("transition-transform", open && "rotate-90")} />
+          <Icon name="trash" size={10} />
+          <span>recently deleted</span>
+        </button>
+        {/* the full Trash tab (issue #146): the strip is the quick glance, the tab is the real surface */}
+        <button className="hover:text-[var(--t-mute)]" title="Open the Trash tab" aria-label="Open the Trash tab" onClick={() => openPanel("trash")}>
+          <Icon name="layout" size={10} />
+        </button>
         <span className="ml-auto tabular-nums">{trash.length}</span>
-      </button>
+      </div>
       {open && trash.map((s) => <SessionRow key={s.id} s={s} now={now} trashView />)}
     </div>
   );

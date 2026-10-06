@@ -6,12 +6,14 @@ import {
   freshPanels,
   nextActiveAfterClose,
   panelsEntry,
-  popClosed,
+  parseClosed,
   pushClosed,
   restoreSpaceId,
+  serializeClosed,
   suppressionKey,
   terminalIdsInLayout,
   type ClosedEntry,
+  type ClosedPanels,
 } from "./workspaceClose";
 import type { Backend } from "./backend";
 import { store } from "./store";
@@ -62,6 +64,8 @@ interface DesktopState {
   activeId: string;
   hosts: Record<string, HostPreference>;
   settings: UiSettings;
+  /** Undo stack for "reopen what I closed" (Chrome's gesture; the chord here is Cmd/Ctrl+Shift+Z — browsers reserve Shift+T). Capped. Mixed: workspaces AND tabs. Lives in state so the Trash panel (issue #146) can browse it live; persisted with the layout doc. */
+  closed: ClosedEntry[];
   loadError?: string;
   saveStatus: "idle" | "saving" | "saved" | "error";
 }
@@ -72,6 +76,8 @@ interface SavedDocument {
   spaces: Desktop[];
   hosts: Record<string, HostPreference>;
   settings: UiSettings;
+  /** the closed stack, serialized via serializeClosed (validated on the way back in) */
+  closed?: string;
 }
 
 const defaultSettings: UiSettings = {
@@ -90,6 +96,7 @@ function freshState(): DesktopState {
     activeId: "main",
     hosts: {},
     settings: { ...defaultSettings },
+    closed: [],
     saveStatus: "idle",
   };
 }
@@ -135,6 +142,7 @@ function parseSaved(raw: string): DesktopState {
         token: typeof cfg.doubletake?.token === "string" ? cfg.doubletake.token : "",
       },
     },
+    closed: parseClosed(doc.closed),
     saveStatus: "idle",
   };
 }
@@ -148,8 +156,6 @@ class DesktopManager {
   private revision = 0;
   private writing = false;
   private suppressedTerminals = new Set<string>();
-  /** Undo stack for "reopen what I closed" (Chrome's gesture; the chord here is Cmd/Ctrl+Shift+Z — browsers reserve Shift+T). Session-only, capped. Mixed: workspaces AND tabs. */
-  private closedStack: ClosedEntry[] = [];
   /** Panel removals that are machinery, not user closes (moves, kills, batch-close replays) — never undoable. */
   private suppressedPanels = new Set<string>();
   /** Workspaces mid-teardown: any panel removals attributed to them are the workspace entry's business, never tab closes. */
@@ -270,6 +276,7 @@ class DesktopManager {
       }),
       hosts: this.state.hosts,
       settings: this.state.settings,
+      closed: serializeClosed(this.state.closed),
     };
   }
 
@@ -362,7 +369,7 @@ class DesktopManager {
     const api = this.apis.get(id);
     const space = this.state.spaces[index];
     const layout = api ? api.toJSON() : space.layout;
-    this.closedStack = pushClosed(this.closedStack, { type: "workspace", name: space.name, layout, at: Date.now() });
+    const closed = pushClosed(this.state.closed, { type: "workspace", name: space.name, layout, at: Date.now() });
     /* dockview's dispose() does NOT fire onDidRemovePanel (verified in its
        source, round-3 audit) — the flag is pure defense in case a future
        dockview starts emitting removal events during unmount. A flag, not a
@@ -373,7 +380,7 @@ class DesktopManager {
       : terminalIdsInLayout(space.layout);
     const spaces = this.state.spaces.filter((s) => s.id !== id);
     const activeId = nextActiveAfterClose(live, id, this.state.activeId);
-    this.set({ spaces, activeId });
+    this.set({ spaces, activeId, closed });
     store.focus(this.apis.get(activeId)?.activePanel?.params?.sessionId as string | undefined);
     for (const tid of terminals) this.cleanupTerminalLater(tid);
     this.queueSave();
@@ -383,7 +390,7 @@ class DesktopManager {
 
   /** The entry reopenClosed() would restore, or null when the undo stack is empty. */
   peekClosed() {
-    return this.closedStack[this.closedStack.length - 1] ?? null;
+    return this.state.closed[this.state.closed.length - 1] ?? null;
   }
 
   /**
@@ -395,12 +402,25 @@ class DesktopManager {
    * affordance; reopening inside the 240ms cleanup window keeps the shell.
    */
   reopenClosed() {
-    const popped = popClosed(this.closedStack);
-    if (!popped) return null;
-    const entry = popped.snapshot;
+    return this.reopenClosedAt(this.state.closed.length - 1);
+  }
+
+  /** The Trash panel's targeted restore (issue #146): same semantics as the chord, at a picked index. */
+  reopenClosedAt(index: number) {
+    const stack = this.state.closed;
+    if (index < 0 || index >= stack.length) return null;
+    const entry = stack[index];
+    const rest = [...stack.slice(0, index), ...stack.slice(index + 1)];
     if (entry.type === "workspace") {
-      this.closedStack = popped.rest;
+      this.set({ closed: rest });
       return this.create(entry.name, (entry.layout as SerializedDockview | null) ?? null);
+    }
+    if (!Array.isArray((entry as ClosedPanels).panels)) {
+      /* a persisted row from another build we cannot restore: drop it from
+         the stack rather than wedging every reopen behind it */
+      this.set({ closed: rest });
+      this.queueSave();
+      return null;
     }
     const spaceId = restoreSpaceId(entry, this.state.spaces, this.state.activeId);
     const api = this.apis.get(spaceId);
@@ -429,7 +449,8 @@ class DesktopManager {
       /* popped only once the restore succeeded: a throw mid-group keeps the
          entry on the stack for the next chord instead of losing the tabs
          silently (audit round 2, N1) */
-      this.closedStack = popped.rest;
+      this.set({ closed: rest });
+      this.queueSave();
       const shown = first ?? (entry.panels.length ? api.getPanel(entry.panels[0].id) : undefined);
       shown?.api.setActive();
       if (spaceId !== this.state.activeId) this.switchTo(spaceId);
@@ -450,7 +471,10 @@ class DesktopManager {
     if (this.closingSpaces.has(spaceId)) return;
     if (this.suppressedPanels.delete(suppressionKey(spaceId, panel.id))) return;
     const entry = panelsEntry(spaceId, [panel], Date.now());
-    if (entry) this.closedStack = pushClosed(this.closedStack, entry);
+    if (entry) {
+      this.set({ closed: pushClosed(this.state.closed, entry) });
+      this.queueSave();
+    }
   }
 
   /** Mark a panel removal as machinery so the undo recorder ignores it. Callers close synchronously, so the event lands in the same task; the TTL only reaps a key whose close never came. The workspace id is mandatory — keying off whatever happens to be active is how the wrong workspace gets suppressed (round 1, B1). */
@@ -463,7 +487,10 @@ class DesktopManager {
   /** A batch tab close (the group-corner X, "close others"): one gesture, ONE undo entry, so the chord restores the batch whole. */
   closeGroup(spaceId: string, panels: IDockviewPanel[]) {
     const entry = panelsEntry(spaceId, panels, Date.now());
-    if (entry) this.closedStack = pushClosed(this.closedStack, entry);
+    if (entry) {
+      this.set({ closed: pushClosed(this.state.closed, entry) });
+      this.queueSave();
+    }
     for (const p of panels) {
       this.suppressPanelClose(spaceId, p.id);
       p.api.close();
