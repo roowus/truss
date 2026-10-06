@@ -26,6 +26,7 @@ import {
   setBroadcaster,
   deleteSessions,
   purgeSession,
+  renameSession,
   restoreSession,
   type EventFrame,
 } from "./sessions.js";
@@ -742,6 +743,20 @@ app.post("/api/sessions/:id/pin", async (req, reply) => {
     return { ok: true };
   } catch (err) {
     return reply.code(404).send({ error: String(err) });
+  }
+});
+
+/* retitle a chat (issue #141): the tab's double-click rename lands here.
+   Blank is a 400 (a rename never erases a name), unknown id a 404; long
+   titles cap at 64 rather than reject — the terminal rule (#29) */
+app.post("/api/sessions/:id/rename", async (req, reply) => {
+  const { id } = req.params as { id: string };
+  const { title } = (req.body ?? {}) as { title?: string };
+  try {
+    return renameSession(id, String(title ?? ""));
+  } catch (err) {
+    const e = err as Error & { status?: number };
+    return reply.code(e.status ?? 400).send({ error: e.message ?? String(e) });
   }
 });
 

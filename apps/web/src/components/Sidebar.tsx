@@ -443,14 +443,17 @@ function HostRow({ h, alias }: { h: HostInfo; alias?: string }) {
   const hosts = useApp((st) => st.hosts);
   const hostPrefs = useDesktops((st) => st.hosts);
   /* double-click the name to rename the host's label inline (issue #147);
-     the id is the identity and never changes */
+     the id is the identity and never changes. The edit targets the shared
+     label itself — prefill/compare h.label, never the alias: a per-user
+     alias stays a HostPanel preference and must not leak into the label
+     every client sees (audit round 1) */
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState("");
   const renameTarget = rowRenameTarget({ kind: "host", id: h.id });
   const finishRename = () => {
     const next = name.trim();
     setEditing(false);
-    if (next && next !== (alias || h.label)) void store.renameHost(h.id, next);
+    if (next && next !== h.label) void store.renameHost(h.id, next);
   };
 
   const actions = hostRowActions(h);
@@ -495,8 +498,8 @@ function HostRow({ h, alias }: { h: HostInfo; alias?: string }) {
         />
       ) : (
         <span
-          onDoubleClick={renameTarget ? () => { setName(alias || h.label); setEditing(true); } : undefined}
-          title={renameTarget ? "Double-click to rename" : undefined}
+          onDoubleClick={renameTarget ? () => { setName(h.label); setEditing(true); } : undefined}
+          title={renameTarget ? (alias ? `Double-click to rename the shared label (your alias “${alias}” stays)` : "Double-click to rename") : undefined}
           className={cn("flex-1 truncate", !h.online && "opacity-50")}
         >{alias || h.label}</span>
       )}

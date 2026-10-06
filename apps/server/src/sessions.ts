@@ -563,6 +563,19 @@ export function setSessionPinned(sessionId: string, pinned: boolean) {
   sink({ type: "session.updated", sessionId, pinned });
 }
 
+/** retitle a chat (issue #141 — the tab's double-click rename): persists
+    and broadcasts so open tabs and the sidebar repaint live. The terminal
+    rule (#29): trimmed, capped at 64, never blank. */
+export function renameSession(sessionId: string, title: string): { id: string; title: string } {
+  const row = store.getSession(sessionId);
+  if (!row) throw Object.assign(new Error(`no such session: ${sessionId}`), { status: 404 });
+  const trimmed = title.trim().slice(0, 64);
+  if (!trimmed) throw Object.assign(new Error("title must not be blank"), { status: 400 });
+  store.setSessionTitle(sessionId, trimmed);
+  sink({ type: "session.updated", sessionId, title: trimmed });
+  return { id: sessionId, title: trimmed };
+}
+
 /** every session under a project tag */
 export function setProjectArchived(project: string, archived: boolean): number {
   const rows = store.sessionsInProject(project);
