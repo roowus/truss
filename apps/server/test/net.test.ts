@@ -190,6 +190,46 @@ test("parseServeAttribution: netInfo's serveOn/serveUrl path — key AND port, b
     const ours = net.parseServeAttribution(status, 4040);
     assert.deepEqual(ours, { key: "rewvis.tail208cbf.ts.net:8443", httpsPort: 8443 }, "serveUrl is built from OUR config's key — the neighbor's :443 is not offered");
     assert.equal(net.parseServeAttribution(status, 3000), null, "nothing ours → serveOn false");
+
+    /* audit round 5: the Proxy field is matched exactly — a config that
+       merely MENTIONS our address in some other field is not ours */
+    const mentioned = JSON.stringify({ Web: { "rewvis.tail208cbf.ts.net:443": { Handlers: { "/": { Text: "moved to http://127.0.0.1:4040" } } } } });
+    assert.equal(net.parseServeAttribution(mentioned, 4040), null, "a mention in a non-Proxy field is not attribution");
+  } finally {
+    cleanup();
+  }
+});
+
+/* audit round 5, B1: older tailscale CLIs have no serve --json — netInfo
+   and OFF both fall back to the text status, so it gets the same matrix */
+
+test("parseServeAttributionText: the old-CLI text format attributes by the block's proxy target", async () => {
+  const { cleanup } = await freshServer("net-serve-text");
+  try {
+    const net = await import("../src/net.js");
+    const text = [
+      "https://rewvis.tail208cbf.ts.net (tailnet only)",
+      "|-- / proxy http://127.0.0.1:3000",
+      "https://rewvis.tail208cbf.ts.net:8443 (tailnet only)",
+      "|-- / proxy http://127.0.0.1:4040",
+      "",
+    ].join("\n");
+
+    assert.deepEqual(
+      net.parseServeAttributionText(text, 4040),
+      { key: "rewvis.tail208cbf.ts.net:8443", httpsPort: 8443 },
+      "OUR block wins — not the first URL on a multi-config machine",
+    );
+    assert.equal(net.parseServeAttributionText(text, 3000)?.httpsPort, 443, "a port-less URL line is 443");
+    assert.equal(net.parseServeAttributionText(text, 5555), null, "nothing ours → null (OFF tears nothing down)");
+
+    /* the digit boundary holds in the text format too */
+    const prefix = "https://rewvis.tail208cbf.ts.net (tailnet only)\n|-- / proxy http://127.0.0.1:40401\n";
+    assert.equal(net.parseServeAttributionText(prefix, 4040), null, "40401 is not 4040 in text either");
+
+    for (const junk of ["", "no serve config here", "https://\n"]) {
+      assert.equal(net.parseServeAttributionText(junk, 4040), null, `${JSON.stringify(junk)} → null, never a crash`);
+    }
   } finally {
     cleanup();
   }

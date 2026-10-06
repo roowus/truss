@@ -147,11 +147,13 @@ export async function netInfo(port: number, bindHost?: string): Promise<NetInfo>
         out.tailscale.serveOn = !!ours;
         if (ours) out.tailscale.serveUrl = `https://${ours.key}`;
       } catch {
+        /* older CLIs have no serve --json — the text format carries the
+           same blocks; the attributed block's URL is the serveUrl (not
+           the first URL on a multi-config machine) */
         const sv = await sh("tailscale", ["serve", "status"]);
-        const m = sv.match(/https:\/\/[^\s]+/);
-        const ours = proxiesToPort(sv, port);
-        out.tailscale.serveOn = !!m && ours;
-        if (m && ours) out.tailscale.serveUrl = m[0];
+        const ours = parseServeAttributionText(sv, port);
+        out.tailscale.serveOn = !!ours;
+        if (ours) out.tailscale.serveUrl = `https://${ours.key}`;
       }
     } catch {
       /* status parse failed — ip4 is enough */
@@ -318,26 +320,76 @@ async function runServeLine(line: string): Promise<void> {
 
 /** does this serve-status fragment proxy to OUR port? Matched with a digit
    boundary — 4040 must not attribute a neighbor's 40401 (audit round 3:
-   the bare substring let a prefix neighbor pass as us). */
+   the bare substring let a prefix neighbor pass as us). Used on the TEXT
+   status format, where there is no structure to parse a Proxy field from. */
 function proxiesToPort(text: string, port: number): boolean {
   return new RegExp(`127\\.0\\.0\\.1:${port}(?!\\d)`).test(text);
 }
 
+/** does this serve config's Handlers proxy to our port? The Proxy URL is
+   parsed and host+port compared EXACTLY — a neighbor whose config merely
+   mentions 127.0.0.1:4040 in some other field (a path, a text payload) is
+   never attributed (audit round 5). */
+function configProxiesToPort(config: unknown, port: number): boolean {
+  const handlers = (config as { Handlers?: unknown } | null)?.Handlers;
+  if (!handlers || typeof handlers !== "object") return false;
+  for (const h of Object.values(handlers)) {
+    const proxy = (h as { Proxy?: unknown } | null)?.Proxy;
+    if (typeof proxy !== "string") continue;
+    try {
+      const u = new URL(proxy);
+      if (u.hostname === "127.0.0.1" && (u.port ? Number(u.port) : 80) === port) return true;
+    } catch {
+      /* a non-URL proxy target (socket path, plaintext) is not ours */
+    }
+  }
+  return false;
+}
+
 /** pure: `tailscale serve status --json` text → the serve config that is
-   OURS (proxies to this server's port, boundary-matched) — its Web key and
-   https port. null when nothing attributable serves or the text is garbage.
-   netInfo reads the key for serveUrl; OFF reads the port. */
+   OURS (a handler proxies to this server's port, exactly matched) — its
+   Web key and https port. null when nothing attributable serves or the
+   text is garbage. netInfo reads the key for serveUrl; OFF reads the
+   port. */
 export function parseServeAttribution(statusJson: string, port: number): { key: string; httpsPort: number } | null {
   try {
     const sj = JSON.parse(statusJson);
     const web: [string, unknown][] = sj?.Web && typeof sj.Web === "object" ? Object.entries(sj.Web) : [];
-    const ours = web.find(([, v]) => proxiesToPort(JSON.stringify(v), port));
+    const ours = web.find(([, v]) => configProxiesToPort(v, port));
     if (!ours) return null;
     const m = ours[0].match(/:(\d+)$/);
     return { key: ours[0], httpsPort: m ? Number(m[1]) : 443 };
   } catch {
     return null;
   }
+}
+
+/** pure: the OLD-CLI text `tailscale serve status` → the same attribution
+   (audit round 5 — without it, OFF is dead on CLIs with no serve --json:
+   netInfo's text fallback reports serveOn, but OFF's read-back nulls and
+   the toggle throws while a config keeps serving). Blocks are a
+   non-indented https URL line followed by indented handler lines; a block
+   is ours when its body proxies to our port (boundary-matched). */
+export function parseServeAttributionText(statusText: string, port: number): { key: string; httpsPort: number } | null {
+  const blocks: { url: string; body: string }[] = [];
+  for (const line of statusText.split("\n")) {
+    const url = line.match(/^(https:\/\/[^\s]+)/);
+    if (url) {
+      blocks.push({ url: url[1], body: "" });
+    } else if (blocks.length > 0) {
+      blocks[blocks.length - 1].body += `${line}\n`;
+    }
+  }
+  for (const b of blocks) {
+    if (!proxiesToPort(b.body, port)) continue;
+    try {
+      const u = new URL(b.url);
+      return { key: u.host, httpsPort: u.port ? Number(u.port) : 443 };
+    } catch {
+      /* an unparseable URL line can't become a serveUrl — skip the block */
+    }
+  }
+  return null;
 }
 
 /** pure: `tailscale serve status --json` text → the https port serving THIS
@@ -352,12 +404,17 @@ export function parseServingHttpsPort(statusJson: string, port: number): number 
 /** the https port tailscale is ACTUALLY serving this truss on (null when
    unattributable or the status can't be read). OFF targets this, not a
    fresh plan — the plan can change between on and off, the status can't
-   lie about what is up. */
+   lie about what is up. Mirrors netInfo's fallback: --json first, the
+   old-CLI text format second. */
 async function servingHttpsPort(port: number): Promise<number | null> {
   try {
     return parseServingHttpsPort(await sh("tailscale", ["serve", "status", "--json"]), port);
   } catch {
-    return null;
+    try {
+      return parseServeAttributionText(await sh("tailscale", ["serve", "status"]), port)?.httpsPort ?? null;
+    } catch {
+      return null;
+    }
   }
 }
 
