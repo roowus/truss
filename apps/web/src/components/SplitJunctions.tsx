@@ -108,6 +108,10 @@ export function SplitJunctionHandles({ api, gap = 0 }: { api: DockviewApi; gap?:
     const grid = api.toJSON().grid as SplitLayout;
     const startX = e.clientX;
     const startY = e.clientY;
+    /* the gesture answers to the grabbing pointer alone — the old capture
+       path filtered implicitly; window listeners see every pointer, so a
+       second finger/pen must neither feed deltas nor settle the drag */
+    const pointerId = e.pointerId;
     const drag = startJunctionDrag(grid, junction, (dx, dy) => {
       const next = dragJunction(grid, junction, dx, dy);
       if (next === grid) return; // clamped shut
@@ -122,13 +126,20 @@ export function SplitJunctionHandles({ api, gap = 0 }: { api: DockviewApi; gap?:
        killed the release path — the orphaned drag kept following the
        cursor. Window listeners outlive any handle churn; pointercancel and
        window blur settle exactly like pointerup. */
-    const onMove = (ev: PointerEvent) => drag.move(ev.clientX - startX, ev.clientY - startY);
+    const onMove = (ev: PointerEvent) => {
+      if (ev.pointerId !== pointerId) return;
+      drag.move(ev.clientX - startX, ev.clientY - startY);
+    };
+    const onUp = (ev: PointerEvent) => {
+      if (ev.pointerId !== pointerId) return;
+      end();
+    };
     const end = () => {
       if (!drag.active()) return;
       drag.end();
       window.removeEventListener("pointermove", onMove);
-      window.removeEventListener("pointerup", end);
-      window.removeEventListener("pointercancel", end);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
       window.removeEventListener("blur", end);
       if (endDragRef.current === end) endDragRef.current = null;
       /* the last setSize already fired onDidLayoutChange (re-placing the
@@ -137,8 +148,10 @@ export function SplitJunctionHandles({ api, gap = 0 }: { api: DockviewApi; gap?:
       refresh();
     };
     window.addEventListener("pointermove", onMove);
-    window.addEventListener("pointerup", end);
-    window.addEventListener("pointercancel", end);
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
+    /* blur settles regardless of pointer — the gesture can't outlive the
+       window losing focus */
     window.addEventListener("blur", end);
     endDragRef.current = end;
   };
