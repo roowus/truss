@@ -4,11 +4,14 @@ set -e
 PR=$1
 cd /home/ubuntu/projects/truss
 git fetch origin -q
-BR=$(gh pr view $PR -R roowus/truss --json headRefName --jq .headRefName)
 WT=/home/ubuntu/projects/truss/pr-preview/w/$PR
 if [ ! -d "$WT" ]; then
+  # Only a missing worktree needs the PR lookup — a work session that already
+  # made w/<n> by hand (issue-numbered, pre-PR) must not die on gh here.
+  BR=$(gh pr view $PR -R roowus/truss --json headRefName --jq .headRefName)
   git worktree add "$WT" "origin/$BR" --detach -q
 fi
+BR=${BR:-$(git -C "$WT" rev-parse --abbrev-ref HEAD)}
 cd "$WT"
 pnpm install --prefer-offline -q 2>&1 | tail -1 || pnpm install -q
 
