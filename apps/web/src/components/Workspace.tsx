@@ -379,8 +379,9 @@ const DesktopCanvas = memo(function DesktopCanvas({ id, visible }: { id: string;
            by design — overflowed tabs stay reachable via the + picker */
         disableTabsOverflowList
       />
-      {/* grab handles where two sashes cross (issue #148) */}
-      {dockApi && <SplitJunctionHandles api={dockApi} />}
+      {/* grab handles where two sashes cross (issue #148) — the theme gap
+          recenters the handle on the visual crossing */}
+      {dockApi && <SplitJunctionHandles api={dockApi} gap={theme.gap ?? 0} />}
     </div>
   );
 });

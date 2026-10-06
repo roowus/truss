@@ -241,6 +241,15 @@ export interface GroupSize {
 }
 
 /**
+ * Where a junction's handle belongs on screen. The serialized boundary sits
+ * at the top-left edge of the inter-group gap (dockview renders the gap
+ * trailing each view), so the visual crossing center is half a gap down-right.
+ */
+export function junctionCenter(junction: Junction, gap = 0): { x: number; y: number } {
+  return { x: junction.x + gap / 2, y: junction.y + gap / 2 };
+}
+
+/**
  * Groups whose rect changed between two layouts — exactly the setSize calls
  * a junction drag applies to the live dock. Bystanders never appear here.
  */

@@ -69,3 +69,11 @@ test("changedGroupSizes: dockview-shaped leaves (group state objects) resolve by
   assert.deepEqual(new Set(changed.map((c) => c.id)), new Set(["group-TL", "group-BL", "group-TR", "group-BR"]));
   assert.deepEqual(changedGroupSizes(before, before), [], "no drag, no setSize calls");
 });
+
+test("junctionCenter: the handle sits at the gap's center, half a gap down-right of the boundary", async () => {
+  const { junctionCenter } = await import("../src/lib/splitJunction");
+  const j = splitJunctions(grid2x2())[0];
+  assert.deepEqual([j.x, j.y], [500, 380], "serialized boundary as-is");
+  assert.deepEqual(junctionCenter(j, 6), { x: 503, y: 383 }, "dockview's gap trails each view, so the visual crossing is +gap/2 on both axes");
+  assert.deepEqual(junctionCenter(j), { x: 500, y: 380 }, "no gap, no offset");
+});

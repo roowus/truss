@@ -4,6 +4,7 @@ import {
   changedGroupSizes,
   dragJunction,
   groupIdOf,
+  junctionCenter,
   splitJunctions,
   type Junction,
   type SplitLayout,
@@ -30,7 +31,7 @@ interface DragState {
  * pure (lib/splitJunction.ts) over the serialized grid; this overlay only
  * places handles and pushes the dragged sizes into the live groups.
  */
-export function SplitJunctionHandles({ api }: { api: DockviewApi }) {
+export function SplitJunctionHandles({ api, gap = 0 }: { api: DockviewApi; gap?: number }) {
   const overlayRef = useRef<HTMLDivElement>(null);
   const [handles, setHandles] = useState<Handle[]>([]);
   const dragRef = useRef<DragState | null>(null);
@@ -58,21 +59,26 @@ export function SplitJunctionHandles({ api }: { api: DockviewApi }) {
         oy = g.top - o.top;
       }
       setHandles(
-        splitJunctions(grid).map((junction) => ({
-          /* keyed by the four quadrant groups, not the position: the key
-             survives the drag, so pointer capture never remounts away */
-          key: [junction.quadrants.tl, junction.quadrants.tr, junction.quadrants.bl, junction.quadrants.br]
-            .map((d) => groupIdOf(d) ?? "?")
-            .join("|"),
-          x: ox + junction.x,
-          y: oy + junction.y,
-          junction,
-        })),
+        splitJunctions(grid).map((junction) => {
+          /* the serialized boundary is the gap's top-left edge; the handle
+             belongs at the gap's center (junctionCenter) */
+          const c = junctionCenter(junction, gap);
+          return {
+            /* keyed by the four quadrant groups, not the position: the key
+               survives the drag, so pointer capture never remounts away */
+            key: [junction.quadrants.tl, junction.quadrants.tr, junction.quadrants.bl, junction.quadrants.br]
+              .map((d) => groupIdOf(d) ?? "?")
+              .join("|"),
+            x: ox + c.x,
+            y: oy + c.y,
+            junction,
+          };
+        }),
       );
     } catch {
       /* toJSON can throw while the dock tears down — the unmount cleanup ends us anyway */
     }
-  }, [api]);
+  }, [api, gap]);
 
   useEffect(() => {
     /* the grid is not laid out at onReady; measure a frame later */
@@ -118,7 +124,12 @@ export function SplitJunctionHandles({ api }: { api: DockviewApi }) {
   };
 
   return (
-    <div ref={overlayRef} className="pointer-events-none absolute inset-0 z-30">
+    /* z above dockview's sashes (they sit at z-index 99): inside the
+       handle's box the junction wins hover AND press over a highlighted
+       sash — hover an edge, drift onto the crossing, and the junction takes
+       over as the drag target. Mid-sash-drag the pointer is already spoken
+       for, so a drag never switches. */
+    <div ref={overlayRef} className="pointer-events-none absolute inset-0 z-[100]">
       {handles.map((h) => (
         <div
           key={h.key}
