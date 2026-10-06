@@ -79,4 +79,9 @@ test("read-through: the grid rolls with time; the panel refetches on staleness",
   assert.ok(!/new Date\(\)/.test(grid.slice(0, grid.indexOf("return ("))), "HeatGrid takes `now` as a prop — no internal once-per-render clock (midnight rollover rides the 30s tick)");
   const panel = src.slice(src.indexOf("function CostPanel"), src.indexOf("function HeatGrid"));
   assert.ok(/costsRefreshDue/.test(panel), "the panel refetches on the staleness rule, not only hydrated-view ticks (issue #158)");
+  /* audit round 1 B1: the styled tooltip replaced the native title, which was
+     at least focus-surfaced — the cell must keep that reachability */
+  const cells = grid.slice(grid.indexOf("return ("), grid.indexOf("CredentialsPanel"));
+  assert.ok(/role="img"/.test(cells) && /tabIndex=\{0\}/.test(cells), "cells expose their tooltip info to keyboard/AT: role + tabIndex, tooltip shows on focus-within too");
+  assert.ok(/group-focus-within:block/.test(cells), "the tooltip is not hover-only — keyboard focus shows it as well");
 });

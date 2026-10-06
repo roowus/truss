@@ -619,15 +619,20 @@ function HeatGrid({ days, now }: { days: DayRow[]; now: number }) {
               const tip = heatTooltip(d);
               return (
                 <span key={d.day} className="relative group">
+                  {/* role + tabIndex keep the cell's info reachable from the
+                      keyboard and screen readers (audit round 1 B1) — the
+                      native title this replaces was at least focus-surfaced */}
                   <span
+                    role="img"
                     aria-label={tip}
-                    className="block w-3 h-3 rounded-[3px] border border-[var(--t-line)]/60 group-hover:border-[var(--t-amber)]"
+                    tabIndex={0}
+                    className="block w-3 h-3 rounded-[3px] border border-[var(--t-line)]/60 group-hover:border-[var(--t-amber)] focus-visible:outline-1 focus-visible:outline-[var(--t-amber)]"
                     style={{ background: tok === 0 ? "var(--t-bg0)" : `color-mix(in oklab, var(--t-amber) ${Math.round(p * 100)}%, var(--t-bg0))` }}
                   />
-                  {/* GitHub-style tooltip: instant on hover, anchored to the
-                      cell (left-aligned except the last column, which flips
-                      so it can't run off the panel edge) */}
-                  <span className={`pointer-events-none absolute bottom-full mb-1.5 z-40 hidden group-hover:block whitespace-nowrap rounded-md px-2 py-1 text-[10.5px] leading-4 font-medium text-white bg-[#24292e] shadow-md ${i === weeks.length - 1 ? "right-0" : "left-0"}`}>
+                  {/* GitHub-style tooltip: instant on hover or keyboard focus,
+                      anchored to the cell (left-aligned except the last
+                      column, which flips so it can't run off the panel edge) */}
+                  <span className={`pointer-events-none absolute bottom-full mb-1.5 z-40 hidden group-hover:block group-focus-within:block whitespace-nowrap rounded-md px-2 py-1 text-[10.5px] leading-4 font-medium text-white bg-[#24292e] shadow-md ${i === weeks.length - 1 ? "right-0" : "left-0"}`}>
                     {tip}
                   </span>
                 </span>
