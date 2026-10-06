@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { IDockviewPanelProps } from "dockview-react";
 import { store, useApp, useNow, capsOf, type Agent, type SessionView } from "@/lib/store";
 import { baseHarness, fmtCost, fmtMs, fmtTokens, shortPath, ago } from "@/lib/format";
@@ -6,7 +6,7 @@ import { harnessDisplay, hostAliases } from "@/lib/device";
 import { useDesktops } from "@/lib/desktops";
 import { Btn, Empty, HarnessMark, Icon, Kbd, Select, Spinner, StateDot, TrussLogo } from "@/components/ui";
 import { openDailyDriver, openFreeShell } from "@/lib/workspace";
-import { costsRefreshDue, heatTooltip } from "@/lib/heatGrid";
+import { costsRefreshDue, clampTipPos, heatTooltip } from "@/lib/heatGrid";
 import type { SkillInfo } from "@/lib/proto";
 import { cn } from "@/utils/cn";
 
@@ -587,9 +587,41 @@ function DayTotals({ days }: { days: DayRow[] }) {
 
 /** Codex-style 5-week usage heat grid (intensity = total tokens that day).
     `now` comes in as a prop (the panel's 30s tick), so "today" rolls at
-    midnight without a data change; the cell tooltip is the styled instant
-    kind (issue #158), not the slow native title. */
+    midnight without a data change. One shared tooltip is drawn for the
+    hovered (or keyboard-focused) cell, centered on it and clamped inside
+    the grid wrapper — per-cell tooltips clipped at the panel edge on
+    narrow docks (issue #158 audit round 2). */
 function HeatGrid({ days, now }: { days: DayRow[]; now: number }) {
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const tipRef = useRef<HTMLSpanElement>(null);
+  const [hover, setHover] = useState<{ day: DayRow; left: number; top: number; w: number; h: number } | null>(null);
+  const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
+  useLayoutEffect(() => {
+    /* measure after the tooltip renders but before paint — no flicker */
+    if (!hover || !wrapRef.current || !tipRef.current) { setPos(null); return; }
+    const wrap = wrapRef.current.getBoundingClientRect();
+    setPos(clampTipPos(
+      { left: hover.left, top: hover.top, width: hover.w, height: hover.h },
+      { width: tipRef.current.offsetWidth, height: tipRef.current.offsetHeight },
+      { width: wrap.width, height: wrap.height },
+    ));
+  }, [hover]);
+  useEffect(() => {
+    /* the panel scrolls under a held hover: drop the tooltip rather than
+       let it sit stranded away from its cell */
+    if (!hover) return;
+    const clear = () => setHover(null);
+    window.addEventListener("scroll", clear, true);
+    window.addEventListener("resize", clear);
+    return () => { window.removeEventListener("scroll", clear, true); window.removeEventListener("resize", clear); };
+  }, [hover]);
+  const show = (el: HTMLElement, day: DayRow) => {
+    const wrap = wrapRef.current;
+    if (!wrap) return;
+    const r = el.getBoundingClientRect();
+    const wr = wrap.getBoundingClientRect();
+    setHover({ day, left: r.left - wr.left, top: r.top - wr.top, w: r.width, h: r.height });
+  };
   const byDay = new Map(days.map((d) => [d.day, d]));
   /* build 35 cells ending today, week-aligned (oldest first, column per week) */
   const todayD = new Date(now);
@@ -607,7 +639,7 @@ function HeatGrid({ days, now }: { days: DayRow[]; now: number }) {
   const weeks: (DayRow | null)[][] = [];
   for (let i = 0; i < cells.length; i += 7) weeks.push(cells.slice(i, i + 7));
   return (
-    <div className="px-4 pb-3">
+    <div ref={wrapRef} className="relative px-4 pb-3" onMouseLeave={() => setHover(null)} onBlur={() => setHover(null)}>
       <div className="text-[10.5px] font-medium uppercase tracking-[0.08em] text-[var(--t-dim)] mb-1.5">last 5 weeks</div>
       <div className="flex gap-[3px]">
         {weeks.map((w, i) => (
@@ -618,29 +650,33 @@ function HeatGrid({ days, now }: { days: DayRow[]; now: number }) {
               const p = tok === 0 ? 0 : Math.max(0.18, tok / max);
               const tip = heatTooltip(d);
               return (
-                <span key={d.day} className="relative group">
-                  {/* role + tabIndex keep the cell's info reachable from the
-                      keyboard and screen readers (audit round 1 B1) — the
-                      native title this replaces was at least focus-surfaced */}
-                  <span
-                    role="img"
-                    aria-label={tip}
-                    tabIndex={0}
-                    className="block w-3 h-3 rounded-[3px] border border-[var(--t-line)]/60 group-hover:border-[var(--t-amber)] focus-visible:outline-1 focus-visible:outline-[var(--t-amber)]"
-                    style={{ background: tok === 0 ? "var(--t-bg0)" : `color-mix(in oklab, var(--t-amber) ${Math.round(p * 100)}%, var(--t-bg0))` }}
-                  />
-                  {/* GitHub-style tooltip: instant on hover or keyboard focus,
-                      anchored to the cell (left-aligned except the last
-                      column, which flips so it can't run off the panel edge) */}
-                  <span className={`pointer-events-none absolute bottom-full mb-1.5 z-40 hidden group-hover:block group-focus-within:block whitespace-nowrap rounded-md px-2 py-1 text-[10.5px] leading-4 font-medium text-white bg-[#24292e] shadow-md ${i === weeks.length - 1 ? "right-0" : "left-0"}`}>
-                    {tip}
-                  </span>
-                </span>
+                /* role + tabIndex keep the cell's info reachable from the
+                   keyboard and screen readers (audit round 1 B1) — the
+                   native title this replaces was at least focus-surfaced */
+                <span
+                  key={d.day}
+                  role="img"
+                  aria-label={tip}
+                  tabIndex={0}
+                  onMouseEnter={(e) => show(e.currentTarget, d)}
+                  onFocus={(e) => show(e.currentTarget, d)}
+                  className="block w-3 h-3 rounded-[3px] border border-[var(--t-line)]/60 hover:border-[var(--t-amber)] focus-visible:outline-1 focus-visible:outline-[var(--t-amber)]"
+                  style={{ background: tok === 0 ? "var(--t-bg0)" : `color-mix(in oklab, var(--t-amber) ${Math.round(p * 100)}%, var(--t-bg0))` }}
+                />
               );
             })}
           </div>
         ))}
       </div>
+      {hover && (
+        <span
+          ref={tipRef}
+          style={{ left: pos?.left ?? -1000, top: pos?.top ?? -1000 }}
+          className="pointer-events-none absolute z-40 max-w-full rounded-md px-2 py-1 text-[10.5px] leading-4 font-medium text-white bg-[#24292e] shadow-md"
+        >
+          {heatTooltip(hover.day)}
+        </span>
+      )}
     </div>
   );
 }

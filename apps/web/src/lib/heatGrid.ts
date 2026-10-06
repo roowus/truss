@@ -41,3 +41,20 @@ export function costsRefreshDue(input: { lastFetchAt: number; now: number; stale
   if (!lastFetchAt) return true;
   return now - lastFetchAt >= staleAfterMs;
 }
+
+/** Where to draw the shared cell tooltip inside the grid wrapper: centered
+    on the cell, slid fully inside when it would poke out either side (the
+    per-cell anchor used to clip at the panel edge on narrow docks), above
+    the cell by default (GitHub-style), flipped below for the top row, and
+    nudged inside when even that would spill past the bottom. */
+export function clampTipPos(
+  anchor: { left: number; top: number; width: number; height: number },
+  tip: { width: number; height: number },
+  wrap: { width: number; height: number },
+): { left: number; top: number } {
+  const left = Math.max(0, Math.min(anchor.left + anchor.width / 2 - tip.width / 2, wrap.width - tip.width));
+  let top = anchor.top - tip.height - 6; // above the cell
+  if (top < 0) top = anchor.top + anchor.height + 6; // top row: below instead
+  if (top + tip.height > wrap.height) top = Math.max(0, wrap.height - tip.height); // bottom rows: hug the edge
+  return { left, top };
+}

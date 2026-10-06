@@ -34,6 +34,11 @@ import { readFileSync } from "node:fs";
 interface HeatGridModule {
   heatTooltip(day: { day: string; calls: number; tokensIn: number; tokensOut: number; costUsd: number | null }): string;
   costsRefreshDue(input: { lastFetchAt: number; now: number; staleAfterMs?: number }): boolean;
+  clampTipPos(
+    anchor: { left: number; top: number; width: number; height: number },
+    tip: { width: number; height: number },
+    wrap: { width: number; height: number },
+  ): { left: number; top: number };
 }
 
 async function load(): Promise<HeatGridModule | null> {
@@ -73,6 +78,36 @@ test("costsRefreshDue: time-based staleness — hydration-independent", async ()
   assert.equal(mod.costsRefreshDue({ lastFetchAt: 0, now: 5 }), true, "never fetched → due");
 });
 
+test("clampTipPos: centered on the cell, clamped inside the grid, above by default", async () => {
+  const mod = await load();
+  assert.ok(mod, "heatGrid module must exist (see module test)");
+  const clamp = mod.clampTipPos;
+  const tip = { width: 200, height: 22 };
+
+  // roomy grid: tooltip sits centered above the cell, fully inside
+  const mid = clamp({ left: 100, top: 50, width: 12, height: 12 }, tip, { width: 400, height: 140 });
+  assert.equal(mid.left, 6, "centered on the cell");
+  assert.equal(mid.top, 50 - 22 - 6, "above the cell");
+  assert.ok(mid.left >= 0 && mid.left + tip.width <= 400, "inside horizontally");
+  assert.ok(mid.top >= 0, "inside vertically");
+
+  // cells near the left edge can no longer spill past it (the reported clip)
+  const leftEdge = clamp({ left: 2, top: 50, width: 12, height: 12 }, tip, { width: 240, height: 140 });
+  assert.equal(leftEdge.left, 0, "slid inside the left edge");
+
+  // cells near the right edge can no longer spill past it either
+  const rightEdge = clamp({ left: 340, top: 50, width: 12, height: 12 }, tip, { width: 360, height: 140 });
+  assert.equal(rightEdge.left, 360 - tip.width, "slid inside the right edge");
+
+  // top row flips below instead of clipping above
+  const topRow = clamp({ left: 100, top: 2, width: 12, height: 12 }, tip, { width: 400, height: 140 });
+  assert.equal(topRow.top, 2 + 12 + 6, "flipped below the cell");
+
+  // a flipped-below tooltip near the bottom is nudged back inside
+  const squeezed = clamp({ left: 100, top: 16, width: 12, height: 12 }, tip, { width: 400, height: 40 });
+  assert.ok(squeezed.top + tip.height <= 40 && squeezed.top >= 0, "nudged inside vertically");
+});
+
 test("read-through: the grid rolls with time; the panel refetches on staleness", () => {
   const src = readFileSync(new URL("../src/panels/Inspectors.tsx", import.meta.url), "utf8");
   const grid = src.slice(src.indexOf("function HeatGrid"));
@@ -82,6 +117,10 @@ test("read-through: the grid rolls with time; the panel refetches on staleness",
   /* audit round 1 B1: the styled tooltip replaced the native title, which was
      at least focus-surfaced — the cell must keep that reachability */
   const cells = grid.slice(grid.indexOf("return ("), grid.indexOf("CredentialsPanel"));
-  assert.ok(/role="img"/.test(cells) && /tabIndex=\{0\}/.test(cells), "cells expose their tooltip info to keyboard/AT: role + tabIndex, tooltip shows on focus-within too");
-  assert.ok(/group-focus-within:block/.test(cells), "the tooltip is not hover-only — keyboard focus shows it as well");
+  assert.ok(/role="img"/.test(cells) && /tabIndex=\{0\}/.test(cells), "cells expose their tooltip info to keyboard/AT: role + tabIndex, tooltip shows on focus too");
+  /* audit round 2: per-cell tooltips clipped at the panel edge on narrow
+     docks — one shared tooltip, clamped inside the grid wrapper, shown for
+     hovered AND focused cells */
+  assert.ok(/onMouseEnter=/.test(cells) && /onFocus=/.test(cells), "the tooltip shows for hovered and keyboard-focused cells alike");
+  assert.ok(/clampTipPos\(/.test(grid) && /relative/.test(cells), "the shared tooltip is positioned by clampTipPos inside a relative grid wrapper");
 });
