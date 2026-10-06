@@ -236,7 +236,7 @@ function MonitorBody({ m, hist }: { m: HostMetrics; hist: { t: number; cpu: numb
             ))}
           </div>
           {m.cpu.times && (
-            <div className="mt-2.5" title="where cpu time went over the sample window — the unfilled rest is idle">
+            <div className="mt-2.5" title="where cpu time went over the sample window; the unfilled rest is idle">
               <div className="flex h-1.5 rounded-full overflow-hidden bg-[var(--t-line)]">
                 {CPU_SEGS.map(([k, color]) =>
                   m.cpu.times![k] > 0.05 ? <div key={k} style={{ width: `${Math.min(100, m.cpu.times![k])}%`, background: color }} /> : null,
@@ -474,7 +474,7 @@ function MonitorBody({ m, hist }: { m: HostMetrics; hist: { t: number; cpu: numb
               ))}
             </div>
           ) : (
-            <div className="mt-2 font-mono text-[10px] text-[var(--t-dim)]">no warnings or errors since boot — clean</div>
+            <div className="mt-2 font-mono text-[10px] text-[var(--t-dim)]">no warnings or errors since boot: clean</div>
           )}
         </section>
       )}
