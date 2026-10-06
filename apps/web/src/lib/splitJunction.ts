@@ -255,6 +255,52 @@ export function junctionCenter(junction: Junction, gap = 0): { x: number; y: num
   return { x: junction.x + gap / 2, y: junction.y + gap / 2 };
 }
 
+/** One junction-drag gesture, from pointerdown to settle (issue #192). */
+export interface JunctionDragSession {
+  /** Forward a pointer delta; a no-op once the drag has ended. */
+  move(dx: number, dy: number): void;
+  /** Settle the drag. Idempotent: pointerup, pointercancel, and blur can all land. */
+  end(): void;
+  /** Whether the drag is still live. */
+  active(): boolean;
+}
+
+/**
+ * A junction drag as an object with a lifetime (issue #192). The old code
+ * kept the drag in a ref and released it via pointer capture on the handle
+ * element — but every move re-rendered the handle list, a remount killed
+ * the capture, and the orphaned drag kept following the cursor. With the
+ * drag as a session, the UI drives it from window-level listeners and
+ * settles it through end(), so element churn can never orphan it.
+ *
+ * The session is a pure lifecycle gate: move forwards deltas while live,
+ * end settles it (once, however many end paths fire). It never consults
+ * the grab-time grid/junction itself — the apply callback closes over them
+ * and diffs every move against the layout at grab time. Gating on geometry
+ * here would swallow moves the sink still wants to see: a junk or fully
+ * clamped layout must not look like a release.
+ */
+export function startJunctionDrag(
+  grid: SplitLayout,
+  junction: Junction,
+  apply: (dx: number, dy: number) => void,
+): JunctionDragSession {
+  void grid;
+  void junction;
+  let live = true;
+  return {
+    move(dx, dy) {
+      if (live) apply(dx, dy);
+    },
+    end() {
+      live = false;
+    },
+    active() {
+      return live;
+    },
+  };
+}
+
 /**
  * Groups whose rect changed between two layouts — exactly the setSize calls
  * a junction drag applies to the live dock. Bystanders never appear here.

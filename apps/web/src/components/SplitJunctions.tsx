@@ -6,6 +6,7 @@ import {
   groupIdOf,
   junctionCenter,
   splitJunctions,
+  startJunctionDrag,
   type Junction,
   type SplitLayout,
 } from "@/lib/splitJunction";
@@ -15,13 +16,6 @@ interface Handle {
   x: number;
   y: number;
   junction: Junction;
-}
-
-interface DragState {
-  grid: SplitLayout;
-  junction: Junction;
-  startX: number;
-  startY: number;
 }
 
 /**
@@ -34,7 +28,9 @@ interface DragState {
 export function SplitJunctionHandles({ api, gap = 0 }: { api: DockviewApi; gap?: number }) {
   const overlayRef = useRef<HTMLDivElement>(null);
   const [handles, setHandles] = useState<Handle[]>([]);
-  const dragRef = useRef<DragState | null>(null);
+  /* the live gesture's settle function — removes the window listeners and
+     ends the session; held in a ref so unmount can tear down mid-drag */
+  const endDragRef = useRef<(() => void) | null>(null);
 
   const refresh = useCallback(() => {
     const overlay = overlayRef.current;
@@ -96,31 +92,55 @@ export function SplitJunctionHandles({ api, gap = 0 }: { api: DockviewApi; gap?:
     };
   }, [api, refresh]);
 
+  /* unmounting mid-gesture settles the drag too — otherwise the window
+     listeners outlive the component and keep resizing a gone dock */
+  useEffect(() => () => endDragRef.current?.(), []);
+
   const onPointerDown = (e: React.PointerEvent<HTMLDivElement>, junction: Junction) => {
     if (e.button !== 0) return;
     e.preventDefault();
     e.stopPropagation();
-    e.currentTarget.setPointerCapture(e.pointerId);
+    /* one gesture at a time — a previous one that somehow survived settles
+       here instead of stacking listeners */
+    endDragRef.current?.();
     /* the drag always diffs against the layout at grab time, so a wiggle
        out and back lands exactly where it started */
-    dragRef.current = { grid: api.toJSON().grid as SplitLayout, junction, startX: e.clientX, startY: e.clientY };
-  };
-  const onPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
-    const drag = dragRef.current;
-    if (!drag) return;
-    const next = dragJunction(drag.grid, drag.junction, e.clientX - drag.startX, e.clientY - drag.startY);
-    if (next === drag.grid) return; // clamped shut
-    for (const s of changedGroupSizes(drag.grid, next)) {
-      api.getGroup(s.id)?.api.setSize({ width: s.width, height: s.height });
-    }
-  };
-  const endDrag = (e: React.PointerEvent<HTMLDivElement>) => {
-    if (!dragRef.current) return;
-    dragRef.current = null;
-    e.currentTarget.releasePointerCapture?.(e.pointerId);
-    /* the drag's own setSize calls fire onDidLayoutChange, which both
-       re-places the handles and persists the layout via desktops.capture */
-    refresh();
+    const grid = api.toJSON().grid as SplitLayout;
+    const startX = e.clientX;
+    const startY = e.clientY;
+    const drag = startJunctionDrag(grid, junction, (dx, dy) => {
+      const next = dragJunction(grid, junction, dx, dy);
+      if (next === grid) return; // clamped shut
+      for (const s of changedGroupSizes(grid, next)) {
+        api.getGroup(s.id)?.api.setSize({ width: s.width, height: s.height });
+      }
+    });
+    /* move/up ride WINDOW-level listeners attached here and torn down at
+       drag end (issue #192). The drag's own setSize calls fire
+       onDidLayoutChange → refresh() → the handles re-render mid-drag, and
+       with element-level handlers + pointer capture a remounting handle
+       killed the release path — the orphaned drag kept following the
+       cursor. Window listeners outlive any handle churn; pointercancel and
+       window blur settle exactly like pointerup. */
+    const onMove = (ev: PointerEvent) => drag.move(ev.clientX - startX, ev.clientY - startY);
+    const end = () => {
+      if (!drag.active()) return;
+      drag.end();
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", end);
+      window.removeEventListener("pointercancel", end);
+      window.removeEventListener("blur", end);
+      if (endDragRef.current === end) endDragRef.current = null;
+      /* the last setSize already fired onDidLayoutChange (re-placing the
+         handles and persisting via desktops.capture); refresh once more in
+         case the final move was a no-op */
+      refresh();
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", end);
+    window.addEventListener("pointercancel", end);
+    window.addEventListener("blur", end);
+    endDragRef.current = end;
   };
 
   return (
@@ -139,9 +159,6 @@ export function SplitJunctionHandles({ api, gap = 0 }: { api: DockviewApi; gap?:
           aria-label="Drag to resize the adjacent panels"
           title="Drag to resize the adjacent panels"
           onPointerDown={(e) => onPointerDown(e, h.junction)}
-          onPointerMove={onPointerMove}
-          onPointerUp={endDrag}
-          onPointerCancel={endDrag}
         />
       ))}
     </div>
