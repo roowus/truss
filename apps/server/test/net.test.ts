@@ -160,12 +160,36 @@ test("parseServingHttpsPort: only a config proxying to OUR port is attributed", 
     assert.equal(net.parseServingHttpsPort(status, 4040), 8443, "ours is the config proxying to our port");
     assert.equal(net.parseServingHttpsPort(status, 5555), null, "a neighbor's config is NOT ours — OFF must target nothing");
 
+    /* audit round 3: the digit boundary — a neighbor on a PREFIX port
+       (40401 vs our 4040) must not attribute to us */
+    const prefix = JSON.stringify({ Web: { "rewvis.tail208cbf.ts.net:443": { Handlers: { "/": { Proxy: "http://127.0.0.1:40401" } } } } });
+    assert.equal(net.parseServingHttpsPort(prefix, 4040), null, "127.0.0.1:40401 is NOT our 4040 — the prefix neighbor stays unattributed");
+    assert.equal(net.parseServingHttpsPort(prefix, 40401), 443, "...and attributes to its real owner");
+
     const portlessKey = JSON.stringify({ Web: { "rewvis.tail208cbf.ts.net": { Handlers: { "/": { Proxy: "http://127.0.0.1:4040" } } } } });
     assert.equal(net.parseServingHttpsPort(portlessKey, 4040), 443, "a key without a port suffix is 443");
 
     for (const junk of ["", "not json", "{}", "[]", "null"]) {
       assert.equal(net.parseServingHttpsPort(junk, 4040), null, `${JSON.stringify(junk)} → null, never a crash`);
     }
+  } finally {
+    cleanup();
+  }
+});
+
+test("parseServeAttribution: netInfo's serveOn/serveUrl path — key AND port, boundary-matched", async () => {
+  const { cleanup } = await freshServer("net-serve-attr-key");
+  try {
+    const net = await import("../src/net.js");
+    const status = JSON.stringify({
+      Web: {
+        "rewvis.tail208cbf.ts.net:443": { Handlers: { "/": { Proxy: "http://127.0.0.1:40401" } } },
+        "rewvis.tail208cbf.ts.net:8443": { Handlers: { "/": { Proxy: "http://127.0.0.1:4040" } } },
+      },
+    });
+    const ours = net.parseServeAttribution(status, 4040);
+    assert.deepEqual(ours, { key: "rewvis.tail208cbf.ts.net:8443", httpsPort: 8443 }, "serveUrl is built from OUR config's key — the neighbor's :443 is not offered");
+    assert.equal(net.parseServeAttribution(status, 3000), null, "nothing ours → serveOn false");
   } finally {
     cleanup();
   }

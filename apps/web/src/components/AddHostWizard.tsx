@@ -264,10 +264,14 @@ export function AddHostWizard({ onClose }: { onClose: () => void }) {
                           className="underline decoration-dotted hover:brightness-125"
                           onClick={() => {
                             setServeBusy(true);
+                            setErr(null);
                             be?.tailscaleServe(true)
                               .then(() => be.netInfo())
                               .then((n) => { setNet(n); setServeBusy(false); })
-                              .catch(() => setServeBusy(false));
+                              /* surface the refusal (e.g. both candidate ports
+                                 busy, audit B2) — a silent catch leaves the
+                                 user thinking the click did nothing */
+                              .catch((e) => { setErr(e?.message ?? String(e)); setServeBusy(false); });
                           }}
                         >
                           turn on tailscale serve now

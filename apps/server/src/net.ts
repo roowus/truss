@@ -143,15 +143,13 @@ export async function netInfo(port: number, bindHost?: string): Promise<NetInfo>
          down) and the wizard would offer the neighbor's URL as ours */
       try {
         const sv = await sh("tailscale", ["serve", "status", "--json"]);
-        const sj = JSON.parse(sv);
-        const web: [string, unknown][] = sj?.Web && typeof sj.Web === "object" ? Object.entries(sj.Web) : [];
-        const hit = web.find(([, v]) => JSON.stringify(v).includes(`127.0.0.1:${port}`));
-        out.tailscale.serveOn = !!hit;
-        if (hit) out.tailscale.serveUrl = `https://${hit[0]}`;
+        const ours = parseServeAttribution(sv, port);
+        out.tailscale.serveOn = !!ours;
+        if (ours) out.tailscale.serveUrl = `https://${ours.key}`;
       } catch {
         const sv = await sh("tailscale", ["serve", "status"]);
         const m = sv.match(/https:\/\/[^\s]+/);
-        const ours = sv.includes(`127.0.0.1:${port}`);
+        const ours = proxiesToPort(sv, port);
         out.tailscale.serveOn = !!m && ours;
         if (m && ours) out.tailscale.serveUrl = m[0];
       }
@@ -318,22 +316,37 @@ async function runServeLine(line: string): Promise<void> {
   await sh(cmd, args);
 }
 
+/** does this serve-status fragment proxy to OUR port? Matched with a digit
+   boundary — 4040 must not attribute a neighbor's 40401 (audit round 3:
+   the bare substring let a prefix neighbor pass as us). */
+function proxiesToPort(text: string, port: number): boolean {
+  return new RegExp(`127\\.0\\.0\\.1:${port}(?!\\d)`).test(text);
+}
+
+/** pure: `tailscale serve status --json` text → the serve config that is
+   OURS (proxies to this server's port, boundary-matched) — its Web key and
+   https port. null when nothing attributable serves or the text is garbage.
+   netInfo reads the key for serveUrl; OFF reads the port. */
+export function parseServeAttribution(statusJson: string, port: number): { key: string; httpsPort: number } | null {
+  try {
+    const sj = JSON.parse(statusJson);
+    const web: [string, unknown][] = sj?.Web && typeof sj.Web === "object" ? Object.entries(sj.Web) : [];
+    const ours = web.find(([, v]) => proxiesToPort(JSON.stringify(v), port));
+    if (!ours) return null;
+    const m = ours[0].match(/:(\d+)$/);
+    return { key: ours[0], httpsPort: m ? Number(m[1]) : 443 };
+  } catch {
+    return null;
+  }
+}
+
 /** pure: `tailscale serve status --json` text → the https port serving THIS
    truss — the config whose handlers proxy to our local port. null when
    nothing serves, nothing ATTRIBUTABLE serves, or the text is garbage:
    OFF must never tear down a config it cannot attribute (audit B1 — an
    unattributed teardown is the neighbor-killer). */
 export function parseServingHttpsPort(statusJson: string, port: number): number | null {
-  try {
-    const sj = JSON.parse(statusJson);
-    const web: [string, unknown][] = sj?.Web && typeof sj.Web === "object" ? Object.entries(sj.Web) : [];
-    const ours = web.find(([, v]) => JSON.stringify(v).includes(`127.0.0.1:${port}`));
-    if (!ours) return null;
-    const m = ours[0].match(/:(\d+)$/);
-    return m ? Number(m[1]) : 443;
-  } catch {
-    return null;
-  }
+  return parseServeAttribution(statusJson, port)?.httpsPort ?? null;
 }
 
 /** the https port tailscale is ACTUALLY serving this truss on (null when

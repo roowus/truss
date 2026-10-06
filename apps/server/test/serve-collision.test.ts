@@ -8,7 +8,8 @@ import { freshServer } from "./helpers.js";
    *.rewis site died. Diagnosis (from the ops session): truss ran
    `tailscale serve --bg --https=443` on a machine where Caddy owns 443 —
    tailscaled took over TLS on 443 for the whole machine and Caddy was
-   shadowed until `tailscale serve reset`). These FAIL on purpose today.
+   shadowed until `tailscale serve reset`). These FAILED on purpose before
+   the fix landed; they now pass and pin the shipped contract.
 
    The contract (net.ts):
 
