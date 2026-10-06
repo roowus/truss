@@ -15,14 +15,17 @@ export interface RowAction {
   confirm?: boolean;
 }
 
-/* Session rows compose from one array too (issue #110): the pin LEADS the
+/* Session rows compose from one array too (issue #110): the pin shares the
    same cluster as every other action — one flex container, one gap, so the
-   pin's spacing can never diverge from the others again. Visibility is a
-   per-member rule: the pin is the only entry that may be visible:"always",
-   and only while pinned (the #99 contract via pinAffordance); everything
-   else is hover-only. The destructive entry still rides last (the #85
-   rule). Badge/timestamp/state stay indicators — they are not actions and
-   never appear in this array.
+   pin's spacing can never diverge from the others again. The pin anchors
+   LAST (issue #156, amending #110's pin-first): the same right-edge index
+   at rest and on hover, so a pinned row's solid pin never dodges the
+   pointer — and the destructive entry rides just inside it, never at the
+   edge a cursor aimed at the pin would hit. Visibility is a per-member
+   rule: the pin is the only entry that may be visible:"always", and only
+   while pinned (the #99 contract via pinAffordance); everything else is
+   hover-only. Badge/timestamp/state stay indicators — they are not actions
+   and never appear in this array.
 
    The session contract spells the destructive flag "danger" (the #110 spec
    tests read it); the shell/host contract above keeps its #85 "dangerous". */
@@ -52,7 +55,6 @@ export function sessionRowActions(state: {
   }
   const pin = pinAffordance(state.pinned);
   const actions: SessionRowAction[] = [
-    { id: "pin", icon: pin.icon, label: pin.actionLabel, visible: pin.visible },
     /* the displaced gesture (issue #147): the row's double-click used to
        open chat + trajectory + context; the name's double-click is rename
        now, so the layout open lives on as an explicit action */
@@ -71,6 +73,10 @@ export function sessionRowActions(state: {
     }
   }
   actions.push({ id: "trash", icon: "trash", label: "Move to trash (recoverable for 30 days)", danger: true, confirm: true, visible: "hover" });
+  /* the pin anchors LAST (issue #156): the identical right-edge index at
+     rest and on hover, so it never dodges the pointer — and trash rides
+     just inside it, never at the edge the pin owns */
+  actions.push({ id: "pin", icon: pin.icon, label: pin.actionLabel, visible: pin.visible });
   return actions;
 }
 
