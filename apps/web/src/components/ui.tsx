@@ -173,6 +173,9 @@ export interface SelectOption {
   value: string;
   label: ReactNode;
   hint?: string;
+  /** hover detail on the row (and on the closed trigger for the current
+     option) — e.g. the model picker's full routing path (issue #169) */
+  title?: string;
 }
 
 /** A dropdown that matches the app: portal list, typeahead, arrows+enter+esc, click-outside. */
@@ -284,6 +287,7 @@ export function Select({
         aria-label={ariaLabel}
         aria-haspopup="listbox"
         aria-expanded={open}
+        title={current?.title}
         onClick={() => {
           if (!open) {
             setFilter("");
@@ -336,6 +340,7 @@ export function Select({
               role="option"
               aria-selected={o.value === value}
               data-hl={i === highlight ? "" : undefined}
+              title={o.title}
               onPointerEnter={() => setHighlight(i)}
               onClick={() => pick(o.value)}
               className={cn(

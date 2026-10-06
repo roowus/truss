@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { defaultTailscaleReturn, deviceLabel, hostAliases, hostDisplay, peerAlreadyAdded } from "../src/lib/device";
-import { buildModelOptions, modelValue, splitModelValue } from "../src/lib/models";
+import { buildModelOptions, modelSelectOptions, modelValue, splitModelValue } from "../src/lib/models";
 
 /* the chat header's device chip + model picker logic (pure halves) */
 
@@ -110,6 +110,32 @@ test("buildModelOptions: empty catalog + no model -> no options (picker hides it
   const opts = buildModelOptions([], "pi", "m", "p");
   assert.equal(opts.length, 1);
   assert.equal(opts[0].value, "p/m");
+});
+
+test("modelSelectOptions: provider rides as the row hint, the path becomes the hover title (#169)", () => {
+  const catalog = [
+    { harness: "pi", provider: "truss-fw", model: "accounts/fireworks/routers/x/kimi-k3", label: "accounts/fireworks/routers/x/kimi-k3" },
+    { harness: "pi", provider: "zai-local", model: "glm-4.7", label: "GLM 4.7" },
+  ];
+  const opts = modelSelectOptions(buildModelOptions(catalog, "pi", "glm-4.7", "zai-local"));
+  // parsed row: provider is the secondary line, the raw path only on hover
+  assert.equal(opts[0].label, "Kimi K3");
+  assert.equal(opts[0].hint, "Fireworks");
+  assert.equal(opts[0].title, "accounts/fireworks/routers/x/kimi-k3");
+  // clean row: provider still secondary, the hover carries the full id
+  assert.equal(opts[1].label, "GLM 4.7");
+  assert.equal(opts[1].hint, "Zai Local");
+  assert.equal(opts[1].title, "zai-local/glm-4.7");
+  // the source options are untouched — the exact-id hint survives for filtering
+  const raw = buildModelOptions(catalog, "pi");
+  assert.equal(raw[0].hint, "truss-fw/accounts/fireworks/routers/x/kimi-k3");
+});
+
+test("modelSelectOptions: a synthesized current row keeps its 'current' marker", () => {
+  const opts = modelSelectOptions(buildModelOptions([], "pi", "old-model", "old-prov"));
+  assert.equal(opts.length, 1);
+  assert.equal(opts[0].hint, "current", "no parsed provider -> the marker survives the projection");
+  assert.equal(opts[0].title, "old-prov/old-model", "the hover still gives the full id");
 });
 
 /* the wizard's return address: on tailscale the device pick implies the

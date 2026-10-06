@@ -4,7 +4,7 @@ import { store, useApp, useNow, capsOf, type Msg, type ToolRun, type Perm, type 
 import { argSummary, fmtMs, fmtTakeTime, harnessStyle, shortPath, baseHarness, deadSessionHint } from "@/lib/format";
 import { deviceLabel, harnessDisplay, hostAliases } from "@/lib/device";
 import { useDesktops } from "@/lib/desktops";
-import { buildModelOptions, modelValue, splitModelValue } from "@/lib/models";
+import { buildModelOptions, modelSelectOptions, modelValue, splitModelValue } from "@/lib/models";
 import { planHeaderFit, HEADER_CLUSTER, HEADER_GAP } from "@/lib/headerFit";
 import { CHAT_WIDTH_DEFAULT, chatHandleGeometry, commitChatWidth, dragDisplayWidth, readChatWidthPref, resolveChatWidth, writeChatWidthPref } from "@/lib/chatWidth";
 import { filesFromTransfer, isFileDrag } from "@/lib/attach";
@@ -878,7 +878,9 @@ function Composer({ id, active }: { id: string; active: boolean }) {
              draft is locked mid-run — model switching is not text input. */
           <Select
             value={currentValue}
-            options={modelOptions}
+            /* name primary, provider as the secondary line, full path on
+               hover — the raw routing path never shows (issue #169) */
+            options={modelSelectOptions(modelOptions)}
             onChange={onModelPick}
             ariaLabel="Switch model"
             className={cn("!h-7 !px-2 !py-0 !text-[11px] font-mono text-[var(--t-mute)] w-auto max-w-[160px] shrink-0", taAlignEnd && "mb-0.5")}
