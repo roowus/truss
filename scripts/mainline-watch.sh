@@ -17,8 +17,9 @@ git fetch origin -q || exit 0
 # service current. /health carries the running commit since #137; a pre-137
 # build has no sha, which is itself "stale".
 LIVE=$(curl -fsS -m 3 http://127.0.0.1:4040/health 2>/dev/null | sed -n 's/.*"commit":"\([0-9a-f]\{7,40\}\)".*/\1/p')
-[ -n "$LIVE" ] && [ "$LIVE" = "$(git rev-parse origin/main)" ] && exit 0   # actually current
-[ "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)" ] && [ -n "$LIVE" ] && exit 0   # nothing to deploy, service just lacks a sha
+[ "$LIVE" = "$(git rev-parse origin/main)" ] && exit 0   # actually current
+# (when the service predates /health shas, LIVE is empty — never exit on
+# that; deploy so the service gains the sha)
 [ "$(git branch --show-current)" = "main" ] || { echo "$(date -Is) skip: on $(git branch --show-current)"; exit 0; }
 git diff --quiet && git diff --cached --quiet || { echo "$(date -Is) skip: dirty tree"; exit 0; }
 # only skip when an untracked leftover would actually be overwritten by the
