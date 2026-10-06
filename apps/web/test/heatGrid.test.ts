@@ -118,9 +118,10 @@ test("read-through: the grid rolls with time; the panel refetches on staleness",
      at least focus-surfaced — the cell must keep that reachability */
   const cells = grid.slice(grid.indexOf("return ("), grid.indexOf("CredentialsPanel"));
   assert.ok(/role="img"/.test(cells) && /tabIndex=\{0\}/.test(cells), "cells expose their tooltip info to keyboard/AT: role + tabIndex, tooltip shows on focus too");
-  /* audit round 2: per-cell tooltips clipped at the panel edge on narrow
-     docks — one shared tooltip, clamped inside the grid wrapper, shown for
-     hovered AND focused cells */
+  /* the developer reported the per-cell tooltips clipping at the panel edge
+     on narrow docks (PR #165 session note, 2026-10-06 — not an audit round):
+     one shared tooltip, clamped inside the grid wrapper, shown for hovered
+     AND focused cells */
   assert.ok(/onMouseEnter=/.test(cells) && /onFocus=/.test(cells), "the tooltip shows for hovered and keyboard-focused cells alike");
   assert.ok(/clampTipPos\(/.test(grid) && /relative/.test(cells), "the shared tooltip is positioned by clampTipPos inside a relative grid wrapper");
 });

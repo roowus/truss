@@ -590,7 +590,7 @@ function DayTotals({ days }: { days: DayRow[] }) {
     midnight without a data change. One shared tooltip is drawn for the
     hovered (or keyboard-focused) cell, centered on it and clamped inside
     the grid wrapper — per-cell tooltips clipped at the panel edge on
-    narrow docks (issue #158 audit round 2). */
+    narrow docks (developer-reported on PR #165, session 2026-10-06). */
 function HeatGrid({ days, now }: { days: DayRow[]; now: number }) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const tipRef = useRef<HTMLSpanElement>(null);
