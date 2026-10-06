@@ -115,11 +115,15 @@ body {
 
 /* the tab context menu pops over arbitrary panel content — dockview's own
    rule ties its border to the (transparent) tab divider, so give the menu
-   chrome of its own: a real border separates it, a shadow lifts it */
+   chrome of its own: a real border separates it, the shared floating
+   shadow lifts it */
 .truss-dock .dv-context-menu {
   border: 1px solid var(--t-line2);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  box-shadow: var(--dv-floating-box-shadow);
 }
+/* menu separators read the same transparent tab-divider var — on the opaque
+   surface they were invisible whitespace, so give them a real line */
+.truss-dock .dv-context-menu-separator { background: var(--t-line); }
 
 /* ── splitter junction handles (issue #148, components/SplitJunctions.tsx):
    where a vertical and a horizontal sash cross, the crossing is a grabbable
