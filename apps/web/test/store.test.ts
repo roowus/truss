@@ -63,6 +63,14 @@ test("msg.chunk: implicit create, same-channel chunks merge, thinking splits seg
     { channel: "text", text: "answer" },
   ]);
   assert.deepEqual(v.items, [{ kind: "msg", id: "m1" }]); // single item, appended on first chunk
+
+  /* issue #142 audit (B8): when the chunk carries the sink's stamp, the
+     implicit create takes it — not the client frame clock — so the message
+     stays on one clock with its doneAt */
+  let v2 = emptyView();
+  const S = 1_760_000_000_000; // ms-scale stamp (toMs treats <1e12 as seconds)
+  v2 = reduce(v2, { sessionId: "s", type: "msg.chunk", messageId: "m9", text: "x", at: S }, 111);
+  assert.equal(v2.msgs.m9.at, S);
 });
 
 test("msg.done: marks done and preserves stopReason verbatim (provider errors survive to the UI pill)", () => {

@@ -103,7 +103,10 @@ export function reduce(v: SessionView, ev: ProtoEvent, frameTime: number): Sessi
       let m = v.msgs[ev.messageId];
       let items = v.items;
       if (!m) {
-        m = { id: ev.messageId, role: "assistant", segments: [], done: false, at: frameTime };
+        /* defensive path (the server emits msg.start first): prefer the
+           event's stamp over the client clock here too, so a message born
+           from a bare chunk still shares one clock with its doneAt */
+        m = { id: ev.messageId, role: "assistant", segments: [], done: false, at: ev.at !== undefined ? toMs(ev.at) : frameTime };
         items = [...items, { kind: "msg", id: ev.messageId }];
       }
       const ch = ev.channel === "thinking" ? "thinking" : ev.channel || "text";

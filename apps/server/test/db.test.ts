@@ -87,6 +87,13 @@ test("events: append and replay in order", async () => {
   assert.equal(events[1].ev.type, "msg.chunk");
   assert.equal((events[1].ev as { text: string }).text, "hello");
   assert.equal(events[2].ev.type, "msg.done");
+  /* issue #142 audit: a payload with no `at` of its own (rows persisted
+     before the sink stamped it, old importer output) replays with the
+     row's wall-clock — never time-less, so a hydrated done-span cannot
+     collapse to a fabricated 0ms */
+  assert.equal((events[0].ev as { at: number }).at, at, "a stamped payload keeps its own time");
+  const doneAt = (events[2].ev as { at?: number }).at;
+  assert.ok(typeof doneAt === "number" && doneAt >= at, "an unstamped payload inherits the row time");
   cleanup();
 });
 
