@@ -1,5 +1,5 @@
 import { useMemo, useState, useEffect, type ReactNode } from "react";
-import { store, useApp, useNow } from "@/lib/store";
+import { store, toMs, useApp, useNow } from "@/lib/store";
 import { desktops, useDesktops } from "@/lib/desktops";
 import { ago, shortPath, until } from "@/lib/format";
 import { harnessDisplay, hostAliases } from "@/lib/device";
@@ -8,6 +8,7 @@ import { HarnessMark, Icon, IconBtn, StateDot, TrussLogo, Spinner, STATE_META } 
 import type { HostInfo, SessionMeta, TerminalInfo } from "@/lib/proto";
 import { clusterRestState, hostRowActions, sessionRowActions, shellRowActions, type SessionRowAction } from "@/lib/rowActions";
 import { rowRenameTarget } from "@/lib/rowRename";
+import { sidebarAttention } from "@/lib/unread";
 import { sortWithPinned } from "@/lib/pinSort";
 import { pinAffordance, pinVisibilityCls } from "@/lib/pinAffordance";
 import { cn } from "@/utils/cn";
@@ -207,8 +208,14 @@ function Section({ title, action, children }: { title: string; action?: ReactNod
   );
 }
 
+/* shared empty map so rows render referentially stable while the read
+   marks have not loaded/seeded yet (issue #173) */
+const NO_READ_MARKS: Record<string, number> = {};
+
 function SessionRow({ s, now, archived }: { s: SessionMeta; now: number; archived?: boolean }) {
   const focused = useApp((st) => st.focused === s.id);
+  const focusedId = useApp((st) => st.focused ?? null);
+  const readAt = useDesktops((st) => st.readAt);
   const pending = useApp((st) => st.views[s.id]?.pending.length ?? 0);
   const hosts = useApp((st) => st.hosts);
   const hostPrefs = useDesktops((st) => st.hosts);
@@ -228,6 +235,15 @@ function SessionRow({ s, now, archived }: { s: SessionMeta; now: number; archive
     if (next && next !== s.title) void store.renameSession(s.id, next);
   };
   const dead = s.state === "closed" || s.state === "error";
+  /* issue #173: the unread badge sits beside the state dot but answers a
+     different question — violet, never the dot's teal/amber/red and never
+     the permission pill's amber. Focusing the session marks it read (the
+     desktops store writes the mark), which clears the badge. */
+  const attention = sidebarAttention(
+    { id: s.id, updatedAt: toMs(s.updated_at), state: s.state, createdAt: toMs(s.created_at) },
+    readAt ?? NO_READ_MARKS,
+    focusedId,
+  );
   /* ONE action cluster per row (issue #110): the pin shares the same array,
      flex container, and gap as every other action — before this it was a
      bespoke element mid-row, so its gap to the cluster could never match
@@ -308,6 +324,9 @@ function SessionRow({ s, now, archived }: { s: SessionMeta; now: number; archive
       )}
       <span className="group-hover:hidden group-focus-within:hidden flex items-center gap-1.5 shrink-0">
         <span className="text-[10px] text-[var(--t-dim)] tabular-nums">{ago(+new Date(s.updated_at) || Date.parse(String(s.updated_at)), now)}</span>
+        {attention === "unread" && (
+          <span className="w-1.5 h-1.5 rounded-full bg-[var(--t-violet)] shrink-0" title="Unread activity" />
+        )}
         <StateDot state={s.state} size={6} />
       </span>
       {/* one container, one gap (issue #110), resting state from
