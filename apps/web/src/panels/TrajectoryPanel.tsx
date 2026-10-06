@@ -1,10 +1,10 @@
-import { useEffect, useMemo, useState, Fragment } from "react";
+import { useEffect, useMemo, useRef, useState, Fragment } from "react";
 import type { IDockviewPanelProps } from "dockview-react";
 import { store, useApp, useNow, type Call, type SessionView } from "@/lib/store";
 import { argSummary, fmtCost, fmtMs, fmtTokens, harnessStyle } from "@/lib/format";
 import { harnessDisplay, hostAliases } from "@/lib/device";
 import { useDesktops } from "@/lib/desktops";
-import { trajectoryTimeline, type TimelineTurn } from "@/lib/trajectoryTimeline";
+import { trajectoryTimeline, timelineOverview, type TimelineOverview, type TimelineTurn } from "@/lib/trajectoryTimeline";
 import { Empty, HarnessMark, Icon, Spinner } from "@/components/ui";
 import { cn } from "@/utils/cn";
 
@@ -113,6 +113,27 @@ function TimelineView({ view, hasCalls }: { view: SessionView; hasCalls: boolean
   const turns = useMemo(() => trajectoryTimeline(viewEvents(view)), [view]);
   const anyOpen = turns.some((t) => (t.assistant && t.assistant.doneAt === undefined) || t.tools.some((x) => x.doneAt === undefined));
   const now = useNow(500, anyOpen);
+  const ov = useMemo(() => timelineOverview(turns, now), [turns, now]);
+  const [zoom, setZoom] = useState<{ start: number; end: number } | null>(null);
+  const [flash, setFlash] = useState<number | null>(null);
+  const feedRef = useRef<HTMLDivElement | null>(null);
+
+  // a zoom window that no longer intersects the data (rehydrate, new session) resets itself
+  useEffect(() => {
+    if (ov && zoom && (zoom.end < ov.start || zoom.start > ov.end)) setZoom(null);
+  }, [ov, zoom]);
+
+  const shown = useMemo(() => {
+    const all = turns.map((t, i) => ({ t, i }));
+    if (!zoom || !ov) return all;
+    return ov.segments.filter((s) => s.end >= zoom.start && s.start <= zoom.end).map((s) => ({ t: turns[s.turnIndex], i: s.turnIndex }));
+  }, [turns, ov, zoom]);
+
+  const focusTurn = (i: number) => {
+    feedRef.current?.querySelector(`[data-turn="${i}"]`)?.scrollIntoView({ behavior: "smooth", block: "start" });
+    setFlash(i);
+    window.setTimeout(() => setFlash((f) => (f === i ? null : f)), 1200);
+  };
 
   if (turns.length === 0) {
     return (
@@ -125,21 +146,134 @@ function TimelineView({ view, hasCalls }: { view: SessionView; hasCalls: boolean
   }
 
   return (
-    <div className="flex-1 min-h-0 overflow-auto t-scroll">
-      <div className="px-3 py-2 space-y-1.5 min-w-[420px]">
-        {turns.map((t, i) => (
-          <TurnRow key={`${t.at}-${i}`} turn={t} now={now} first={i === 0} />
-        ))}
+    <>
+      {ov && <OverviewStrip ov={ov} zoom={zoom} onZoom={setZoom} onFocus={focusTurn} />}
+      <div ref={feedRef} className="flex-1 min-h-0 overflow-auto t-scroll">
+        <div className="px-3 py-2 space-y-1.5 min-w-[420px]">
+          {shown.length === 0 ? (
+            <div className="py-8 text-center text-[11.5px] text-[var(--t-dim)]">No turns in the zoomed window.</div>
+          ) : (
+            shown.map(({ t, i }, n) => (
+              <div key={`${t.at}-${i}`} data-turn={i}>
+                <TurnRow turn={t} now={now} first={n === 0} flash={flash === i} />
+              </div>
+            ))
+          )}
+        </div>
+      </div>
+    </>
+  );
+}
+
+/* Chrome-Network-style overview above the feed: one segment per turn over
+   the session's full span (teal, red when a tool failed, striped amber while
+   in flight). Drag-select zooms the feed to a window; a click jumps the feed
+   to the nearest turn; Escape or the reset link clears the zoom. */
+function OverviewStrip({ ov, zoom, onZoom, onFocus }: {
+  ov: TimelineOverview;
+  zoom: { start: number; end: number } | null;
+  onZoom: (z: { start: number; end: number } | null) => void;
+  onFocus: (turnIndex: number) => void;
+}) {
+  const [draft, setDraft] = useState<[number, number] | null>(null);
+  const anchor = useRef<number | null>(null);
+  const span = ov.end - ov.start;
+  const pct = (t: number) => Math.min(100, Math.max(0, ((t - ov.start) / span) * 100));
+  const timeAt = (e: React.PointerEvent<HTMLDivElement>) => {
+    const r = e.currentTarget.getBoundingClientRect();
+    return ov.start + Math.min(1, Math.max(0, (e.clientX - r.left) / Math.max(1, r.width))) * span;
+  };
+  const sel = draft ? { start: Math.min(draft[0], draft[1]), end: Math.max(draft[0], draft[1]) } : zoom;
+
+  return (
+    <div className="shrink-0 px-3 pt-2 pb-1.5 border-b border-[var(--t-line)]">
+      <div
+        className="relative h-7 rounded border border-[var(--t-line)] bg-[var(--t-bg0)] overflow-hidden cursor-crosshair select-none touch-none outline-none focus-visible:ring-1 focus-visible:ring-[var(--t-sky)]"
+        role="slider"
+        tabIndex={0}
+        aria-label="Session overview timeline"
+        aria-valuetext={zoom ? `zoomed to ${fmtMs(zoom.end - zoom.start)} of ${fmtMs(span)}` : `full span ${fmtMs(span)}`}
+        onKeyDown={(e) => {
+          if (e.key === "Escape") onZoom(null);
+        }}
+        onPointerDown={(e) => {
+          e.currentTarget.setPointerCapture(e.pointerId);
+          anchor.current = timeAt(e);
+          setDraft(null);
+        }}
+        onPointerMove={(e) => {
+          if (anchor.current != null) setDraft([anchor.current, timeAt(e)]);
+        }}
+        onPointerUp={(e) => {
+          if (anchor.current == null) return;
+          const a = anchor.current;
+          anchor.current = null;
+          setDraft(null);
+          const b = timeAt(e);
+          const lo = Math.min(a, b), hi = Math.max(a, b);
+          if (hi - lo < span * 0.02) {
+            // a click: jump the feed to the nearest turn
+            let best = 0, bestD = Infinity;
+            for (const s of ov.segments) {
+              const d = Math.min(Math.abs(s.start - b), Math.abs(s.end - b));
+              if (d < bestD) { bestD = d; best = s.turnIndex; }
+            }
+            onFocus(best);
+          } else {
+            onZoom({ start: lo, end: hi });
+          }
+        }}
+      >
+        {ov.segments.map((s) => {
+          const left = pct(s.start);
+          const width = Math.max(0.8, pct(s.end) - left);
+          return (
+            <span
+              key={s.turnIndex}
+              className={cn("absolute inset-y-1 rounded-[3px]", s.inFlight && "t-stripes")}
+              style={{
+                left: `${left}%`,
+                width: `${Math.min(width, 100 - left)}%`,
+                background: s.failed ? "var(--t-red)" : s.inFlight ? "var(--t-amber)" : "var(--t-teal)",
+                opacity: 0.8,
+              }}
+            />
+          );
+        })}
+        {sel && (
+          <span
+            className="absolute inset-y-0 border-x border-[var(--t-sky)] bg-[color-mix(in_oklab,var(--t-sky)_14%,transparent)] pointer-events-none"
+            style={{ left: `${pct(sel.start)}%`, width: `${Math.max(0.4, pct(sel.end) - pct(sel.start))}%` }}
+          />
+        )}
+      </div>
+      <div className="flex items-center justify-between mt-1 font-mono text-[9.5px] text-[var(--t-dim)] tabular-nums">
+        <span>{new Date(ov.start).toLocaleTimeString()}</span>
+        {zoom ? (
+          <button onClick={() => onZoom(null)} className="text-[var(--t-sky)] hover:underline">
+            zoomed to {fmtMs(zoom.end - zoom.start)} ({shownCount(zoom, ov)} turns) · reset
+          </button>
+        ) : (
+          <span>{ov.segments.length} turns · drag to zoom · click to jump</span>
+        )}
+        <span>{new Date(ov.end).toLocaleTimeString()} · {fmtMs(span)}</span>
       </div>
     </div>
   );
 }
 
-function TurnRow({ turn, now, first }: { turn: TimelineTurn; now: number; first: boolean }) {
+const shownCount = (zoom: { start: number; end: number }, ov: TimelineOverview) =>
+  ov.segments.filter((s) => s.end >= zoom.start && s.start <= zoom.end).length;
+
+function TurnRow({ turn, now, first, flash }: { turn: TimelineTurn; now: number; first: boolean; flash?: boolean }) {
   const a = turn.assistant;
   const aOpen = !!a && a.doneAt === undefined;
   return (
-    <div className={cn("rounded-md border border-[var(--t-line)]/70 bg-[var(--t-bg2)]/40", !first && "mt-2")}>
+    <div className={cn(
+      "rounded-md border border-[var(--t-line)]/70 bg-[var(--t-bg2)]/40 transition-shadow",
+      !first && "mt-2",
+      flash && "ring-1 ring-[var(--t-sky)]",
+    )}>
       {/* turn header: time + the user's message */}
       <div className="flex items-baseline gap-2 px-2.5 pt-2">
         <span className="shrink-0 font-mono text-[10px] text-[var(--t-dim)] tabular-nums">{new Date(turn.at).toLocaleTimeString()}</span>

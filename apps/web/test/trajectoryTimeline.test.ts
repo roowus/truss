@@ -55,6 +55,16 @@ async function load(): Promise<TrajectoryTimelineModule | null> {
   return import(spec).catch(() => null);
 }
 
+/* overview-strip geometry — the Chrome-Network-style strip above the feed
+   (developer feedback on PR #151): one segment per turn over the full span */
+interface TimelineOverviewModule {
+  timelineOverview(turns: TimelineTurn[], now: number): {
+    start: number;
+    end: number;
+    segments: { turnIndex: number; start: number; end: number; inFlight: boolean; failed: boolean }[];
+  } | null;
+}
+
 const T0 = 1_000_000;
 const ev = (type: string, at: number, extra: Record<string, unknown> = {}) => ({ type, at: T0 + at, sessionId: "s", ...extra });
 
@@ -145,4 +155,38 @@ test("an assistant message before the first user message gets its own turn", asy
   assert.equal(turns[0].assistant!.durationMs, 50, "its span still measured from the real pair");
   assert.equal(turns[1].user?.text, "hi");
   assert.ok(turns[1].at > turns[0].at, "chronological");
+});
+
+test("timelineOverview: one segment per turn over the full span, in-flight ends move with the caller's clock", async () => {
+  const mod = (await load()) as (TrajectoryTimelineModule & TimelineOverviewModule) | null;
+  assert.ok(mod, "trajectoryTimeline module must exist (see module test)");
+
+  const turns = mod.trajectoryTimeline(EVENTS);
+  const NOW = T0 + 10_000;
+  const ov = mod.timelineOverview(turns, NOW);
+  assert.ok(ov, "an overview for a non-empty timeline");
+  assert.equal(ov.start, T0, "span starts at the first turn");
+  assert.equal(ov.segments.length, 2, "one segment per turn");
+
+  const settled = ov.segments[0];
+  assert.equal(settled.start, T0);
+  assert.equal(settled.end, T0 + 400, "a settled turn ends at its real last done (assistant done, after the tool's)");
+  assert.equal(settled.inFlight, false);
+  assert.equal(settled.failed, false);
+
+  const live = ov.segments[1];
+  assert.equal(live.inFlight, true, "the unclosed tool marks the turn in flight");
+  assert.equal(live.end, NOW, "an in-flight turn's end is the caller's clock, never a fabricated done");
+  assert.equal(ov.end, NOW, "the span grows with the live session");
+  assert.ok(ov.end > ov.start);
+
+  /* a failed tool flags its segment */
+  const failed = mod.timelineOverview(mod.trajectoryTimeline([ev("tool.start", 10, { callId: "tc9", name: "orphan" }), ev("tool.done", 60, { callId: "tc9", ok: false })]), NOW);
+  assert.equal(failed!.segments[0].failed, true);
+  assert.equal(failed!.segments[0].end, T0 + 60, "orphan tool turn ends at its done");
+
+  /* degenerate and empty inputs */
+  assert.equal(mod.timelineOverview([], NOW), null);
+  const point = mod.timelineOverview(mod.trajectoryTimeline([ev("msg.start", 0, { messageId: "u", role: "user" })]), NOW);
+  assert.ok(point!.end > point!.start, "a zero-width session still gets a positive span (no divide-by-zero)");
 });

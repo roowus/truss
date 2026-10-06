@@ -258,3 +258,49 @@ export function trajectoryTimeline(events: RawEvent[]): TimelineTurn[] {
   turns.sort(byAt);
   return turns;
 }
+
+/* ---------------- overview strip ----------------
+
+   The Chrome-Network-style overview above the feed: one segment per turn
+   over the session's full span, so the whole session reads at a glance and
+   a drag-select can zoom the feed to a window. Pure geometry — the panel
+   positions the segments by percentage. */
+
+export interface OverviewSegment {
+  /** index into the turns array the overview was derived from */
+  turnIndex: number;
+  start: number;
+  end: number;
+  /** some part of the turn is still open — the end moves with the caller's clock */
+  inFlight: boolean;
+  /** any tool in the turn failed */
+  failed: boolean;
+}
+
+export interface TimelineOverview {
+  /** full session span (end > start always, so fractions never divide by zero) */
+  start: number;
+  end: number;
+  segments: OverviewSegment[];
+}
+
+/**
+ * Derive overview segments from the timeline. `now` is the caller's clock,
+ * used only as the moving end of in-flight turns — pass it explicitly so
+ * the function stays replay-stable. Returns null for an empty timeline.
+ */
+export function timelineOverview(turns: TimelineTurn[], now: number): TimelineOverview | null {
+  if (!Array.isArray(turns) || turns.length === 0) return null;
+  const start = turns[0].at;
+  let end = start;
+  const segments = turns.map((t, turnIndex) => {
+    const inFlight = (!!t.assistant && t.assistant.doneAt === undefined) || t.tools.some((x) => x.doneAt === undefined);
+    let e = t.at;
+    if (t.assistant) e = Math.max(e, t.assistant.doneAt ?? (inFlight ? now : t.assistant.at));
+    for (const tool of t.tools) e = Math.max(e, tool.doneAt ?? (inFlight ? now : tool.at));
+    end = Math.max(end, e);
+    return { turnIndex, start: t.at, end: e, inFlight, failed: t.tools.some((x) => x.ok === false) };
+  });
+  if (end <= start) end = start + 1;
+  return { start, end, segments };
+}
