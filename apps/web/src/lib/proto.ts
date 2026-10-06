@@ -240,7 +240,7 @@ export interface HostMetrics {
   }[];
   sock?: { tcp: number; tcpTw: number; established: number; listen: number; closeWait: number; otherTcp: number; udp: number; raw: number; used: number };
   services?: { name: string; cpu: number; rssMb: number }[];
-  logs?: { failedUnits: string[]; coredumps: number | null; lines: string[] };
+  logs?: { failedUnits: string[]; coredumps: number | null; lines: string[] | null };
   sys?: {
     users: string[];
     updatesPending: number | null;

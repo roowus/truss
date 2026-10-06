@@ -109,8 +109,10 @@ export interface HostMetrics {
   services?: { name: string; cpu: number; rssMb: number }[];
   /** refreshed at most once a minute (subprocesses; see logsSlow). Omitted
       entirely when the host lacks systemd, so the panel hides the card
-      instead of showing a fake "none" (audit round 1, B2) */
-  logs?: { failedUnits: string[]; coredumps: number | null; lines: string[] };
+      instead of showing a fake "none" (audit round 1, B2). lines is null
+      (not []) when the journal probe alone cannot run — the panel says
+      "journal unavailable", never a fake "clean" (audit round 3, B3) */
+  logs?: { failedUnits: string[]; coredumps: number | null; lines: string[] | null };
   sys?: {
     users: string[];
     updatesPending: number | null;
@@ -476,15 +478,19 @@ export function diskIoRates(prev: string | null, cur: string, dtMs: number): { d
   return out.sort((a, b) => b.readBps + b.writeBps - (a.readBps + a.writeBps));
 }
 
-/** /proc/net/sockstat → inuse totals (the file's own counters) */
+/** /proc/net/sockstat{,6} → inuse totals. The v6 lines (TCP6/UDP6/RAW6)
+    fold into the same buckets — the state walk counts both families too, so
+    v4-only inuse would contradict them on a v6-heavy host (audit round 3,
+    B1). "sockets: used" exists only in the v4 file, so concatenating both
+    files never double-counts it. */
 export function parseSockstat(text: string): { used: number; tcp: number; udp: number; raw: number } {
   const out = { used: 0, tcp: 0, udp: 0, raw: 0 };
   for (const ln of text.split("\n")) {
     const f = ln.replace(":", "").split(/\s+/);
     if (f[0] === "sockets" && f[1] === "used") out.used = Number(f[2]) || 0;
-    else if (f[0] === "TCP" && f[1] === "inuse") out.tcp = Number(f[2]) || 0;
-    else if (f[0] === "UDP" && f[1] === "inuse") out.udp = Number(f[2]) || 0;
-    else if (f[0] === "RAW" && f[1] === "inuse") out.raw = Number(f[2]) || 0;
+    else if ((f[0] === "TCP" || f[0] === "TCP6") && f[1] === "inuse") out.tcp += Number(f[2]) || 0;
+    else if ((f[0] === "UDP" || f[0] === "UDP6") && f[1] === "inuse") out.udp += Number(f[2]) || 0;
+    else if ((f[0] === "RAW" || f[0] === "RAW6") && f[1] === "inuse") out.raw += Number(f[2]) || 0;
   }
   return out;
 }
@@ -515,7 +521,7 @@ export function parseNetTcp(text: string): { established: number; timeWait: numb
 function sockCounts(): NonNullable<HostMetrics["sock"]> {
   const v4 = parseNetTcp(read("/proc/net/tcp"));
   const v6 = parseNetTcp(read("/proc/net/tcp6"));
-  const ss = parseSockstat(read("/proc/net/sockstat"));
+  const ss = parseSockstat(`${read("/proc/net/sockstat")}\n${read("/proc/net/sockstat6")}`);
   return {
     tcp: ss.tcp,
     tcpTw: v4.timeWait + v6.timeWait,
@@ -663,6 +669,26 @@ type Logs = NonNullable<HostMetrics["logs"]>;
 let logsCache: { at: number; logs: Logs | null } | null = null;
 let logsPending: Promise<Logs | null> | null = null;
 
+/** probe outputs → the logs block. Pure (exported for the contract pins):
+    both null → the whole section is omitted; journal null alone → lines:
+    null so the panel shows "journal unavailable", not a fake "clean". */
+export function combineLogs(failedOut: string | null, journal: string | null, coredumps: number | null): Logs | null {
+  if (failedOut === null && journal === null) return null;
+  const failedUnits = (failedOut ?? "")
+    .split("\n")
+    .map((l) => l.trim().split(/\s+/)[0] ?? "")
+    .filter((l) => l.includes("."))
+    .slice(0, 12);
+  const lines =
+    journal === null
+      ? null
+      : journal
+          .split("\n")
+          .filter((l) => l.trim().length > 0 && !l.startsWith("-- "))
+          .slice(-20);
+  return { failedUnits, coredumps, lines };
+}
+
 async function logsSlow(): Promise<Logs | null> {
   if (logsCache && Date.now() - logsCache.at < LOGS_TTL_MS) return logsCache.logs;
   if (logsPending) return logsPending;
@@ -673,26 +699,13 @@ async function logsSlow(): Promise<Logs | null> {
       execText("systemctl", ["--failed", "--no-legend", "--plain"], 1500),
       execText("journalctl", ["-b", "-p", "warning..emerg", "--no-pager", "-n", "20", "-o", "short-iso"], 2000),
     ]);
-    if (failedOut === null && journal === null) {
-      logsCache = { at: Date.now(), logs: null };
-      return null;
-    }
-    const failedUnits = (failedOut ?? "")
-      .split("\n")
-      .map((l) => l.trim().split(/\s+/)[0] ?? "")
-      .filter((l) => l.includes("."))
-      .slice(0, 12);
     let coredumps: number | null = null;
     try {
       coredumps = readdirSync("/var/lib/systemd/coredump").length;
     } catch {
       /* no coredump dir / unreadable */
     }
-    const lines = (journal ?? "")
-      .split("\n")
-      .filter((l) => l.trim().length > 0 && !l.startsWith("-- "))
-      .slice(-20);
-    const logs = { failedUnits, coredumps, lines };
+    const logs = combineLogs(failedOut, journal, coredumps);
     logsCache = { at: Date.now(), logs };
     return logs;
   })().finally(() => {

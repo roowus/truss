@@ -44,6 +44,30 @@ test("parseSockstat: empty/garbage input zeros out, never NaN", () => {
   assert.equal(g.tcp, 0, "unparseable counts fall back to 0");
 });
 
+test("parseSockstat: sockstat6 lines fold into the family totals (audit round 3 B1)", () => {
+  /* the state walk counts /proc/net/tcp AND tcp6 — v4-only inuse totals
+     would contradict them on a v6-heavy host */
+  const both = `${SOCKSTAT_FIXTURE}\nTCP6: inuse 3\nUDP6: inuse 2\nRAW6: inuse 1\nFRAG6: inuse 0 memory 0`;
+  const s = metrics.parseSockstat(both);
+  assert.equal(s.tcp, 60, "TCP 57 + TCP6 3");
+  assert.equal(s.udp, 7, "UDP 5 + UDP6 2");
+  assert.equal(s.raw, 1, "RAW6 folds in");
+  assert.equal(s.used, 373, "'sockets: used' exists only in the v4 file — never double-counted");
+});
+
+test("combineLogs: the omission/unavailable/clean contract (audit rounds 1+3)", () => {
+  assert.equal(typeof metrics.combineLogs, "function", "metrics.ts must export combineLogs — see issue #168");
+  assert.equal(metrics.combineLogs(null, null, null), null, "neither probe can run → the whole section is omitted");
+  const partial = metrics.combineLogs("bad-unit.service loaded failed failed Bad\n", null, 0);
+  assert.deepEqual(partial.failedUnits, ["bad-unit.service"], "systemctl output parses");
+  assert.equal(partial.lines, null, "journal probe down alone → lines null, so the panel says unavailable, never a fake clean");
+  assert.equal(partial.coredumps, 0);
+  const full = metrics.combineLogs("", "-- Logs begin at Tue\n2026-10-06T10:00:00+00:00 host app[1]: warning low disk\n", 2);
+  assert.deepEqual(full.failedUnits, [], "ran with zero failed units → honest empty list");
+  assert.deepEqual(full.lines, ["2026-10-06T10:00:00+00:00 host app[1]: warning low disk"], "journal banner lines filtered");
+  assert.equal(full.coredumps, 2);
+});
+
 test("parseNetTcp: hex states bucketed; header skipped; unknown states count as other", () => {
   assert.equal(typeof metrics.parseNetTcp, "function", "metrics.ts must export parseNetTcp — see issue #168");
   const c = metrics.parseNetTcp(NET_TCP_FIXTURE);

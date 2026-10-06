@@ -163,7 +163,9 @@ function MonitorBody({ m, hist }: { m: HostMetrics; hist: { t: number; cpu: numb
   }, [hist, histWin]);
   const winTimes = winHist.map((p) => p.t);
 
-  const logLines = m.logs ? [...m.logs.lines].reverse() : []; // journal prints oldest first — show newest on top
+  /* journal prints oldest first — show newest on top. null lines = the
+     journal probe cannot run on this host (distinct from "ran, was empty") */
+  const logLines = m.logs?.lines ? [...m.logs.lines].reverse() : null;
   const kibs = (v: number | undefined) => `${fmtSize(Math.max(0, Math.round((v ?? 0) * 1024)))}/s`;
 
   return (
@@ -461,7 +463,9 @@ function MonitorBody({ m, hist }: { m: HostMetrics; hist: { t: number; cpu: numb
             </span>
             {(m.mem.oomKills ?? 0) > 0 && <span className="text-[var(--t-red)]">oom kills since boot: {m.mem.oomKills}</span>}
           </div>
-          {logLines.length > 0 && (
+          {logLines === null ? (
+            <div className="mt-2 font-mono text-[10px] text-[var(--t-dim)]">journal unavailable on this host</div>
+          ) : logLines.length > 0 ? (
             <div className="mt-2 pt-2 border-t border-[var(--t-line)]/60 space-y-0.5 max-h-64 overflow-y-auto t-scroll">
               {logLines.map((l, i) => (
                 <div
@@ -476,8 +480,9 @@ function MonitorBody({ m, hist }: { m: HostMetrics; hist: { t: number; cpu: numb
                 </div>
               ))}
             </div>
+          ) : (
+            <div className="mt-2 font-mono text-[10px] text-[var(--t-dim)]">no warnings or errors since boot — clean</div>
           )}
-          {logLines.length === 0 && <div className="mt-2 font-mono text-[10px] text-[var(--t-dim)]">no warnings or errors since boot — clean</div>}
         </section>
       )}
 

@@ -74,6 +74,7 @@ import {
   wireRemoteRegistry,
 } from "./remote.js";
 import { collectMetrics } from "@truss/proto";
+import { createMetricsHistory, histPointOf } from "./metricsHistory.js";
 import { registerAdapter, unregisterAdapter } from "./sessions.js";
 
 /* Node crashes the process on an unhandled rejection by default — one
@@ -499,23 +500,9 @@ app.get("/i/:code", async (req, reply) => {
 });
 
 /* ── monitor: this host + every connected agent, with rolling history ── */
-interface HistPoint { t: number; cpu: number; mem: number; rx: number; tx: number }
-const metricsHistory = new Map<string, HistPoint[]>();
+const metricsHistory = createMetricsHistory();
 function pushHistory(key: string, m: any) {
-  const ring = metricsHistory.get(key) ?? [];
-  const last = ring[ring.length - 1];
-  if (last && m.at - last.t < 2000) return; /* don't double-sample on fast polls */
-  ring.push({
-    t: m.at,
-    cpu: m.cpu?.usage ?? 0,
-    mem: m.mem?.total ? (m.mem.used / m.mem.total) * 100 : 0,
-    rx: (m.net ?? []).reduce((a: number, n: any) => a + (n.rxBps || 0), 0),
-    tx: (m.net ?? []).reduce((a: number, n: any) => a + (n.txBps || 0), 0),
-  });
-  /* 1200 × ~3s polls ≈ 60 minutes — the reference monitor's history depth
-     (its own 2400 × 1.5s), so the Monitor tab can offer the same ranges */
-  if (ring.length > 1200) ring.shift();
-  metricsHistory.set(key, ring);
+  metricsHistory.push(key, histPointOf(m));
 }
 
 app.get("/api/metrics", async () => {
