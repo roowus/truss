@@ -26,6 +26,13 @@ test("the sash highlight is rounded (--dv-sash-border-radius set, non-zero, subt
   assert.ok(px > 0 && px <= 4, `a hairline pill (got ${m![1]}) — the sash is 2–4px wide, so 1–4px of radius rounds it fully`);
 });
 
+test("the theme applies the radius to the sash (dockview consumes the var only in its *-spaced themes)", () => {
+  const css = CSS();
+  const rule = css.match(/\.truss-dock[^{}]*\.dv-sash\s*\{[^}]*\}/);
+  assert.ok(rule, "a .truss-dock .dv-sash rule must exist — truss runs dockview-theme-dark, where dockview itself never applies --dv-sash-border-radius to the sash (issue #193)");
+  assert.ok(/border-radius:\s*var\(--dv-sash-border-radius\)/.test(rule![0]), "its border-radius must consume --dv-sash-border-radius — the variable alone renders nothing");
+});
+
 test("guard: the junction dot keeps its rounding", () => {
   const css = CSS();
   const dot = css.match(/\.truss-junction::before\s*\{[^}]*\}/s);
