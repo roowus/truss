@@ -221,8 +221,11 @@ function MonitorBody({ m, hist }: { m: HostMetrics; hist: { t: number; cpu: numb
         </div>
       )}
 
-      {/* cpu + memory */}
-      <div className="grid sm:grid-cols-2 gap-2">
+      {/* the detail cards sit 3-up under their history graphs, topic-aligned
+          — cpu under the cpu graph, memory under memory, network under
+          network; the graph-less cards (pressure, storage, sockets, system,
+          services) flow after. Older agents omit blocks and the grid packs. */}
+      <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-2">
         <section className="rounded-lg border border-[var(--t-line)] bg-[var(--t-bg0)]/60 p-3">
           <div className="font-mono text-[10px] uppercase tracking-wider text-[var(--t-dim)] mb-2">per-core</div>
           <div className="flex items-end gap-1 h-14">
@@ -290,10 +293,38 @@ function MonitorBody({ m, hist }: { m: HostMetrics; hist: { t: number; cpu: numb
           {m.mem.majFaultsPerSec != null && <KV k="major faults" v={`${m.mem.majFaultsPerSec}/s`} />}
           {m.mem.oomKills != null && <KV k="oom kills" v={m.mem.oomKills} warn={m.mem.oomKills > 0} />}
         </section>
-      </div>
 
-      {/* pressure + sensors | storage */}
-      <div className="grid sm:grid-cols-2 gap-2">
+        <section className="rounded-lg border border-[var(--t-line)] bg-[var(--t-bg0)]/60 p-3">
+          <div className="flex items-center font-mono text-[10px] uppercase tracking-wider text-[var(--t-dim)] mb-2">
+            <span>network</span>
+            {m.sys?.gateway && <span className="ml-auto normal-case text-[var(--t-dim)]">gw {m.sys.gateway.ip} · {m.sys.gateway.iface}</span>}
+          </div>
+          {m.net.length === 0 && <div className="text-[11.5px] text-[var(--t-dim)]">no interfaces</div>}
+          {m.net.map((n) => (
+            <div key={n.iface} className="py-1.5 border-b border-[var(--t-line)]/40 last:border-b-0">
+              <div className="flex items-center gap-2 font-mono text-[11px]">
+                <span className="text-[var(--t-fg2)] font-medium">{n.iface}</span>
+                {n.state && (
+                  <span className="text-[9.5px] text-[var(--t-dim)]" title={n.speedMbps ? `link ${n.speedMbps} Mbps` : undefined}>
+                    <span className={cn("inline-block w-1.5 h-1.5 rounded-full mr-1", n.state === "up" ? "bg-[var(--t-teal)]" : "bg-[var(--t-line2)]")} />
+                    {n.state}{n.speedMbps ? ` · ${n.speedMbps}M` : ""}
+                  </span>
+                )}
+                <span className="ml-auto text-[var(--t-teal)] tabular-nums">↓ {fmtSize(n.rxBps)}/s{n.rxPps != null && <span className="text-[var(--t-dim)]"> ({fmtCnt(n.rxPps)} pps)</span>}</span>
+                <span className="text-[var(--t-sky)] tabular-nums">↑ {fmtSize(n.txBps)}/s{n.txPps != null && <span className="text-[var(--t-dim)]"> ({fmtCnt(n.txPps)} pps)</span>}</span>
+              </div>
+              {(n.ip4 || (n.ip6 && n.ip6.length > 0) || n.mac || n.rxTotal != null) && (
+                <div className="mt-0.5 font-mono text-[9.5px] leading-snug text-[var(--t-dim)] break-all">
+                  {[n.ip4, ...(n.ip6 ?? [])].filter(Boolean).join(" · ") || "no ip"}
+                  {n.rxTotal != null && ` · tot ↓${fmtSize(n.rxTotal)} ↑${fmtSize(n.txTotal ?? 0)}`}
+                  {n.mtu ? ` · mtu ${n.mtu}` : ""}
+                  {n.mac ? ` · ${n.mac}` : ""}
+                </div>
+              )}
+            </div>
+          ))}
+        </section>
+
         <section className="rounded-lg border border-[var(--t-line)] bg-[var(--t-bg0)]/60 p-3">
           <div className="font-mono text-[10px] uppercase tracking-wider text-[var(--t-dim)] mb-2">pressure (PSI, 10s avg)</div>
           {([["cpu", m.pressure.cpu], ["io", m.pressure.io], ["memory", m.pressure.mem]] as const).map(([k, v]) => (
@@ -346,40 +377,6 @@ function MonitorBody({ m, hist }: { m: HostMetrics; hist: { t: number; cpu: numb
             </>
           )}
         </section>
-      </div>
-
-      {/* network + sockets (an older agent omits sock → network spans) */}
-      <div className="grid sm:grid-cols-2 gap-2">
-        <section className={cn("rounded-lg border border-[var(--t-line)] bg-[var(--t-bg0)]/60 p-3", !m.sock && "sm:col-span-2")}>
-          <div className="flex items-center font-mono text-[10px] uppercase tracking-wider text-[var(--t-dim)] mb-2">
-            <span>network</span>
-            {m.sys?.gateway && <span className="ml-auto normal-case text-[var(--t-dim)]">gw {m.sys.gateway.ip} · {m.sys.gateway.iface}</span>}
-          </div>
-          {m.net.length === 0 && <div className="text-[11.5px] text-[var(--t-dim)]">no interfaces</div>}
-          {m.net.map((n) => (
-            <div key={n.iface} className="py-1.5 border-b border-[var(--t-line)]/40 last:border-b-0">
-              <div className="flex items-center gap-2 font-mono text-[11px]">
-                <span className="text-[var(--t-fg2)] font-medium">{n.iface}</span>
-                {n.state && (
-                  <span className="text-[9.5px] text-[var(--t-dim)]" title={n.speedMbps ? `link ${n.speedMbps} Mbps` : undefined}>
-                    <span className={cn("inline-block w-1.5 h-1.5 rounded-full mr-1", n.state === "up" ? "bg-[var(--t-teal)]" : "bg-[var(--t-line2)]")} />
-                    {n.state}{n.speedMbps ? ` · ${n.speedMbps}M` : ""}
-                  </span>
-                )}
-                <span className="ml-auto text-[var(--t-teal)] tabular-nums">↓ {fmtSize(n.rxBps)}/s{n.rxPps != null && <span className="text-[var(--t-dim)]"> ({fmtCnt(n.rxPps)} pps)</span>}</span>
-                <span className="text-[var(--t-sky)] tabular-nums">↑ {fmtSize(n.txBps)}/s{n.txPps != null && <span className="text-[var(--t-dim)]"> ({fmtCnt(n.txPps)} pps)</span>}</span>
-              </div>
-              {(n.ip4 || (n.ip6 && n.ip6.length > 0) || n.mac || n.rxTotal != null) && (
-                <div className="mt-0.5 font-mono text-[9.5px] leading-snug text-[var(--t-dim)] break-all">
-                  {[n.ip4, ...(n.ip6 ?? [])].filter(Boolean).join(" · ") || "no ip"}
-                  {n.rxTotal != null && ` · tot ↓${fmtSize(n.rxTotal)} ↑${fmtSize(n.txTotal ?? 0)}`}
-                  {n.mtu ? ` · mtu ${n.mtu}` : ""}
-                  {n.mac ? ` · ${n.mac}` : ""}
-                </div>
-              )}
-            </div>
-          ))}
-        </section>
 
         {m.sock && (
           <section className="rounded-lg border border-[var(--t-line)] bg-[var(--t-bg0)]/60 p-3">
@@ -399,13 +396,9 @@ function MonitorBody({ m, hist }: { m: HostMetrics; hist: { t: number; cpu: numb
             <KV k="sockets used" v={m.sock.used} />
           </section>
         )}
-      </div>
 
-      {/* system + services (either side may be omitted by older agents) */}
-      {(m.sys || (m.services && m.services.length > 0)) && (
-        <div className="grid sm:grid-cols-2 gap-2">
-          {m.sys && (
-            <section className={cn("rounded-lg border border-[var(--t-line)] bg-[var(--t-bg0)]/60 p-3", !(m.services && m.services.length > 0) && "sm:col-span-2")}>
+        {m.sys && (
+          <section className="rounded-lg border border-[var(--t-line)] bg-[var(--t-bg0)]/60 p-3">
             <div className="font-mono text-[10px] uppercase tracking-wider text-[var(--t-dim)] mb-1.5">system</div>
             <KV k="hostname" v={m.host.hostname} />
             <KV k="os" v={m.host.os} />
@@ -423,8 +416,9 @@ function MonitorBody({ m, hist }: { m: HostMetrics; hist: { t: number; cpu: numb
             {m.logs && <KV k="failed units" v={m.logs.failedUnits.length} warn={m.logs.failedUnits.length > 0} />}
           </section>
         )}
+
         {m.services && m.services.length > 0 && (
-          <section className={cn("rounded-lg border border-[var(--t-line)] bg-[var(--t-bg0)]/60 p-3", !m.sys && "sm:col-span-2")}>
+          <section className="rounded-lg border border-[var(--t-line)] bg-[var(--t-bg0)]/60 p-3">
             <div className="flex items-center font-mono text-[10px] uppercase tracking-wider text-[var(--t-dim)] mb-2">
               <span>services</span>
               <span className="ml-auto normal-case text-[var(--t-dim)]">top by cpu / mem</span>
@@ -438,8 +432,7 @@ function MonitorBody({ m, hist }: { m: HostMetrics; hist: { t: number; cpu: numb
             ))}
           </section>
         )}
-        </div>
-      )}
+      </div>
 
       {/* logs — full width like the reference's journal card (omitted by
           older agents and systemd-less hosts) */}
