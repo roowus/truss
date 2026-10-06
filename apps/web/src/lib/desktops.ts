@@ -416,8 +416,9 @@ class DesktopManager {
       return this.create(entry.name, (entry.layout as SerializedDockview | null) ?? null);
     }
     if (!Array.isArray((entry as ClosedPanels).panels)) {
-      /* a persisted row from another build we cannot restore: drop it from
-         the stack rather than wedging every reopen behind it */
+      /* a persisted row from another build we cannot restore: say so, then
+         drop it — a silent vanish on a Restore click reads as data loss */
+      store.toast("info", "That entry can't be restored", "It was written by a different build of truss. Removing it from the list.");
       this.set({ closed: rest });
       this.queueSave();
       return null;

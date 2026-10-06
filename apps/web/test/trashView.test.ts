@@ -42,7 +42,7 @@ import { readFileSync } from "node:fs";
 interface TrashViewModule {
   trashEntries(input: {
     sessions: { id: string; title: string; deleted_at?: number | null }[];
-    closed: { type: string; name?: string; at: number }[];
+    closed: { type: string; name?: string; at: number; panels?: { id?: string; title?: string }[] }[];
     now: number;
   }): { kind: string; id: string; title: string; deletedAt: number; daysLeft?: number; restoreId: string }[];
 }
@@ -88,6 +88,34 @@ test("one listing: sessions with days-left + closed workspaces/groups, newest fi
   assert.ok(entries.every((e) => e.restoreId), "every entry can be restored");
 });
 
+test("the runtime close shape (type \"panels\") maps to tab/tab-group; unknown rows drop", async () => {
+  const mod = await load();
+  assert.ok(mod, "trashView module must exist (see module test)");
+
+  /* what the live app actually pushes (panelsEntry in workspaceClose.ts):
+     one panel is a tab close, several a group close — the friendly
+     tab/tab-group forms above are the persisted/legacy spellings */
+  const entries = mod.trashEntries({
+    sessions: [],
+    closed: [
+      { type: "panels", at: NOW - 1000, panels: [{ id: "chat:a", title: "chat a" }] },
+      { type: "panels", at: NOW - 2000, panels: [{ id: "chat:b", title: "chat b" }, { id: "git:b", title: "git b" }] },
+      { type: "panels", at: NOW - 3000, panels: [{ id: "chat:c" }] },
+      { type: "mystery", name: "from a future build", at: NOW - 500 },
+    ],
+    now: NOW,
+  });
+
+  assert.equal(entries.length, 3, "unknown types drop out, the rest list");
+  const lone = entries.find((e) => e.title === "chat a")!;
+  assert.equal(lone.kind, "tab", "one panel is a tab close");
+  const group = entries.find((e) => e.kind === "tab-group")!;
+  assert.equal(group.title, "2 tabs", "several panels read as a count");
+  const untitled = entries.find((e) => e.deletedAt === NOW - 3000)!;
+  assert.equal(untitled.title, "chat:c", "a panel without a title falls back to its id");
+  assert.ok(entries.every((e) => e.restoreId), "every listed row restores");
+});
+
 test("the closed stack persists: serialize/parse round-trip, validated, capped, garbage-proof", async () => {
   const wc: any = await import("../src/lib/workspaceClose.js");
   assert.equal(typeof wc.serializeClosed, "function", "workspaceClose.ts must export serializeClosed — see issue #146");
@@ -111,9 +139,9 @@ test("the closed stack persists: serialize/parse round-trip, validated, capped, 
 test("read-through: the save doc carries the closed stack + a Trash entry point always renders", () => {
   const desktops = readFileSync(new URL("../src/lib/desktops.ts", import.meta.url), "utf8");
   assert.ok(
-    /serializeClosed|closed:/.test(desktops) && /queueSave/.test(desktops),
+    /closed: serializeClosed/.test(desktops) && /queueSave/.test(desktops),
     "desktops.ts must persist the closed stack with the layout doc — today it's in-memory only, gone on reload (issue #146)",
   );
   const picker = readFileSync(new URL("../src/components/TabPicker.tsx", import.meta.url), "utf8");
-  assert.ok(/trash/.test(picker), "the tab picker must list a Trash panel — the recover surface is discoverable even when empty");
+  assert.ok(/openPanel\("trash"/.test(picker), "the tab picker must list a Trash panel — the recover surface is discoverable even when empty");
 });
