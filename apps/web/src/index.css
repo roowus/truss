@@ -72,6 +72,8 @@ body {
   --dv-sash-color: transparent;
   --dv-active-sash-color: var(--t-amber);
   --dv-active-sash-transition-delay: 0.15s;
+  /* the amber drag highlight is a 4px bar — 2px rounds its ends fully (issue #193) */
+  --dv-sash-border-radius: 2px;
   --dv-drag-over-background-color: color-mix(in oklab, var(--t-amber) 14%, transparent);
   --dv-drag-over-border-color: var(--t-amber);
   --dv-drag-over-border: 1px solid var(--t-amber);
@@ -85,6 +87,9 @@ body {
   --dv-tab-border-radius: 6px 6px 0 0;
   background: var(--t-bg0);
 }
+/* dockview only consumes --dv-sash-border-radius in its *-spaced theme
+   variants; we run dockview-theme-dark, so apply it to the sash ourselves */
+.truss-dock .dv-sash { border-radius: var(--dv-sash-border-radius); }
 .truss-dock .dv-groupview {
   border: 1px solid var(--t-line);
   border-radius: 8px;
