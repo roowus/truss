@@ -32,7 +32,7 @@ asking anyone anything.
      5. **Suggested tests** — concrete test cases (file + scenario) that
         would pin the fixed behavior. These matter: the work session verifies
         them first.
-     6. **Priority** — `priority: high/medium/low` with a one-line reason
+     6. **Priority** — `priority: critical/high/medium/low` with a one-line reason (critical = active breakage or data risk — drop everything; high = user-facing breakage; medium = valuable; low = planned/later)
         (user-facing breakage is high; polish is low).
    - Apply the labels: the `area:*` you chose, the `priority:*`, and `bug`
      or `enhancement`/`new feature` as classified.

@@ -29,8 +29,8 @@ issue right now, and if so, which one. Cheap and deterministic: no wandering.
      the body's suggested approach is. The developer designs those first and
      pulls the label when they want one built. (Bugs and enhancements only.)
    - is labeled `question`, `duplicate`, `wontfix`, `invalid`
-3. Sort what remains: `priority: high` first, then `medium`, then `low`;
-   ties broken by oldest first.
+3. Sort what remains: `priority: critical` first, then `high`, then
+   `medium`, then `low`; ties broken by oldest first.
 4. Take the top candidate. Read it fully
    (`gh issue view <n> --json title,body,labels`). Confirm its suggested
    approach is still plausible against the current repo (a quick look at the
