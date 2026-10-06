@@ -205,11 +205,12 @@ function TimelineView({ view, hasCalls }: { view: SessionView; hasCalls: boolean
 
 /* Chrome-Network-style overview above the feed, layered like DSH's: three
    lanes (you / model / tools), each record its own span across the full
-   session domain, color-coded per lane (sky / teal / violet; red on a failed
-   tool, striped amber while in flight). Drag-select zooms the feed to a
-   window; a click jumps the feed to the nearest turn; Escape or the reset
-   link clears the zoom. The search box filters the feed to matching turns
-   and dims everything else on the strip. */
+   session domain, color-coded per lane (LANE_COLOR below carries the
+   current hues; red marks a failed tool, animated stripes mark in-flight).
+   Drag-select zooms the feed to a window; a click jumps the feed to the
+   nearest turn; Escape or the reset link clears the zoom. The search box
+   filters the feed to matching turns and dims everything else on the
+   strip. */
 const LANE_TOP = [4, 17, 30]; // px within the 42px track; spans are h-2
 /* Lane hues follow DSH's contrast scheme (developer feedback): vivid blue
    for you, vivid violet for the model, vivid yellow for tools — hue
