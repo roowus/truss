@@ -116,6 +116,14 @@ test("diskIoRates: numeric-family whole disks survive (md127, nbd15, zd12) — a
   );
 });
 
+test("execText: the null-vs-empty contract the logs-omission fix hinges on (audit round 2 B2)", async () => {
+  assert.equal(typeof metrics.execText, "function", "metrics.ts must export execText — see issue #168 audit round 2");
+  assert.equal(await metrics.execText("/bin/true", [], 2000), "", "ran fine, no output → empty string");
+  assert.equal(await metrics.execText("/bin/false", [], 2000), null, "nonzero exit with no output → null (cannot run)");
+  assert.equal(await metrics.execText("/bin/sh", ["-c", "echo partial; exit 1"], 2000), "partial\n", "output survives a nonzero exit");
+  assert.equal(await metrics.execText("/definitely/not/a-binary", [], 2000), null, "missing binary → null");
+});
+
 test("diskIoRates: counter reset clamps to 0, never negative", () => {
   const before = `   8       0 sda 1000 0 40000 5000 2000 0 80000 7000 0 3000 12000`;
   const afterReset = `   8       0 sda 10 0 400 50 20 0 800 70 0 30 120`; // device reset (e.g. replug)

@@ -407,8 +407,9 @@ function sysInfo(): NonNullable<HostMetrics["sys"]> {
 /* execFile that never rejects — a probe that cannot run at all (missing
    binary, nonzero exit with no output, timeout) resolves null so the caller
    can tell "no systemd here" apart from "ran fine, nothing to report" (audit
-   round 1, B2); a successful run with empty output resolves "" */
-function execText(cmd: string, args: string[], timeoutMs: number): Promise<string | null> {
+   round 1, B2); a successful run with empty output resolves "". Exported for
+   the null-vs-empty contract pins (audit round 2, B2). */
+export function execText(cmd: string, args: string[], timeoutMs: number): Promise<string | null> {
   return new Promise((resolve) => {
     execFile(cmd, args, { timeout: timeoutMs, maxBuffer: 1024 * 1024 }, (err, stdout) => {
       const text = stdout?.toString() ?? "";
@@ -433,9 +434,11 @@ async function logsSlow(): Promise<Logs | null> {
   if (logsCache && Date.now() - logsCache.at < LOGS_TTL_MS) return logsCache.logs;
   if (logsPending) return logsPending;
   logsPending = (async (): Promise<Logs | null> => {
+    /* probe budgets stay under requestMetrics' 3500ms remote deadline so a
+       slow journal drops a line-count, not the whole agent sample (round 2 B1) */
     const [failedOut, journal] = await Promise.all([
-      execText("systemctl", ["--failed", "--no-legend", "--plain"], 3000),
-      execText("journalctl", ["-b", "-p", "warning..emerg", "--no-pager", "-n", "20", "-o", "short-iso"], 4000),
+      execText("systemctl", ["--failed", "--no-legend", "--plain"], 1500),
+      execText("journalctl", ["-b", "-p", "warning..emerg", "--no-pager", "-n", "20", "-o", "short-iso"], 2000),
     ]);
     if (failedOut === null && journal === null) {
       logsCache = { at: Date.now(), logs: null };
