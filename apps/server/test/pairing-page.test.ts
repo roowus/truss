@@ -2,10 +2,11 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { freshServer } from "./helpers.js";
 
-/* SPEC-TESTS for the pairing landing page's UI — https://github.com/roowus/truss/issues/162
+/* SPEC-TESTS for the pairing landing page's UI — https://github.com/roowus/truss/issues/164
    ("The site you land on to download truss: the truss logo is completely
-   wrong, the copy-command box overflows, the UI is kind of bad"). These
-   FAIL on purpose today: they pin the contract a fix must satisfy.
+   wrong, the copy-command box overflows, the UI is kind of bad"). They pin
+   the contract the fix satisfies — written red-first (verified failing
+   before the fix landed, green after).
 
    Investigated (installer.ts pairingPage, served at /p):
    1. WRONG LOGO: the page hand-rolls a triangle-with-crossbars svg
@@ -37,7 +38,7 @@ const LOGO_ZIGZAG = "M1 18L6 3l5 15 5-15 5 15 5-15 5 15";
 
 test("the /p page carries the REAL Truss logo, not a hand-rolled triangle", async () => {
   const html = await page();
-  assert.ok(html, "installer.ts must keep exporting pairingPage — see issue #162");
+  assert.ok(html, "installer.ts must keep exporting pairingPage — see issue #164");
   assert.ok(html.includes(LOGO_BASELINE) && html.includes(LOGO_ZIGZAG), "the brand svg is the app's TrussLogo (baseline + zigzag), not the wrong triangle-with-crossbars glyph");
 });
 
