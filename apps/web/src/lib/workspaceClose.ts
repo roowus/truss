@@ -91,9 +91,22 @@ export function panelsEntry(spaceId: string, panels: PanelLike[], at: number): C
   return { type: "panels", spaceId, panels: undoable.map(panelDescriptor), at };
 }
 
+/**
+ * Can this entry actually come back? The persisted stack is validated by
+ * shape only (parseClosed), so a row from another build — a friendly
+ * "tab"/"tab-group" form, or a "panels" row with no panels — must fail here,
+ * not deep in a render or a restore (issue #146, audit round 2).
+ */
+export function canRestore(entry: ClosedEntry): boolean {
+  if (entry.type === "workspace") return true;
+  const panels = (entry as ClosedPanels).panels;
+  return Array.isArray(panels) && panels.length > 0;
+}
+
 /** The palette/chord label for the entry reopenClosed() would restore. */
 export function describeClosed(entry: ClosedEntry): string {
   if (entry.type === "workspace") return `Reopen closed workspace: ${entry.name}`;
+  if (!canRestore(entry)) return "Closed item (not restorable)";
   if (entry.panels.length === 1) return `Reopen closed tab: ${entry.panels[0].title || entry.panels[0].id}`;
   return `Reopen ${entry.panels.length} closed tabs`;
 }

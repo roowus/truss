@@ -3,6 +3,7 @@ import type { DockviewApi, IDockviewPanel, SerializedDockview } from "dockview-r
 import { normalizeLayoutSizes } from "./layoutSanitize";
 import {
   canClose,
+  canRestore,
   freshPanels,
   nextActiveAfterClose,
   panelsEntry,
@@ -13,7 +14,6 @@ import {
   suppressionKey,
   terminalIdsInLayout,
   type ClosedEntry,
-  type ClosedPanels,
 } from "./workspaceClose";
 import type { Backend } from "./backend";
 import { store } from "./store";
@@ -415,9 +415,10 @@ class DesktopManager {
       this.set({ closed: rest });
       return this.create(entry.name, (entry.layout as SerializedDockview | null) ?? null);
     }
-    if (!Array.isArray((entry as ClosedPanels).panels)) {
-      /* a persisted row from another build we cannot restore: say so, then
-         drop it — a silent vanish on a Restore click reads as data loss */
+    if (!canRestore(entry)) {
+      /* a persisted row we cannot restore (another build's shape, or a
+         panels row with no panels): say so, then drop it — a silent vanish
+         on a Restore click reads as data loss */
       store.toast("info", "That entry can't be restored", "It was written by a different build of truss. Removing it from the list.");
       this.set({ closed: rest });
       this.queueSave();

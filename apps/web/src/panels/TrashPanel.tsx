@@ -65,6 +65,10 @@ export function TrashPanel(_props: IDockviewPanelProps) {
 
 function Row({ e, now }: { e: TrashEntry; now: number }) {
   const [confirmPurge, setConfirmPurge] = useState(false);
+  /* restores are keyed by stack index, so a rapid second click would replay
+     a stale index onto a neighbouring entry (audit round 2) — one click
+     arms it, the row unlists itself when the restore lands */
+  const [restoring, setRestoring] = useState(false);
   useEffect(() => {
     if (!confirmPurge) return;
     const t = window.setTimeout(() => setConfirmPurge(false), 3000);
@@ -72,9 +76,13 @@ function Row({ e, now }: { e: TrashEntry; now: number }) {
   }, [confirmPurge]);
 
   const restore = () => {
+    if (restoring) return;
+    setRestoring(true);
     if (e.kind === "session") void store.restoreSession(e.restoreId);
     else desktops.reopenClosedAt(Number(e.restoreId));
   };
+
+  const deletedLabel = ago(e.deletedAt, now);
 
   return (
     <div className="group flex items-center gap-2.5 px-3 py-1.5 border-b border-[var(--t-line)]/40 hover:bg-white/[0.02]">
@@ -82,7 +90,7 @@ function Row({ e, now }: { e: TrashEntry; now: number }) {
       <div className="min-w-0 flex-1">
         <div className="truncate text-[12.5px] text-[var(--t-fg)]">{e.title}</div>
         <div className="text-[10px] text-[var(--t-dim)]">
-          {KIND_LABEL[e.kind]} · {ago(e.deletedAt, now)} ago
+          {KIND_LABEL[e.kind]} · {deletedLabel === "now" ? "just now" : `${deletedLabel} ago`}
           {e.daysLeft !== undefined && (
             <span className={cn("ml-1.5 font-mono", e.daysLeft <= 3 ? "text-[var(--t-red)]" : "")}>
               {e.daysLeft}d left
@@ -90,8 +98,8 @@ function Row({ e, now }: { e: TrashEntry; now: number }) {
           )}
         </div>
       </div>
-      <Btn size="xs" variant="outline" onClick={restore} title={e.kind === "session" ? "Restore this chat with its full history" : "Restore it back onto a workspace"}>
-        Restore
+      <Btn size="xs" variant="outline" disabled={restoring} onClick={restore} title={e.kind === "session" ? "Restore this chat with its full history" : "Restore it back onto a workspace"}>
+        {restoring ? "Restoring…" : "Restore"}
       </Btn>
       {e.kind === "session" && (
         <Btn

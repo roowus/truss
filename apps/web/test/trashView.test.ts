@@ -136,6 +136,25 @@ test("the closed stack persists: serialize/parse round-trip, validated, capped, 
   assert.ok(wc.parseClosed(wc.serializeClosed(big)).length <= 10, "the persisted stack is capped");
 });
 
+test("rows parseClosed admits but this build cannot restore never crash the palette (audit round 2)", async () => {
+  const wc: any = await import("../src/lib/workspaceClose.js");
+  assert.equal(typeof wc.canRestore, "function", "workspaceClose.ts must export canRestore — the shared restorability guard");
+
+  /* the friendly forms the round-trip above pins, and a panels row with no
+     panels, are listable but not restorable */
+  assert.equal(wc.canRestore({ type: "tab", name: "chat x", at: 2 }), false);
+  assert.equal(wc.canRestore({ type: "tab-group", name: "2 tabs", at: 2 }), false);
+  assert.equal(wc.canRestore({ type: "panels", spaceId: "s", panels: [], at: 3 }), false);
+  assert.equal(wc.canRestore({ type: "workspace", name: "w", layout: null, at: 1 }), true);
+  assert.equal(wc.canRestore({ type: "panels", spaceId: "s", panels: [{ id: "chat:a" }], at: 4 }), true);
+
+  /* Chrome.tsx renders describeClosed(peekClosed()) with no error boundary:
+     an unrestorable top-of-stack must label, never throw */
+  assert.doesNotThrow(() => wc.describeClosed({ type: "tab", name: "chat x", at: 2 }));
+  assert.doesNotThrow(() => wc.describeClosed({ type: "panels", spaceId: "s", panels: [], at: 3 }));
+  assert.equal(wc.describeClosed({ type: "workspace", name: "research", layout: null, at: 1 }), "Reopen closed workspace: research");
+});
+
 test("read-through: the save doc carries the closed stack + a Trash entry point always renders", () => {
   const desktops = readFileSync(new URL("../src/lib/desktops.ts", import.meta.url), "utf8");
   assert.ok(
