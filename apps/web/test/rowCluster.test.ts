@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 
 /* SPEC-TESTS for one action cluster per row — https://github.com/roowus/truss/issues/110
    ("In the sidebar the pin button sits a different gap from the other
@@ -23,9 +24,13 @@ import assert from "node:assert/strict";
 
    Structural pins (the gap can't diverge when there's one array, one flex
    container, one gap):
-   - EXACTLY ONE pin entry, FIRST in the cluster (it's the state-bearing one);
+   - EXACTLY ONE pin entry, LAST in the cluster (amended by issue #156: the
+     pin anchors the right edge — identical index at rest and on hover, so
+     it can never dodge the pointer);
    - the pin is the ONLY entry that may be visible: "always" — and iff pinned;
-   - destructive entries still sort last (the #85 rule stands);
+   - destructive entries ride last-AMONG-THE-REST (amended by issue #156:
+     the pin owns the right edge, so trash never sits under a cursor aimed
+     at the pin);
    - the badge/timestamp never interleave with actions (they're not actions —
      they don't belong in the array at all). */
 
@@ -52,7 +57,11 @@ test("rowActions exports sessionRowActions — one cluster, one gap", async () =
   assert.ok(mod, "src/lib/rowActions.ts must export sessionRowActions — the pin joins the same cluster as every other action, so one gap rules them all (issue #110)");
 });
 
-test("exactly one pin, first, and the only always-visible member — iff pinned", async () => {
+test("exactly one pin, LAST (the stable right-edge anchor), and the only always-visible member — iff pinned", async () => {
+  /* AMENDED (issue #156): the #110 contract led with the pin — on hover the
+     pin jumped left and the trash landed under the cursor (the user's exact
+     report). The pin anchors RIGHTMOST, the same index at rest and on
+     hover — a pinned row's solid pin never dodges the pointer. */
   const mod = await load();
   assert.ok(mod, "sessionRowActions must exist (see module test)");
 
@@ -60,7 +69,7 @@ test("exactly one pin, first, and the only always-visible member — iff pinned"
     const acts = mod.sessionRowActions({ pinned });
     const pins = acts.filter((a) => a.id === "pin");
     assert.equal(pins.length, 1, "exactly one pin entry");
-    assert.equal(acts[0].id, "pin", "the pin leads the cluster");
+    assert.equal(acts.at(-1)!.id, "pin", "the pin anchors the RIGHT edge — identical index at rest and on hover, so it never dodges (issue #156)");
     assert.equal(pins[0].visible, pinned ? "always" : "hover", "pinned shows always; unpinned only on hover");
     for (const a of acts.filter((x) => x.id !== "pin")) {
       assert.equal(a.visible, "hover", `${a.id} is hover-only — no second always-on glyph sneaks back`);
@@ -77,7 +86,9 @@ test("destructive last (the #85 rule stands); badge/timestamps are NOT actions",
   const acts = mod.sessionRowActions({ pinned: false });
   const dangerIdx = acts.findIndex((a) => a.danger);
   assert.ok(dangerIdx >= 0, "a destructive action exists (trash)");
-  assert.equal(dangerIdx, acts.length - 1, "and it rides last");
+  /* AMENDED (issue #156): the pin owns the right edge now, so destructive
+     rides last-AMONG-THE-REST — never under a cursor aimed at the pin */
+  assert.equal(dangerIdx, acts.length - 2, "destructive rides just inside the pin anchor — never at the edge where the pin lives");
 
   assert.ok(!acts.some((a) => /badge|permission|timestamp|ago|state/i.test(a.id)), "indicators aren't actions — they don't sit in the cluster");
 });
@@ -93,20 +104,44 @@ test("archived rows unarchive instead of shell/archive; dead rows drop close", a
   const mod = await load();
   assert.ok(mod, "sessionRowActions must exist (see module test)");
 
-  /* "open-all" (issue #147) leads after the pin everywhere outside trash:
-     the row's old double-click (chat + trajectory + context) survives as an
-     explicit action now that the name's double-click is rename */
+  /* order pins updated for the #156 amendment: the pin anchors LAST (the
+     stable right edge), destructive rides just inside it */
   const live = mod.sessionRowActions({ pinned: false });
-  assert.deepEqual(live.map((a) => a.id), ["pin", "open-all", "shell", "archive", "close", "trash"], "the live row's full cluster");
+  assert.deepEqual(live.map((a) => a.id), ["open-all", "shell", "archive", "close", "trash", "pin"], "the live row's full cluster");
 
   const dead = mod.sessionRowActions({ pinned: false, dead: true });
-  assert.deepEqual(dead.map((a) => a.id), ["pin", "open-all", "shell", "archive", "trash"], "a dead session has no process left to stop — no close");
+  assert.deepEqual(dead.map((a) => a.id), ["open-all", "shell", "archive", "trash", "pin"], "a dead session has no process left to stop — no close");
 
   const archived = mod.sessionRowActions({ pinned: false, archived: true });
-  assert.deepEqual(archived.map((a) => a.id), ["pin", "open-all", "unarchive", "trash"], "an archived row restores, never re-archives");
+  assert.deepEqual(archived.map((a) => a.id), ["open-all", "unarchive", "trash", "pin"], "an archived row restores, never re-archives");
 
   for (const [name, acts] of Object.entries({ live, dead, archived })) {
-    assert.equal(acts.at(-1)!.danger, true, `${name}: destructive still rides last`);
-    assert.equal(acts.at(-1)!.confirm, true, `${name}: the destructive entry keeps its two-click confirm (the #85 rule)`);
+    assert.equal(acts.at(-1)!.id, "pin", `${name}: the pin anchors the right edge`);
+    assert.equal(acts.at(-2)!.danger, true, `${name}: destructive rides just inside the pin anchor`);
+    assert.equal(acts.at(-2)!.confirm, true, `${name}: the destructive entry keeps its two-click confirm (the #85 rule)`);
   }
+});
+
+/* issue #156, audit round 1 (B1): the contract tests above only exercise
+   sessionRowActions — but shells/hosts compose their pin at RENDER time
+   (their #85 arrays are a pinned contract), so a future edit moving the pin
+   back to the front of those clusters would ship green and re-introduce
+   the exact dodge #156 fixes. Pin the real markup (the rowRestGap
+   pattern): inside each row's cluster, the pin button comes AFTER the
+   other actions. */
+test("read-through: shell and host rows render the pin LAST in their cluster", () => {
+  const src = readFileSync(new URL("../src/components/Sidebar.tsx", import.meta.url), "utf8")
+    .replace(/\/\*[\s\S]*?\*\//g, ""); /* prose may name the old order; the pin is on the markup */
+  const slice = (name: string) => {
+    const start = src.indexOf(`function ${name}`);
+    return src.slice(start, src.indexOf("\nfunction ", start + 1));
+  };
+
+  const shell = slice("ShellRow");
+  assert.ok(shell.includes("pinTerminal"), "the shell row renders its pin via pinTerminal");
+  assert.ok(shell.indexOf("pinTerminal") > shell.indexOf("killTerminal"), "shell row: the pin follows rename/kill — it anchors the right edge, so hover never dodges it (issue #156)");
+
+  const host = slice("HostRow");
+  assert.ok(host.includes("pinHost"), "the host row renders its pin via pinHost");
+  assert.ok(host.indexOf("pinHost") > host.indexOf("deleteHost"), "host row: the pin follows delete — it anchors the right edge, so hover never dodges it (issue #156)");
 });

@@ -228,10 +228,12 @@ function SessionRow({ s, now, archived }: { s: SessionMeta; now: number; archive
     if (next && next !== s.title) void store.renameSession(s.id, next);
   };
   const dead = s.state === "closed" || s.state === "error";
-  /* ONE action cluster per row (issue #110): the pin leads the same array,
+  /* ONE action cluster per row (issue #110): the pin shares the same array,
      flex container, and gap as every other action — before this it was a
      bespoke element mid-row, so its gap to the cluster could never match
-     the cluster's own spacing. The pin button IS the indicator (issue #99):
+     the cluster's own spacing. The pin anchors LAST in the array (issue
+     #156): the same right-edge pixel at rest and on hover, so it never
+     dodges the pointer. The pin button IS the indicator (issue #99):
      solid + always visible when pinned, hollow + hover-only when not.
      Badge/timestamp/state stay indicators outside the cluster. */
   const actions = sessionRowActions({ pinned: !!s.pinned, archived, dead });
@@ -417,19 +419,14 @@ function ShellRow({ t }: { t: TerminalInfo }) {
           className="text-[12px] text-[var(--t-fg2)] truncate"
         >{t.title ?? t.id}</span>
       )}
-      {/* one cluster, one gap (issue #110): the pin leads the same container
-          as the other actions — its opacity rule keeps the slot and the tab
-          order (#86), rename/kill reveal on hover inside the same box.
+      {/* one cluster, one gap (issue #110): the pin anchors LAST in the same
+          container as the other actions (issue #156) — the same right-edge
+          pixel at rest and on hover, so it never dodges the pointer. Its
+          opacity rule keeps the slot and the tab order (#86); rename/kill
+          reveal on hover to the pin's LEFT, inside the same box.
           rowActions' shell array itself keeps its #85 shape (open/rename/kill
           is a pinned contract), so the pin joins at render time. */}
       <span className="ml-auto flex items-center shrink-0" onClick={(e) => e.stopPropagation()}>
-        <IconBtn
-          icon={pin.icon}
-          label={pin.actionLabel}
-          active={!!t.pinned}
-          className={cn("w-6 h-6", pinVisibilityCls(pin.visible))}
-          onClick={() => void store.pinTerminal(t.id, !t.pinned)}
-        />
         {rename && (
           <IconBtn
             icon={rename.icon ?? "edit"}
@@ -449,6 +446,13 @@ function ShellRow({ t }: { t: TerminalInfo }) {
             onClick={() => confirmClick(() => void desktops.killTerminal(t.id))}
           />
         )}
+        <IconBtn
+          icon={pin.icon}
+          label={pin.actionLabel}
+          active={!!t.pinned}
+          className={cn("w-6 h-6", pinVisibilityCls(pin.visible))}
+          onClick={() => void store.pinTerminal(t.id, !t.pinned)}
+        />
       </span>
     </div>
   );
@@ -560,19 +564,14 @@ function HostRow({ h, alias }: { h: HostInfo; alias?: string }) {
         >{alias || h.label}</span>
       )}
       {h.revoked && !confirm && <span className="text-[8.5px] font-mono uppercase text-[var(--t-red)] shrink-0 group-hover:hidden">revoked</span>}
-      {/* one cluster, one gap (issue #110): the pin leads the same container
-          as delete — its opacity rule keeps the slot and the tab order (#86),
-          delete reveals on hover inside the same box. rowActions' host array
-          keeps its #85 shape (open/delete is a pinned contract), so the pin
-          joins at render time. */}
+      {/* one cluster, one gap (issue #110): the pin anchors LAST in the same
+          container as delete (issue #156) — the same right-edge pixel at
+          rest and on hover, so it never dodges the pointer. Its opacity
+          rule keeps the slot and the tab order (#86); delete reveals on
+          hover to the pin's LEFT, inside the same box. rowActions' host
+          array keeps its #85 shape (open/delete is a pinned contract), so
+          the pin joins at render time. */}
       <span className="flex items-center shrink-0" onClick={(e) => e.stopPropagation()}>
-        <IconBtn
-          icon={pin.icon}
-          label={pin.actionLabel}
-          active={!!h.pinned}
-          className={cn("w-6 h-6", pinVisibilityCls(pin.visible))}
-          onClick={() => void store.pinHost(h.id, !h.pinned)}
-        />
         {del && (
           <IconBtn
             icon={del.icon ?? "trash"}
@@ -581,6 +580,13 @@ function HostRow({ h, alias }: { h: HostInfo; alias?: string }) {
             onClick={() => confirmClick(() => void store.deleteHost(h.id))}
           />
         )}
+        <IconBtn
+          icon={pin.icon}
+          label={pin.actionLabel}
+          active={!!h.pinned}
+          className={cn("w-6 h-6", pinVisibilityCls(pin.visible))}
+          onClick={() => void store.pinHost(h.id, !h.pinned)}
+        />
       </span>
     </div>
   );
