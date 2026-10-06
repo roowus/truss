@@ -58,6 +58,7 @@ import { registerMcpTruss } from "./mcp-truss.js";
 import { controlService, deleteRoute, listCredentials, upsertRoute } from "./credentials.js";
 import { controlRouter, harnessRouting, routerStatus } from "./router.js";
 import { modelCatalog } from "./modelcat.js";
+import { COMMIT } from "./version.js";
 import { syncPiModelsJson } from "./pi-config.js";
 import { transcribeAudio, transcribeConfigFromEnv } from "./transcribe.js";
 import { setClaudeModels } from "./adapters/claude.js";
@@ -130,7 +131,9 @@ void modelCatalog()
   })
   .catch(() => undefined);
 
-app.get("/health", async () => ({ ok: true, service: "truss", time: Date.now() }));
+/* commit: which code is answering — one curl tells a live fix from a stale
+   squatter (issue #135); "unknown" when the deploy has no git */
+app.get("/health", async () => ({ ok: true, service: "truss", time: Date.now(), commit: COMMIT }));
 
 app.get("/events", { websocket: true }, (socket) => {
   clients.add(socket);

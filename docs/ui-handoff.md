@@ -29,7 +29,7 @@ Same-origin REST. In dev these proxy through Vite.
 
 | Route | Shape | Notes |
 |---|---|---|
-| `GET /health` | `{ok, service, time}` | |
+| `GET /health` | `{ok, service, time, commit}` | `commit` is the git sha the server runs from (`"unknown"` when the deploy has no git) — staleness is one curl. |
 | `GET /api/harnesses` | `{harnesses: [{id, capabilities, probeable?}], models: [{harness, provider, model, label}]}` | `capabilities = {permissions, subagents, streaming, queueWhileRunning}`. Harness ids: `pi`, `dsh`, `claude-code`, `hermes`, and remote `<adapter>@<host>` ids when node agents are connected (`GET /api/agents` → `{agents:[{hostId, hostname, adapters}]}`). `probeable` marks lazy adapters (hermes, dsh) that can fill an empty catalog on request — probe only these. Never spawns harness processes. |
 | `POST /api/harnesses/probe` | same shape as `GET /api/harnesses` | One-shot-probes lazy adapters (hermes/dsh) whose catalog is empty — the web app calls it at boot (and the New Session dialog re-asks on open as a fallback). A filled catalog arrives as a `models.updated` broadcast, so refetch on that event. POST (not a GET param) because it spawns harness processes; it requires `content-type: application/json` (415 otherwise) — JSON forces a preflight, and safelisted content types that skip it (a text/plain form POST) are refused at the gate, so it is not cross-site triggerable. |
 | `GET /api/sessions` | `{sessions: [SessionMeta]}` | `SessionMeta = {id, harness, title, cwd, model?, project?, state, created_at, updated_at, live}`; `state ∈ spawning \| idle \| running \| error \| closed`; newest activity first. |
