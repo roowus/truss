@@ -57,3 +57,37 @@ test("re-importing a trashed dsh session skips it instead of resurrecting a dupl
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+/* issue #142 audit (B6): the importer bypasses the sink, so it must stamp
+   `at` itself — an unstamped msg.done/tool.done replays with its own
+   start's time and the trajectory timeline shows a fabricated 0ms span for
+   every imported turn */
+test("mapLog stamps every event with the record time, dones and tools included", async () => {
+  process.env.TRUSS_DATA_DIR ??= mkdtempSync(join(tmpdir(), "truss-test-dsh-maplog-"));
+  const { mapLog } = await import("../src/import-dsh.js");
+
+  const T = 1_700_000_000_000;
+  const { events } = mapLog(
+    [
+      { type: "session", createdAt: T, cwd: "/tmp" },
+      { type: "user/message", time: T + 1000, data: { content: "hello" } },
+      { type: "assistant/message", time: T + 5000, data: { message: { content: [{ type: "text", text: "hi there" }] } } },
+      { type: "step/start", time: T + 2000 },
+      { type: "tool/call", time: T + 3000, data: { callId: "c1", name: "bash", arguments: {} } },
+      { type: "tool/result", time: T + 4000, data: { message: { content: [{ type: "tool-result", toolCallId: "c1", content: "ok" }] } } },
+      { type: "step/end", time: T + 6000 },
+    ],
+    "imp-test",
+  );
+
+  assert.ok(events.length > 0);
+  for (const e of events) {
+    assert.ok(typeof (e as { at?: number }).at === "number" && (e as { at: number }).at >= T, `${e.type} carries the record time`);
+  }
+  const start = events.find((e) => e.type === "msg.start" && (e as { role?: string }).role === "assistant") as { messageId: string; at: number };
+  const done = events.find((e) => e.type === "msg.done" && (e as { messageId?: string }).messageId === start.messageId) as { at: number };
+  assert.ok(done.at >= start.at, "the imported assistant span is a real pair");
+  const tDone = events.find((e) => e.type === "tool.done") as { at: number };
+  const tCall = events.find((e) => e.type === "tool.call") as { at: number };
+  assert.ok(tDone.at > tCall.at, "the imported tool span is a real pair");
+});

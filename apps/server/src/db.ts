@@ -144,7 +144,7 @@ const knownHarnessRefsStmt = db.prepare(`
 const getSessionStmt = db.prepare(`SELECT * FROM sessions WHERE id = ?`);
 
 const listEventsStmt = db.prepare(`
-  SELECT id, payload FROM events WHERE session_id = ? ORDER BY id ASC
+  SELECT id, payload, at FROM events WHERE session_id = ? ORDER BY id ASC
 `);
 
 export const store = {
@@ -312,8 +312,22 @@ export const store = {
 
   /** Replay every persisted event for a session, in order, with rowids for dedupe. */
   listEvents(sessionId: string): { seq: number; ev: ProtoEvent }[] {
-    const rows = listEventsStmt.all(sessionId) as { id: number; payload: string }[];
-    return rows.map((r) => ({ seq: r.id, ev: JSON.parse(r.payload) as ProtoEvent }));
+    const rows = listEventsStmt.all(sessionId) as { id: number; payload: string; at: number }[];
+    /* Rows persisted before the sink stamped `at` carry no time of their
+       own — hand back the row's wall-clock instead, or replay collapses
+       every unstamped done-span to a fabricated 0ms (issue #142 audit).
+       Exception: imported dsh logs (the importer names its rows `dsh-*`)
+       are inserted in one synchronous batch, so the row time is the import
+       instant, not the event time — injecting it would fabricate spans as
+       long as the session's age at import. Those stay timeless here and
+       fall back to the client's replay clock: bounded, and honest — dsh
+       records a message as a single record, so the real span is ~0. */
+    const isImport = sessionId.startsWith("dsh-");
+    return rows.map((r) => {
+      const ev = JSON.parse(r.payload) as ProtoEvent;
+      if (!isImport && (ev as { at?: unknown }).at === undefined) (ev as { at?: unknown }).at = r.at;
+      return { seq: r.id, ev };
+    });
   },
 
   /** per-day token/cost buckets for the heat grid + trend (local time, last `days`) */
