@@ -8,6 +8,7 @@ import { buildModelOptions, modelValue, splitModelValue } from "@/lib/models";
 import { planHeaderFit, HEADER_CLUSTER, HEADER_GAP } from "@/lib/headerFit";
 import { CHAT_WIDTH_DEFAULT, chatHandleGeometry, commitChatWidth, dragDisplayWidth, readChatWidthPref, resolveChatWidth, writeChatWidthPref } from "@/lib/chatWidth";
 import { filesFromTransfer, isFileDrag } from "@/lib/attach";
+import { composerAlign, composerTextareaHeight } from "@/lib/composerFit";
 import { formatSessionRef } from "@/lib/sessionRef";
 import { resumeCommand } from "@/lib/resumeCommand";
 import { RAIL_INSET, activeRailIndex, railIndexAtOffset, railMarkTop, railNaturalHeight, turnRailItems } from "@/lib/turnRail";
@@ -616,12 +617,27 @@ function Composer({ id, active }: { id: string; active: boolean }) {
     window.addEventListener("truss:draft", on);
     return () => window.removeEventListener("truss:draft", on);
   }, [id]);
+  /* composer autosize (issue #139): measure collapsed, then apply the
+     content-box height WITHOUT the padding — scrollHeight carries it and
+     the box re-adds it, so padding must be counted exactly once. The line
+     count drives the row alignment: one line → centered (placeholder and
+     buttons share the row), more → buttons sink to the bottom. */
+  const [taLines, setTaLines] = useState(1);
   useLayoutEffect(() => {
     const el = ta.current;
     if (!el) return;
+    const cs = getComputedStyle(el);
+    const lineHeight = parseFloat(cs.lineHeight) || 20.25; // 13.5px * 1.5
+    const verticalPadding = parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom);
     el.style.height = "0px";
-    el.style.height = Math.min(220, el.scrollHeight) + "px";
+    const total = composerTextareaHeight({ scrollHeight: el.scrollHeight, lineHeight, verticalPadding, cap: 220 });
+    el.style.height = total - verticalPadding + "px";
+    setTaLines((n) => {
+      const next = Math.max(1, Math.round((total - verticalPadding) / lineHeight));
+      return next === n ? n : next;
+    });
   }, [text]);
+  const taAlignEnd = composerAlign(taLines) === "end";
 
   const hasPending = !!pending?.length;
   const running = meta.state === "running";
@@ -731,7 +747,7 @@ function Composer({ id, active }: { id: string; active: boolean }) {
         </div>
       )}
       <div
-        className={cn("flex items-end gap-1.5 rounded-xl border bg-[var(--t-bg0)] transition-colors focus-within:border-[var(--t-mute)] px-2 py-1.5", dead ? "border-dashed border-[var(--t-line2)]" : "border-[var(--t-line2)]")}
+        className={cn("flex gap-1.5 rounded-xl border bg-[var(--t-bg0)] transition-colors focus-within:border-[var(--t-mute)] px-2 py-1.5", taAlignEnd ? "items-end" : "items-center", dead ? "border-dashed border-[var(--t-line2)]" : "border-[var(--t-line2)]")}
         onDragOver={(e) => {
           if (isFileDrag(e.dataTransfer)) e.preventDefault();
         }}
@@ -751,13 +767,14 @@ function Composer({ id, active }: { id: string; active: boolean }) {
           aria-label="Attach files"
           onChange={(e) => { if (e.target.files?.length) void attachFiles(e.target.files); }}
         />
-        <IconBtn icon="clip" label={uploading ? "Uploading…" : "Attach files (they land in .truss-uploads/ in the workspace)"} disabled={uploading || sending} onClick={() => fileRef.current?.click()} className="mb-0.5 shrink-0" />
+        <IconBtn icon="clip" label={uploading ? "Uploading…" : "Attach files (they land in .truss-uploads/ in the workspace)"} disabled={uploading || sending} onClick={() => fileRef.current?.click()} className={cn("shrink-0", taAlignEnd && "mb-0.5")} />
         <button
           onClick={onMic}
           title={voiceTitle}
           aria-label={voiceTitle}
           className={cn(
-            "mb-0.5 shrink-0 inline-grid place-items-center w-7 h-7 rounded-md transition-colors",
+            "shrink-0 inline-grid place-items-center w-7 h-7 rounded-md transition-colors",
+            taAlignEnd && "mb-0.5",
             voiceState === "idle" && "text-[var(--t-mute)] hover:text-[var(--t-fg)] hover:bg-white/[0.06]",
             voiceState === "recording" && "text-[var(--t-amber)] bg-[color-mix(in_oklab,var(--t-amber)_12%,transparent)] t-pulse",
             voiceState === "transcribing" && "text-[var(--t-amber)]",
@@ -821,9 +838,9 @@ function Composer({ id, active }: { id: string; active: boolean }) {
         )}
         </div>
         {running && !queues ? (
-          <Btn size="sm" variant="danger" icon="stop" onClick={() => store.interrupt(id)} title="Interrupt (Esc)" className="mb-0.5">Stop</Btn>
+          <Btn size="sm" variant="danger" icon="stop" onClick={() => store.interrupt(id)} title="Interrupt (Esc)" className={cn(taAlignEnd && "mb-0.5")}>Stop</Btn>
         ) : (
-          <Btn size="sm" variant={dead ? "outline" : "amber"} icon={dead ? "power" : "send"} disabled={!canSend} onClick={send} className="mb-0.5" title={dead ? "Resume the harness and send" : running ? "Queue after current step" : "Send (Enter)"}>
+          <Btn size="sm" variant={dead ? "outline" : "amber"} icon={dead ? "power" : "send"} disabled={!canSend} onClick={send} className={cn(taAlignEnd && "mb-0.5")} title={dead ? "Resume the harness and send" : running ? "Queue after current step" : "Send (Enter)"}>
             {sending ? "…" : dead ? "Resume" : running ? "Queue" : "Send"}
           </Btn>
         )}
