@@ -4,13 +4,14 @@ import { readFileSync } from "node:fs";
 
 /* SPEC-TESTS for the model picker's home — https://github.com/roowus/truss/issues/143
    ("Move the model selector from the top to the bottom chat bar"). These
-   FAIL on purpose today: they pin the contract a fix must satisfy.
+   pinned the contract the fix had to satisfy; the fix landed with them,
+   so they pass.
 
-   Today the model Select lives in the chat HEADER (ChatPanel.tsx — inside
-   the h-10 header row, with a collapse path into the ⋯ overflow via the
-   headerFit planner's "select" item, headerFit.ts:64-69). The ask: it
-   belongs with the composer (the bottom bar with clip/mic/send), like every
-   modern chat app — the control you touch while writing a message.
+   Before #143 the model Select lived in the chat HEADER (ChatPanel.tsx —
+   inside the h-10 header row, with a collapse path into the ⋯ overflow via
+   the headerFit planner's "select" item). It now belongs with the composer
+   (the bottom bar with clip/mic/send), like every modern chat app — the
+   control you touch while writing a message.
 
    The contract:
    1. HEADER_CLUSTER no longer carries "select" — the header never plans

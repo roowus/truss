@@ -7,7 +7,8 @@ import assert from "node:assert/strict";
 
    The bug: ChatHeader (apps/web/src/panels/ChatPanel.tsx:88-119) is a single
    no-wrap flex row whose only flexible item is the title. The right cluster —
-   model Select (w-[170px] shrink-0), Stop, Trajectory, ⋯ menu — is pinned
+   Stop, Trajectory, ⋯ menu (the model Select sat here until issue #143 moved
+   it into the composer bar) — is pinned
    wider than narrow chat panels, and dockview clips the overflow
    (overflow:hidden, index.css), so the rightmost controls get cut off and
    become unreachable.
