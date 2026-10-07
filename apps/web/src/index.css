@@ -112,6 +112,11 @@ body {
    clips like Chrome. The close X is pinned only on the roomy active tab;
    everywhere else it hover-reveals (over the icon on slivers). ── */
 .truss-dock .dv-tabs-container { overflow: hidden; }
+/* the stretch-back after a deferred close-resize (issue #197): the strip
+   gets .truss-tabs-stretch for exactly the one width change that returns
+   the frozen tabs to the computed fit — sash and window resizes never
+   carry this transition and stay instant. */
+.truss-dock .dv-tabs-container.truss-tabs-stretch .dv-tab { transition: width 0.18s ease; }
 .truss-dock .dv-scrollable > .dv-scrollbar-horizontal { display: none; }
 /* flex-shrink is only the pre-measure fallback; the component's inline
    width + flex:none wins once chromeTabLayout has run */

@@ -32,7 +32,7 @@ import { SettingsPanel } from "@/panels/SettingsPanel";
 import { TrashPanel } from "@/panels/TrashPanel";
 import { DesktopStrip } from "./DesktopStrip";
 import { SplitJunctionHandles } from "./SplitJunctions";
-import { chromeTabLayout, chromeTabsAvailableWidth, tabTrailingReserve, type ChromeTabView } from "@/lib/chromeTabs";
+import { chromeTabLayout, chromeTabsAvailableWidth, tabCloseWidths, tabTrailingReserve, TAB_CLOSE_SETTLE_MS, type ChromeTabView } from "@/lib/chromeTabs";
 import { tabClosePlacement } from "@/lib/tabClose";
 import { TabPicker } from "./TabPicker";
 import { Btn, Icon, StateDot, TrussLogo } from "./ui";
@@ -69,6 +69,76 @@ const KIND_ICON: Record<string, string> = {
 };
 
 const theme: DockviewTheme = { ...themeDark, name: "truss", className: "dockview-theme-dark", gap: 6, dndTabIndicator: "line" };
+
+/* Deferred tab-strip resize on close (issue #197 — Chrome's spam-close):
+   while the pointer is over the strip, a close FREEZES the surviving tabs
+   at their pre-close widths — the gap collects at the strip's right end
+   and the next tab's X slides under the cursor. When the pointer leaves
+   the strip, or a settle beat (TAB_CLOSE_SETTLE_MS) passes with no further
+   closes, the strip stretches back to the computed uniform fit, animated
+   by a width transition that exists ONLY for that stretch
+   (.truss-tabs-stretch in index.css — sash and window resizes stay
+   instant). Tab ADDS resize immediately; Chrome defers only closes, and a
+   deliberate strip resize (sash/window) drops the freeze on the spot.
+
+   The width decision itself is pure — lib/chromeTabs.ts tabCloseWidths.
+   What lives here is the strip's shared runtime: pointer-hot, the frozen
+   widths, the settle timer. Keyed by the strip element (WeakMap) so every
+   tab of one strip agrees and a discarded strip takes its state with it. */
+interface StripCloseFreeze {
+  hot: boolean;
+  /** frozen widths by position while a close is deferred; null = live layout */
+  widths: number[] | null;
+  /** the strip's tab elements and the widths last written, per measure */
+  els: HTMLElement[];
+  rendered: number[];
+  /** the strip width at the last measure — a change snaps the freeze off */
+  stripWidth: number;
+  /** every tab's measure, so the stretch-back re-measures them all at once */
+  measurers: Set<() => void>;
+  settle: ReturnType<typeof setTimeout> | null;
+  stretchOff: ReturnType<typeof setTimeout> | null;
+  attached: boolean;
+}
+const stripCloseFreezes = new WeakMap<HTMLElement, StripCloseFreeze>();
+
+/** End a freeze: the tabs animate back to the computed fit. */
+function unfreezeStripClose(strip: HTMLElement, s: StripCloseFreeze) {
+  if (s.settle) {
+    clearTimeout(s.settle);
+    s.settle = null;
+  }
+  if (!s.widths) return;
+  s.widths = null;
+  /* the stretch class goes on BEFORE the widths change so exactly this one
+     width change animates; it comes off once the transition has run */
+  strip.classList.add("truss-tabs-stretch");
+  if (s.stretchOff) clearTimeout(s.stretchOff);
+  s.stretchOff = setTimeout(() => {
+    strip.classList.remove("truss-tabs-stretch");
+    s.stretchOff = null;
+  }, 240);
+  for (const m of s.measurers) m();
+}
+
+function stripCloseFreeze(strip: HTMLElement): StripCloseFreeze {
+  let s = stripCloseFreezes.get(strip);
+  if (!s) {
+    s = { hot: false, widths: null, els: [], rendered: [], stripWidth: 0, measurers: new Set(), settle: null, stretchOff: null, attached: false };
+    stripCloseFreezes.set(strip, s);
+  }
+  if (!s.attached) {
+    s.attached = true;
+    strip.addEventListener("pointerenter", () => {
+      s.hot = true;
+    });
+    strip.addEventListener("pointerleave", () => {
+      s.hot = false;
+      unfreezeStripClose(strip, s);
+    });
+  }
+  return s;
+}
 
 function TrussTab({ api, params }: IDockviewPanelHeaderProps<{ sessionId?: string; terminalId?: string }>) {
   const [title, setTitle] = useState(api.title ?? "");
@@ -143,10 +213,11 @@ function TrussTab({ api, params }: IDockviewPanelHeaderProps<{ sessionId?: strin
     let mo: MutationObserver | null = null;
     let observed: Element | null = null;
     let raf = 0;
+    let freeze: StripCloseFreeze | null = null;
     const measure = () => {
       const tab = findTab();
       if (!tab) return;
-      const strip = tab.closest(".dv-tabs-container");
+      const strip = tab.closest(".dv-tabs-container") as HTMLElement | null;
       const header = tab.closest(".dv-tabs-and-actions-container");
       if (!strip || !header) return;
       const tabEls = [...strip.querySelectorAll(".dv-tab")] as HTMLElement[];
@@ -165,11 +236,67 @@ function TrussTab({ api, params }: IDockviewPanelHeaderProps<{ sessionId?: strin
           active: i === self ? activeRef.current : el.classList.contains("dv-active-tab"),
         })),
       });
+      /* the deferred close-resize (issue #197): one shared state per strip —
+         the first tab to measure a childList change updates it, the rest
+         read the result (s.els is rewritten synchronously, so a close is
+         detected exactly once) */
+      const s = stripCloseFreeze(strip);
+      s.measurers.add(measure);
+      freeze = s;
+      const count = tabEls.length;
+      const prevCount = s.els.length;
+      if (s.widths && s.stripWidth !== stripWidth) {
+        /* the strip's own bounds changed (sash/window): the freeze keeps the
+           cursor on the X during clicks — it never fights a deliberate
+           resize. Snap back to the live layout. */
+        if (s.settle) {
+          clearTimeout(s.settle);
+          s.settle = null;
+        }
+        s.widths = null;
+      }
+      if (count < prevCount) {
+        /* tab(s) left the strip. Which positions left comes from diffing the
+           last measure's elements — uniform widths make the index moot
+           today, but tabCloseWidths takes it and a per-tab-width future
+           won't. Hot strip → frozen widths (the gap parks at the right);
+           cold (menu/shortcut close, pointer already gone) → computed. */
+        const removed: number[] = [];
+        s.els.forEach((el, i) => {
+          if (!tabEls.includes(el)) removed.push(i);
+        });
+        if (removed.length) {
+          const computed = tabEls.map(() => layout.width);
+          let w = s.rendered;
+          for (const idx of removed.sort((a, b) => b - a)) w = tabCloseWidths(w, idx, computed, s.hot);
+          s.widths = s.hot ? w : null;
+          if (s.widths) {
+            /* (re)arm the settle beat: a parked cursor with no further
+               closes stretches back on its own */
+            if (s.settle) clearTimeout(s.settle);
+            s.settle = setTimeout(() => {
+              s.settle = null;
+              unfreezeStripClose(strip, s);
+            }, TAB_CLOSE_SETTLE_MS);
+          }
+        }
+      } else if (count > prevCount && s.widths) {
+        /* adds resize immediately — Chrome defers only closes */
+        if (s.settle) {
+          clearTimeout(s.settle);
+          s.settle = null;
+        }
+        s.widths = null;
+      }
+      const widths = s.widths;
       /* uniform width straight onto the dockview tab element — every tab
          computes the same value, so the strip agrees with itself */
-      tab.style.width = `${layout.width}px`;
+      tab.style.width = `${widths?.[self] ?? layout.width}px`;
       tab.style.flex = "0 0 auto";
       setView(layout.perTab[String(self)]);
+      s.els = tabEls;
+      s.rendered = tabEls.map((_, i) => widths?.[i] ?? layout.width);
+      s.stripWidth = stripWidth;
     };
     measureRef.current = measure;
     const attach = () => {
@@ -204,6 +331,7 @@ function TrussTab({ api, params }: IDockviewPanelHeaderProps<{ sessionId?: strin
       ro?.disconnect();
       mo?.disconnect();
       measureRef.current = () => {};
+      freeze?.measurers.delete(measure);
       const tab = findTab();
       if (tab) {
         tab.style.width = "";
