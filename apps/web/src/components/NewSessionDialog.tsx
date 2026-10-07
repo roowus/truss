@@ -3,7 +3,7 @@ import { store, useApp } from "@/lib/store";
 import { useDesktops } from "@/lib/desktops";
 import { harnessStyle, hostOf, shortPath } from "@/lib/format";
 import { hostAliases, hostDisplay } from "@/lib/device";
-import { resolveDefaultCwd, hostDefaultFor, hostSuggestedFor } from "@/lib/cwdDefault";
+import { resolveDefaultCwd, resolveDefaultProject, hostDefaultFor, hostSuggestedFor } from "@/lib/cwdDefault";
 import { createBrowseNav, type BrowseNav } from "@/lib/browseNav";
 import { buildModelOptions, modelSelectOptions, splitModelValue } from "@/lib/models";
 import { createPortal } from "react-dom";
@@ -37,7 +37,11 @@ export function NewSessionDialog({ onClose, preset }: { onClose: () => void; pre
   const [cwd, setCwdState] = useState("");
   const [pickerOpen, setPickerOpen] = useState(false);
   const cwdFieldRef = useRef<HTMLDivElement>(null);
-  const [project, setProject] = useState(preset?.project ?? sessions[order[0]]?.project ?? "");
+  /* the project default NEVER comes from recency (issue #202): a silent
+     inherit mislabeled new sessions with the most recent one's tag. An
+     explicit preset still prefills; otherwise the field opens blank and the
+     recent-project chips below stay the one-click picks. */
+  const [project, setProject] = useState(() => resolveDefaultProject({ preset: preset?.project }));
 
   /* The default working directory follows the named precedence
      (preset > picked host's pref > host's own suggestion > Settings >
