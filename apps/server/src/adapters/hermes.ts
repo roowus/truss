@@ -208,8 +208,8 @@ export const hermesAdapter: HarnessAdapter = {
     /* the deliverables guidance rides the first prompt this spawned session
        sends (issue #203) — after the busy check so a swallowed prompt can't
        burn the one-shot; appended so the user's text still leads */
-    if (!guidanceSent.has(handle)) {
-      guidanceSent.add(handle);
+    const first = !guidanceSent.has(handle);
+    if (first) {
       text = `${text}\n\n[truss bootstrap — deliverables guidance]\n${deliverablesGuidance()}\n[/truss bootstrap]`;
     }
     beginAcpTurn(h);
@@ -232,6 +232,10 @@ export const hermesAdapter: HarnessAdapter = {
            a loud failure, never a silent 200 (issue #97) */
         const usage = (result as { usage?: { inputTokens?: number; outputTokens?: number } } | null)
           ?.usage;
+        /* the guidance marker moves only once the harness answered the
+           prompt — a rejected call never delivered the briefing and the
+           retry must still carry it. Race-free: busy blocks a second send. */
+        if (first) guidanceSent.add(handle);
         settleAcpTurn(h, {
           ...classifyAcpSettle(h, result),
           tokensIn: usage?.inputTokens,

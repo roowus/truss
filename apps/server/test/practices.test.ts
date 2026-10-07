@@ -14,9 +14,9 @@ import { join } from "node:path";
 const HOME = mkdtempSync(join(tmpdir(), "truss-test-practices-home-"));
 process.env.HOME = HOME;
 
-const { composePractices, getGlobalPractices, saveGlobalPractices, POSTING_GUIDE } = await import(
-  "../src/practices.js"
-);
+const { composePractices, getGlobalPractices, saveGlobalPractices, POSTING_GUIDE, POSTING_GUIDE_PI } =
+  await import("../src/practices.js");
+const { deliverablesGuidance } = await import("../src/deliverables.js");
 
 const GLOBAL_FILE = join(HOME, ".truss", "TRUSS.md");
 const PROJECTS_DIR = join(HOME, ".truss", "projects");
@@ -36,6 +36,15 @@ test("global: missing file -> getGlobalPractices returns the built-in default", 
   // POSTING_GUIDE is always available regardless of files on disk
   assert.ok(POSTING_GUIDE.includes("file_todo"));
   assert.ok(POSTING_GUIDE.includes("post_feed"));
+});
+
+test("POSTING_GUIDE_PI: pi's preamble names its real tools and carries the canonical paragraph", () => {
+  /* issue #203: the old "no tool bus" wording became false the day the pi
+     extension shipped — a revert would tell pi sessions the feed is
+     unreachable and reintroduce the bug with the suite green */
+  assert.ok(POSTING_GUIDE_PI.includes("post_feed"), "names the tool pi actually has");
+  assert.ok(!/no tool bus/.test(POSTING_GUIDE_PI), "the pre-extension lie stays gone");
+  assert.ok(POSTING_GUIDE_PI.includes(deliverablesGuidance()), "the deliverables sentence is interpolated, not hand-duplicated");
 });
 
 test("compose: no files anywhere -> no layers, empty composed", () => {

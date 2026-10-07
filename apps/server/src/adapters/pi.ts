@@ -321,8 +321,8 @@ export const piAdapter: HarnessAdapter = {
        sends (issue #203) — pi has no system-prompt flag, and the practices
        block sessions.ts adds lands only when TRUSS.md files compose. It goes
        AFTER the user's text: the prompt leads, the briefing follows. */
-    if (!guidanceSent.has(handle)) {
-      guidanceSent.add(handle);
+    const first = !guidanceSent.has(handle);
+    if (first) {
       text = `${text}\n\n[truss bootstrap — deliverables guidance]\n${deliverablesGuidance()}\n[/truss bootstrap]`;
     }
     // pi rejects a bare prompt while streaming; followUp queues it after the run.
@@ -330,6 +330,10 @@ export const piAdapter: HarnessAdapter = {
       ? { type: "follow_up", message: text }
       : { type: "prompt", message: text };
     h.proc.stdin!.write(JSON.stringify(cmd) + "\n");
+    /* the marker moves only after a delivered write — a dead child throws
+       ERR_STREAM_DESTROYED here, and the retry must still carry the briefing
+       (the discipline sessions.ts documents for the practices preamble) */
+    if (first) guidanceSent.add(handle);
   },
 
   interrupt(handle: AdapterHandle) {

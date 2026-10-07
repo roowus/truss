@@ -88,6 +88,10 @@ const listFeed = defineTool({
 });
 
 export default function (pi: ExtensionAPI) {
+  /* the file installs machine-globally, but the tools only make sense under
+     truss — in a standalone pi (no TRUSS_SESSION_ID) they could only ever
+     fail, so register nothing there */
+  if (!SESSION) return;
   pi.registerTool(postFeed);
   pi.registerTool(listFeed);
 }

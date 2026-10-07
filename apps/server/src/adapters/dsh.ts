@@ -247,8 +247,8 @@ export const dshAdapter: HarnessAdapter = {
     /* the deliverables guidance rides the first prompt this spawned session
        sends (issue #203) — after the busy check so a swallowed prompt can't
        burn the one-shot; appended so the user's text still leads */
-    if (!guidanceSent.has(handle)) {
-      guidanceSent.add(handle);
+    const first = !guidanceSent.has(handle);
+    if (first) {
       text = `${text}\n\n[truss bootstrap — deliverables guidance]\n${deliverablesGuidance()}\n[/truss bootstrap]`;
     }
     beginAcpTurn(h);
@@ -267,7 +267,14 @@ export const dshAdapter: HarnessAdapter = {
       )
       /* read the result before settling: an instant refusal/empty settle is
          the ghost black hole, a loud failure, never a silent 200 (#97) */
-      .then((result) => settleAcpTurn(h, classifyAcpSettle(h, result)))
+      .then((result) => {
+        /* the marker moves only once the harness answered the prompt — a
+           rejected call never delivered the briefing and the retry must still
+           carry it (sessions.ts documents the same for the practices
+           preamble). Race-free: busy blocks any second send meanwhile. */
+        if (first) guidanceSent.add(handle);
+        settleAcpTurn(h, classifyAcpSettle(h, result));
+      })
       .catch((err: Error) => settleAcpTurn(h, { ok: false, detail: err.message }));
   },
 

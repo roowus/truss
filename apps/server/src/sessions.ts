@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { HarnessId, ProtoEvent } from "@truss/proto";
 import { store } from "./db.js";
-import { composePractices } from "./practices.js";
+import { composePractices, POSTING_GUIDE_PI } from "./practices.js";
 import { piAdapter } from "./adapters/pi.js";
 import { dshAdapter } from "./adapters/dsh.js";
 import { claudeAdapter } from "./adapters/claude.js";
@@ -451,10 +451,8 @@ export async function sendPrompt(
 const MCP_ATTACHED = new Set(["claude-code", "dsh", "hermes"]);
 const firstPromptDone = new Set<string>();
 const baseOf = (harness: string) => harness.split("@")[0];
-/* pi's tool bus is its shipped extension (post_feed / list_feed bridge onto
-   the MCP route — issue #203), not MCP itself; the practices block still
-   rides the first prompt because pi never calls the server's initialize */
-const POSTING_GUIDE_PI = `Your truss tools come from the truss pi extension (post_feed, list_feed): post finished research and reports to the user's feed with post_feed (type "report"), heads-ups as "note", and read cards the user shared with list_feed. Act on the practices above directly and keep the user's task board honest in plain text.`;
+/* POSTING_GUIDE_PI lives in practices.ts next to POSTING_GUIDE (and is
+   pinned there) — it interpolates the canonical deliverablesGuidance() */
 
 
 export function interrupt(sessionId: string) {
