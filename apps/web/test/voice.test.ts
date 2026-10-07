@@ -250,6 +250,9 @@ test("createBrowserVoiceInput: the typed levelStream seam exists and reads null 
 
 function fakeSpeechRecognition() {
   const instances: {
+    lang: string;
+    continuous: boolean;
+    interimResults: boolean;
     onresult: unknown;
     onerror: ((e: { error?: string }) => void) | null;
     onend: (() => void) | null;
@@ -406,4 +409,58 @@ test("recognition recorder: a new take after an error never inherits a stale liv
   rec.cancel?.();
   assert.equal(b.tracks[0]!.stopped, true);
   assert.equal(rec.levelStream(), null);
+});
+
+/* ── issue #201: live transcription — the recognition path streams ── */
+
+test("recognition recorder: interims stream as the live text-so-far; the take's final replaces them", async () => {
+  /* the contract behind voiceInput.test.ts's read-through: continuous +
+     interimResults are ON, and every non-final result flows out the
+     onPartial sink as settled-phrases-plus-current-interim, so the draft
+     can mirror the whole take dimmed until the final lands */
+  const { Ctor, instances } = fakeSpeechRecognition();
+  const rec = recognitionRecorder(Ctor);
+  const partials: string[] = [];
+  rec.onPartial = (t) => partials.push(t);
+  rec.start();
+  const r = instances[0]!;
+  assert.equal(r.continuous, true, "continuous: a phrase ending doesn't end the take");
+  assert.equal(r.interimResults, true, "interim results enabled — partials while speaking");
+
+  type FakeResult = { isFinal: boolean; 0: { transcript: string } };
+  const fire = (resultIndex: number, results: FakeResult[]) =>
+    (r.onresult as (e: { resultIndex: number; results: ArrayLike<FakeResult> }) => void)({ resultIndex, results });
+
+  fire(0, [{ isFinal: false, 0: { transcript: "the cat" } }]);
+  fire(0, [{ isFinal: false, 0: { transcript: "the cat sat" } }]);
+  assert.deepEqual(partials, ["the cat", "the cat sat"], "the live words stream while speaking");
+
+  fire(0, [
+    { isFinal: true, 0: { transcript: "the cat sat" } },
+    { isFinal: false, 0: { transcript: " on the" } },
+  ]);
+  assert.deepEqual(partials.at(-1), "the cat sat on the", "settled phrases stay visible under the new interim");
+
+  fire(1, [
+    { isFinal: true, 0: { transcript: "the cat sat" } },
+    { isFinal: true, 0: { transcript: " on the mat" } },
+  ]);
+  assert.deepEqual(partials.at(-1), "the cat sat on the mat", "a re-reported final (already counted) never doubles");
+
+  const done = rec.stop();
+  r.onend?.();
+  assert.equal(await done, "the cat sat on the mat", "the take's final is exactly the accumulated text");
+});
+
+test("recognition recorder: a take with no partial subscription still works (the seam is optional)", async () => {
+  const { Ctor, instances } = fakeSpeechRecognition();
+  const rec = recognitionRecorder(Ctor);
+  assert.equal(rec.onPartial, undefined, "no sink until the controller subscribes");
+  rec.start();
+  const r = instances[0]!;
+  const fire = (r.onresult as (e: { resultIndex: number; results: ArrayLike<{ isFinal: boolean; 0: { transcript: string } }> }) => void);
+  fire({ resultIndex: 0, results: [{ isFinal: false, 0: { transcript: "hello" } }] });
+  fire({ resultIndex: 0, results: [{ isFinal: true, 0: { transcript: "hello" } }] });
+  const done = rec.stop(); // the fake's stop() fires onend synchronously
+  assert.equal(await done, "hello", "the final lands with no partial listener attached");
 });

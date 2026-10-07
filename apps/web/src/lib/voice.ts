@@ -41,6 +41,13 @@ export function speechRecognitionCtor(): SpeechRecognitionCtor | null {
    recognizer, stop() ends capture and resolves with the final transcript.
    The promise rejects via onerror (denied mic, no speech service, …).
 
+   The recognizer runs continuous + interimResults (issue #201): phrases
+   don't end the take mid-dictation, and every non-final result streams out
+   through the onPartial sink as the live text-so-far (settled phrases plus
+   the words still being recognized) — the draft mirrors it dimmed until the
+   take's final lands and replaces it. The final remains the one transcript
+   (the #15 rule): partials never reach transcribe()/onText.
+
    The recognizer owns its audio and exposes no stream, so without help the
    dictation visualizer (issue #112) would have nothing to read on this
    path — Chrome/Edge/Safari, the majority. So a take ALSO opens a
@@ -59,6 +66,7 @@ export function recognitionRecorder(
   let result: Promise<string> | null = null;
   let meter: MediaStreamLike | null = null;
   let meterGen = 0;
+  let partialSink: ((text: string) => void) | undefined;
   const releaseMeter = () => {
     meterGen++; // invalidate a pending grant, same guard as the capture path
     meter?.getTracks().forEach((t) => t.stop());
@@ -66,6 +74,14 @@ export function recognitionRecorder(
   };
   return {
     levelStream: () => meter,
+    /* the controller (voiceInput) owns the subscription: it assigns the
+       sink on start() and clears it when the take settles */
+    get onPartial() {
+      return partialSink;
+    },
+    set onPartial(fn) {
+      partialSink = fn;
+    },
     start() {
       /* the metering mic's lifetime must equal the take's, however the take
          ends — stop, cancel, the recognizer's own onerror/onend (Chrome's
@@ -99,17 +115,29 @@ export function recognitionRecorder(
         const r = new Ctor();
         rec = r;
         r.lang = navigator.language || "en-US";
-        r.continuous = false;
-        r.interimResults = false;
+        r.continuous = true;
+        r.interimResults = true;
         let text = "";
         result = new Promise<string>((res, rej) => {
           settle = { res, rej };
         });
         r.onresult = (e) => {
-          for (let i = e.resultIndex; i < e.results.length; i++) {
+          let interim = "";
+          for (let i = 0; i < e.results.length; i++) {
             const res = e.results[i];
-            if (res?.isFinal) text += res[0]?.transcript ?? "";
+            if (!res) continue;
+            /* finals persist in the results list once recognized — count
+               only the ones new to this event, or every phrase lands twice */
+            if (res.isFinal) {
+              if (i >= e.resultIndex) text += res[0]?.transcript ?? "";
+            } else {
+              interim += res[0]?.transcript ?? "";
+            }
           }
+          /* the live text-so-far: settled phrases plus the words still
+             being recognized (issue #201). Display-only — the take's final
+             (text, at onend) replaces it in the draft. */
+          partialSink?.(text + interim);
         };
         r.onerror = (e) => {
           releaseMeter(); // the take just died — the metering mic dies with it
@@ -306,12 +334,14 @@ export interface BrowserVoiceController extends VoiceController {
 
 /** build the composer controller: recognition where the browser has it,
     server transcription everywhere else. Never auto-sends — onText only
-    touches the draft. */
-export function createBrowserVoiceInput(deps: { onText: (text: string) => void; onState?: (s: VoiceState) => void }): BrowserVoiceController {
+    touches the draft. onPartial (issue #201) streams the live text-so-far
+    for the draft's dimmed listening display; the final replaces it. */
+export function createBrowserVoiceInput(deps: { onText: (text: string) => void; onPartial?: (text: string) => void; onState?: (s: VoiceState) => void }): BrowserVoiceController {
   const SR = typeof window !== "undefined" ? speechRecognitionCtor() : null;
   const c = createVoiceInput({
     maxDurationMs: 60_000,
     onText: deps.onText,
+    ...(deps.onPartial ? { onPartial: deps.onPartial } : {}),
     ...(deps.onState ? { onState: deps.onState } : {}),
     recorder: SR
       ? recognitionRecorder(SR, {

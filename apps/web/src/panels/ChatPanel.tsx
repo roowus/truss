@@ -584,8 +584,11 @@ function Composer({ id, active }: { id: string; active: boolean }) {
   const now = useNow(1000, meta.state === "spawning");
 
   /* voice dictation (issue #15): the controller lives across renders and its
-     only output is the draft — sending stays the user's click */
+     only output is the draft — sending stays the user's click. Issue #201
+     adds the partial channel: the live text-so-far renders dimmed inside the
+     recording overlay (display-only), and the final replaces it on landing. */
   const [voiceState, setVoiceState] = useState<VoiceState>("idle");
+  const [voicePartial, setVoicePartial] = useState("");
   const voiceRef = useRef<BrowserVoiceController | null>(null);
   const voice = () =>
     (voiceRef.current ??= createBrowserVoiceInput({
@@ -593,9 +596,15 @@ function Composer({ id, active }: { id: string; active: boolean }) {
         setText((cur) => appendTranscript(cur, t));
         ta.current?.focus();
       },
+      onPartial: setVoicePartial,
       onState: setVoiceState,
     }));
   useEffect(() => () => voiceRef.current?.cancel(), []); // drop a live take when the panel unmounts
+  /* partials never survive their take: the final replaces them via onText,
+     and a cancel/error just clears the display */
+  useEffect(() => {
+    if (voiceState !== "recording") setVoicePartial("");
+  }, [voiceState]);
   /* the take's start wall-time, for the 0:07-style clock in the chip */
   const [voiceStart, setVoiceStart] = useState<number | null>(null);
   useEffect(() => {
@@ -863,6 +872,13 @@ function Composer({ id, active }: { id: string; active: boolean }) {
           <div className="pointer-events-none absolute inset-0 flex items-center gap-2 px-1.5 rounded-sm bg-[var(--t-bg0)] text-[var(--t-amber)] overflow-hidden">
             <span className="shrink-0 text-[11.5px] tabular-nums">{fmtTakeTime(voiceNow - (voiceStart ?? voiceNow))}</span>
             <VoiceVisualizer levelStream={voiceLevelStream} className="flex min-w-0 flex-1 items-center gap-[2px] h-5 overflow-hidden" />
+            {/* live dictation (issue #201): the words-so-far, dimmed until the
+                take's final lands in the draft and replaces them. rtl +
+                ellipsis keeps the tail visible — the newest words are the
+                ones you check. */}
+            {voicePartial && (
+              <span className="min-w-0 max-w-[55%] truncate [direction:rtl] text-[12px] text-[var(--t-dim)]">{voicePartial}</span>
+            )}
             {/* the Esc affordance lives in the bar itself — no hint line
                 below, so the composer never shifts when a take starts */}
             <span className="shrink-0 text-[10px] text-[var(--t-dim)]">Esc to cancel</span>

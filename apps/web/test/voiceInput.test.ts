@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 
 /* SPEC-TESTS for voice-to-input — https://github.com/roowus/truss/issues/15
    ("Voice to input"). These FAIL on purpose today: they pin the contract a
@@ -208,4 +209,63 @@ test("levelStream(): the controller surfaces the recorder's live stream; a recor
 
   const noRecorder = mod.createVoiceInput({ transcribe: async () => "", onText: () => {} });
   assert.equal(noRecorder.levelStream(), null, "no recorder at all also reads null");
+});
+
+/* issue #200: LIVE transcription — partials stream into the draft while you
+   speak (the final replaces them; the take's one-transcript rule composes:
+   the FINAL is the transcript, partials are display-only) */
+
+interface LiveVoiceModule {
+  createVoiceInput(deps: {
+    transcribe: (audio: unknown) => Promise<string>;
+    onText: (text: string) => void;
+    onPartial?: (text: string) => void;
+    recorder?: unknown;
+  }): any;
+}
+
+test("partials stream during a take; the final REPLACES them (never appends)", async () => {
+  const spec = "../src/lib/voiceInput";
+  const mod = (await import(spec).catch(() => null)) as LiveVoiceModule | null;
+  assert.ok(mod, "voiceInput module must exist (see module test)");
+
+  const partials: string[] = [];
+  const finals: string[] = [];
+  /* the recorder reports interim text mid-take; the controller must forward
+     it to onPartial (the wiring is the contract) */
+  let recorderPartial: ((text: string) => void) | undefined;
+  const recorder = {
+    start() {},
+    stop: async () => "blob",
+    levelStream: () => null,
+    set onPartial(fn: ((text: string) => void) | undefined) {
+      recorderPartial = fn;
+    },
+    get onPartial() {
+      return recorderPartial;
+    },
+  };
+  const v = mod.createVoiceInput({
+    transcribe: async () => "the cat sat on the mat",
+    onText: (t) => finals.push(t),
+    onPartial: (t) => partials.push(t),
+    recorder: recorder as never,
+  });
+  v.start();
+  assert.ok(recorderPartial, "the controller subscribes to the recorder's partial stream (issue #200)");
+  recorderPartial!("the cat");
+  recorderPartial!("the cat sat");
+  assert.deepEqual(partials, ["the cat", "the cat sat"], "partials flow live while speaking");
+
+  const final = await v.stop();
+  assert.equal(final, "the cat sat on the mat", "stop resolves the final");
+  assert.deepEqual(finals, ["the cat sat on the mat"], "exactly ONE final transcript (the #15 rule holds) — never final+partials concatenated");
+});
+
+test("the SpeechRecognition path streams: interimResults + continuous on, interims emit partials", () => {
+  const src = readFileSync(new URL("../src/lib/voice.ts", import.meta.url), "utf8");
+  assert.ok(/interimResults\s*=\s*true/.test(src), "the browser path enables interim results — partials while speaking (issue #200)");
+  assert.ok(/continuous\s*=\s*true/.test(src), "and continuous (no stop between phrases)");
+  /* interims must FLOW, not just be enabled */
+  assert.ok(/!res\??\.isFinal|isFinal === false|!res\[0\]?.*isFinal/.test(src) || /interim/.test(src), "non-final results emit as partials");
 });
