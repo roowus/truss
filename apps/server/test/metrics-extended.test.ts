@@ -179,6 +179,15 @@ test("cpuTimeShares: tick delta → 1-dp percents, nice folds into user", () => 
   assert.deepEqual(metrics.cpuTimeShares([0, 0, 0, 0, 0, 0, 0, 0]), { user: 0, system: 0, iowait: 0, irq: 0, softirq: 0, steal: 0 }, "zero window never NaNs");
 });
 
+test("cpuTimeShares: guest ticks never inflate the denominator (audit round 8 B1)", () => {
+  /* the kernel folds guest(8)/guest_nice(9) into user/nice already; a 10-field
+     /proc/stat row with heavy guest time must read the same shares as the
+     same window with the guest fields zeroed */
+  const base = [500, 100, 200, 100, 50, 20, 20, 10];
+  const withGuest = [...base, 400, 100]; // 50% guest folded into user by the kernel
+  assert.deepEqual(metrics.cpuTimeShares(withGuest), metrics.cpuTimeShares(base), "guest fields excluded from the total");
+});
+
 test("parseVmstat: the six keys the memory card reads", () => {
   assert.equal(typeof metrics.parseVmstat, "function", "metrics.ts must export parseVmstat — see issue #168");
   const vm = metrics.parseVmstat("pgpgin 1000\npgpgout 2000\npswpin 3\npswpout 4\npgmajfault 55\noom_kill 2\nnr_free_pages 999\n");

@@ -186,9 +186,12 @@ function meminfo(): Record<string, number> {
 }
 
 /** cpu time split over a tick-delta window → 1-dp percents (user folds in
-    nice; the panel's segment bar reads exactly this) */
+    nice; the panel's segment bar reads exactly this). The denominator stops
+    at field 8: the kernel already folds guest(8)/guest_nice(9) into user/
+    nice, so summing them in would double-count VM time and deflate every
+    share on hosts running guests (audit round 8, B1). */
 export function cpuTimeShares(d: number[]): { user: number; system: number; iowait: number; irq: number; softirq: number; steal: number } {
-  const tot = d.reduce((a, v) => a + v, 0) || 1;
+  const tot = d.slice(0, 8).reduce((a, v) => a + v, 0) || 1;
   const p = (...idx: number[]) => Math.round((idx.reduce((a, i) => a + (d[i] ?? 0), 0) / tot) * 1000) / 10;
   return { user: p(0, 1), system: p(2), iowait: p(4), irq: p(5), softirq: p(6), steal: p(7) };
 }

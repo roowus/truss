@@ -235,7 +235,9 @@ function MonitorBody({ m, hist }: { m: HostMetrics; hist: { t: number; cpu: numb
             <span className="ml-auto truncate pl-2 normal-case">{m.host.cpuModel} · {m.host.cores} cores</span>
           </div>
           <KV k="usage" v={`${cpuPct.toFixed(1)}%`} warn={cpuPct > 90} />
-          {m.host.freqMhz != null && <KV k="frequency" v={m.host.freqMhz ? `${m.host.freqMhz} MHz` : "n/a (virtualized)"} />}
+          {/* 0 = the host exposes neither cpufreq nor cpuinfo MHz; that's
+              "unknown", not proof of a VM (bare metal can lack the driver) */}
+          {m.host.freqMhz != null && <KV k="frequency" v={m.host.freqMhz ? `${m.host.freqMhz} MHz` : "n/a"} />}
           {m.cpu.times && (
             <>
               <div className="mt-2 mb-1 font-mono text-[10px] uppercase tracking-wider text-[var(--t-dim)]">time breakdown</div>
