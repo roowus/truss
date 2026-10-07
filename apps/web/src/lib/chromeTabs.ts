@@ -142,6 +142,38 @@ export function tabTrailingReserve(view: ChromeTabView, hasIndicator: boolean): 
   return view.showClose === "always" ? 0 : CHROME_TAB_CLOSE_SLOT;
 }
 
+/**
+ * The settle beat for a frozen strip (issue #197): a close with the pointer
+ * over the strip freezes the survivors' widths; if no further close comes
+ * within this delay, the strip stretches back to the computed fit on its
+ * own (pointer-leave does it sooner). Long enough that a closing rhythm
+ * never fights the stretch, short enough that a parked cursor isn't stuck
+ * with the gap.
+ */
+export const TAB_CLOSE_SETTLE_MS = 800;
+
+/**
+ * Chrome's deferred resize on tab close (issue #197): the widths the strip
+ * renders after a tab leaves.
+ *
+ *   - hot (the pointer is over the strip at close time): the survivors keep
+ *     their EXACT pre-close widths — prevWidths minus the closed entry. The
+ *     strip runs short at its right end and nothing resizes under the
+ *     cursor, so the next tab's close X slides to where the closed one's
+ *     was (the spam-close invariant the tests pin numerically).
+ *   - not hot (the pointer left, the settle beat passed, or the close came
+ *     from a menu or shortcut): the computed uniform layout — the strip
+ *     stretches back to it with a width transition.
+ *
+ * Degenerate inputs never throw: an out-of-range closedIndex freezes to a
+ * copy of prevWidths, closing the only tab yields [], and a not-hot call
+ * is just `computed`.
+ */
+export function tabCloseWidths(prevWidths: number[], closedIndex: number, computed: number[], hot: boolean): number[] {
+  if (!hot) return computed;
+  return prevWidths.filter((_, i) => i !== closedIndex);
+}
+
 export function chromeTabLayout(input: { stripWidth: number; tabs: ChromeTabInput[] }): {
   width: number;
   perTab: Record<string, ChromeTabView>;
