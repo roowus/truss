@@ -28,6 +28,20 @@ export function resolveDefaultCwd(input: CwdDefaultInput): string {
   return "";
 }
 
+/**
+ * The New Session dialog's default PROJECT (issue #202). Unlike the cwd
+ * chain, recency is NOT a candidate here: a project is a claim about the
+ * session's content, and silently inheriting the most recent session's tag
+ * mislabeled new sessions. An explicit preset (task board "new session
+ * here") still wins; anything else opens blank and the user picks one — the
+ * recent-project chips stay for one-click picks. Blank or whitespace-only
+ * presets are no preset.
+ */
+export function resolveDefaultProject(input: { preset?: string }): string {
+  const p = typeof input.preset === "string" ? input.preset.trim() : "";
+  return p;
+}
+
 /* ── the picked host's record, shared by the hostDefault/hostSuggested
      candidates (audit round 3, B2: the resolution rule must exist ONCE —
      two copies would silently diverge, and the pref would resolve while
