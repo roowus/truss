@@ -226,33 +226,49 @@ function MonitorBody({ m, hist }: { m: HostMetrics; hist: { t: number; cpu: numb
           network; the graph-less cards (pressure, storage, sockets, system,
           services) flow after. Older agents omit blocks and the grid packs. */}
       <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-2">
+        {/* cpu — the reference card's content (usage/frequency rows, time
+            breakdown, per-core as labeled rows, then the load and rate
+            footers), truss-styled */}
         <section className="rounded-lg border border-[var(--t-line)] bg-[var(--t-bg0)]/60 p-3">
-          <div className="font-mono text-[10px] uppercase tracking-wider text-[var(--t-dim)] mb-2">per-core</div>
-          <div className="flex items-end gap-1 h-14">
+          <div className="flex items-baseline font-mono text-[10px] uppercase tracking-wider text-[var(--t-dim)] mb-1.5">
+            <span>cpu</span>
+            <span className="ml-auto truncate pl-2 normal-case">{m.host.cpuModel} · {m.host.cores} cores</span>
+          </div>
+          <KV k="usage" v={`${cpuPct.toFixed(1)}%`} warn={cpuPct > 90} />
+          {m.host.freqMhz != null && <KV k="frequency" v={m.host.freqMhz ? `${m.host.freqMhz} MHz` : "n/a (virtualized)"} />}
+          {m.cpu.times && (
+            <>
+              <div className="mt-2 mb-1 font-mono text-[10px] uppercase tracking-wider text-[var(--t-dim)]">time breakdown</div>
+              <div title="where cpu time went over the sample window; the unfilled rest is idle">
+                <div className="flex h-1.5 rounded-full overflow-hidden bg-[var(--t-line)]">
+                  {CPU_SEGS.map(([k, color]) =>
+                    m.cpu.times![k] > 0.05 ? <div key={k} style={{ width: `${Math.min(100, m.cpu.times![k])}%`, background: color }} /> : null,
+                  )}
+                </div>
+                <div className="mt-1.5 flex gap-2.5 flex-wrap font-mono text-[9.5px] text-[var(--t-dim)]">
+                  {CPU_SEGS.filter(([k]) => m.cpu.times![k] > 0.05).map(([k, color]) => (
+                    <span key={k} className="flex items-center gap-1">
+                      <span className="w-1.5 h-1.5 rounded-sm" style={{ background: color }} />
+                      {k} {m.cpu.times![k].toFixed(1)}%
+                    </span>
+                  ))}
+                </div>
+              </div>
+            </>
+          )}
+          <div className="mt-2 mb-1 font-mono text-[10px] uppercase tracking-wider text-[var(--t-dim)]">per-core</div>
+          <div className="space-y-1">
             {m.cpu.perCore.map((c, i) => (
-              <div key={i} className="flex-1 flex flex-col justify-end h-full" title={`core ${i}: ${c}%`}>
-                <div className="rounded-sm" style={{ height: `${Math.max(4, Math.min(100, c))}%`, background: GAUGE_C(c) }} />
+              <div key={i} className="flex items-center gap-2" title={`core ${i}: ${c}%`}>
+                <span className="w-11 shrink-0 font-mono text-[10px] text-[var(--t-dim)]">core {i}</span>
+                <div className="flex-1 h-1.5 rounded-full bg-[var(--t-line)] overflow-hidden">
+                  <div className="h-full rounded-full" style={{ width: `${Math.min(100, c)}%`, background: GAUGE_C(c) }} />
+                </div>
+                <span className="w-12 shrink-0 text-right font-mono text-[10px] tabular-nums" style={{ color: GAUGE_C(c) }}>{c.toFixed(0)}%</span>
               </div>
             ))}
           </div>
-          {m.cpu.times && (
-            <div className="mt-2.5" title="where cpu time went over the sample window; the unfilled rest is idle">
-              <div className="flex h-1.5 rounded-full overflow-hidden bg-[var(--t-line)]">
-                {CPU_SEGS.map(([k, color]) =>
-                  m.cpu.times![k] > 0.05 ? <div key={k} style={{ width: `${Math.min(100, m.cpu.times![k])}%`, background: color }} /> : null,
-                )}
-              </div>
-              <div className="mt-1.5 flex gap-2.5 flex-wrap font-mono text-[9.5px] text-[var(--t-dim)]">
-                {CPU_SEGS.filter(([k]) => m.cpu.times![k] > 0.05).map(([k, color]) => (
-                  <span key={k} className="flex items-center gap-1">
-                    <span className="w-1.5 h-1.5 rounded-sm" style={{ background: color }} />
-                    {k} {m.cpu.times![k].toFixed(1)}%
-                  </span>
-                ))}
-              </div>
-            </div>
-          )}
-          <div className="mt-2 font-mono text-[10px] text-[var(--t-dim)]">
+          <div className="mt-2 pt-2 border-t border-[var(--t-line)]/60 font-mono text-[10px] text-[var(--t-dim)]">
             load {m.cpu.load.map((l) => l.toFixed(2)).join(" · ")} · {m.cpu.running} running · {m.cpu.blocked} blocked
             {m.cpu.zombies != null && (
               <>
