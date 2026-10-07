@@ -5,6 +5,7 @@ import { harnessStyle, hostOf, shortPath } from "@/lib/format";
 import { hostAliases, hostDisplay } from "@/lib/device";
 import { resolveDefaultCwd, hostDefaultFor, hostSuggestedFor } from "@/lib/cwdDefault";
 import { createBrowseNav, type BrowseNav } from "@/lib/browseNav";
+import { buildModelOptions, modelSelectOptions, splitModelValue } from "@/lib/models";
 import { createPortal } from "react-dom";
 import type { BrowseDir } from "@/lib/proto";
 import { openPanel, openSession } from "@/lib/workspace";
@@ -94,15 +95,20 @@ export function NewSessionDialog({ onClose, preset }: { onClose: () => void; pre
     void store.probeEmptyCatalogs();
   }, [harnesses]);
 
-  const hModels = models.filter((m) => m.harness === harness);
-  useEffect(() => setModel(hModels[0] ? `${hModels[0].provider}/${hModels[0].model}` : ""), [harness, models.length]);
+  /* one source of display truth (issue #199): the dialog's model options
+     come from the same builder the chat header's switcher uses, so the #169
+     parsing (human name primary, provider secondary, raw routing path only
+     on hover) applies here too — and a remote harness shares the base
+     harness's catalog exactly like the switcher. */
+  const modelOptions = useMemo(() => buildModelOptions(models, harness), [models, harness]);
+  useEffect(() => setModel(modelOptions[0]?.value ?? ""), [harness, models.length]);
 
   const cwdErr = cwd && !cwd.startsWith("/") && !cwd.startsWith("~") ? "use an absolute path" : null;
   const create = async () => {
     if (!harness || !cwd.trim() || cwdErr) return;
     setBusy(true);
     setErr(null);
-    const m = hModels.find((x) => `${x.provider}/${x.model}` === model);
+    const sel = splitModelValue(model);
     try {
       const s = await store.createSession({
         harness,
@@ -111,7 +117,7 @@ export function NewSessionDialog({ onClose, preset }: { onClose: () => void; pre
           const home = recentCwds.map((x) => x.match(/^\/(home|Users)\/[^/]+/)?.[0]).find(Boolean);
           return c.startsWith("~") && home ? home + c.slice(1) : c;
         })(),
-        ...(m ? { model: m.model, provider: m.provider } : {}),
+        ...(sel.model ? { model: sel.model, provider: sel.provider } : {}),
         ...(title.trim() ? { title: title.trim() } : {}),
         ...(project.trim() ? { project: project.trim() } : {}),
       });
@@ -197,14 +203,10 @@ export function NewSessionDialog({ onClose, preset }: { onClose: () => void; pre
               onChange={setModel}
               ariaLabel="Model"
               className="w-full"
-              options={[
-                { value: "", label: "harness default" },
-                ...hModels.map((m) => ({
-                  value: `${m.provider}/${m.model}`,
-                  label: m.label,
-                  hint: `${m.provider}/${m.model}`,
-                })),
-              ]}
+              /* the "harness default" row stays on top; the catalog rows
+                 are the shared builder's parsed projection, same as the
+                 switcher's (issue #199) */
+              options={[{ value: "", label: "harness default" }, ...modelSelectOptions(modelOptions)]}
             />
           </Field>
 
