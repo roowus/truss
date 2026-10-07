@@ -79,7 +79,8 @@ When you are handed a PR you did not make (the developer commented
 
 ## Phase 2 — open the PR
 
-`gh pr create` with:
+`gh pr create` with (and then `gh issue edit <n> --remove-label build-me` if
+the issue carried it — the go signal is spent once work exists):
 - Title: conventional-commit format, ≤70 chars, what the PR does now.
 - Body: 1-3 plain sentences first (what was broken, what the PR does),
   then `Fixes #<n>`, then details. End with the visibility block, verbatim:
