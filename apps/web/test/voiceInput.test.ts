@@ -211,7 +211,7 @@ test("levelStream(): the controller surfaces the recorder's live stream; a recor
   assert.equal(noRecorder.levelStream(), null, "no recorder at all also reads null");
 });
 
-/* issue #200: LIVE transcription — partials stream into the draft while you
+/* issue #201: LIVE transcription — partials stream into the draft while you
    speak (the final replaces them; the take's one-transcript rule composes:
    the FINAL is the transcript, partials are display-only) */
 
@@ -252,7 +252,7 @@ test("partials stream during a take; the final REPLACES them (never appends)", a
     recorder: recorder as never,
   });
   v.start();
-  assert.ok(recorderPartial, "the controller subscribes to the recorder's partial stream (issue #200)");
+  assert.ok(recorderPartial, "the controller subscribes to the recorder's partial stream (issue #201)");
   recorderPartial!("the cat");
   recorderPartial!("the cat sat");
   assert.deepEqual(partials, ["the cat", "the cat sat"], "partials flow live while speaking");
@@ -264,7 +264,7 @@ test("partials stream during a take; the final REPLACES them (never appends)", a
 
 test("the SpeechRecognition path streams: interimResults + continuous on, interims emit partials", () => {
   const src = readFileSync(new URL("../src/lib/voice.ts", import.meta.url), "utf8");
-  assert.ok(/interimResults\s*=\s*true/.test(src), "the browser path enables interim results — partials while speaking (issue #200)");
+  assert.ok(/interimResults\s*=\s*true/.test(src), "the browser path enables interim results — partials while speaking (issue #201)");
   assert.ok(/continuous\s*=\s*true/.test(src), "and continuous (no stop between phrases)");
   /* interims must FLOW, not just be enabled */
   assert.ok(/!res\??\.isFinal|isFinal === false|!res\[0\]?.*isFinal/.test(src) || /interim/.test(src), "non-final results emit as partials");

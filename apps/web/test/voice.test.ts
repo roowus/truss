@@ -464,3 +464,36 @@ test("recognition recorder: a take with no partial subscription still works (the
   const done = rec.stop(); // the fake's stop() fires onend synchronously
   assert.equal(await done, "hello", "the final lands with no partial listener attached");
 });
+
+/* ── issue #201, audit round 1 (B1): stop()'s null contract ── */
+
+test("stop() resolves null whenever no transcript lands — empty, cancelled, failed", async () => {
+  /* the controller doc promises null for takes that produce no transcript;
+     the amendment test pins only the non-null resolve */
+  const empty = createVoiceInput({ transcribe: async () => "   ", onText: () => {} });
+  empty.start();
+  assert.equal(await empty.stop(), null, "an empty take resolves null");
+  assert.equal(empty.state(), "idle", "an empty take is not an error");
+
+  const resolvers: ((s: string) => void)[] = [];
+  const cancelled = createVoiceInput({
+    transcribe: () => new Promise<string>((r) => resolvers.push(r)),
+    onText: () => {},
+  });
+  cancelled.start();
+  const p = cancelled.stop();
+  await tick(5);
+  cancelled.cancel(); // user bails mid-transcribe
+  resolvers[0]?.("discarded");
+  assert.equal(await p, null, "a take cancelled mid-transcribe resolves null");
+
+  const failed = createVoiceInput({
+    transcribe: async () => {
+      throw new Error("stt down");
+    },
+    onText: () => {},
+  });
+  failed.start();
+  assert.equal(await failed.stop(), null, "a failed take resolves null");
+  assert.equal(failed.state(), "error");
+});
