@@ -1,10 +1,11 @@
 /**
  * Deliverables guidance — the one canonical paragraph every harness session
  * hears at bootstrap (issue #203). A session told "write a report" must post
- * it to the user's feed, not leave it chat-only: dsh/hermes prepend it to the
- * first prompt they send, claude carries it via --append-system-prompt, and
- * pi gets it on its first prompt plus real feed tools via its shipped
- * extension (pi has no MCP surface — see piExtension.ts).
+ * it to the user's feed, not leave it chat-only: pi/dsh/hermes append it to
+ * the first prompt they send (no system-prompt channel there), claude
+ * carries it via --append-system-prompt, and pi additionally gets real feed
+ * tools via its shipped extension (pi has no MCP surface — see
+ * piExtension.ts).
  */
 export function deliverablesGuidance(): string {
   return (

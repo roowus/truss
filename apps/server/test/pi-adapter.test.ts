@@ -392,6 +392,33 @@ test("deliverables guidance (issue #203): first prompt carries the block, second
   });
 });
 
+test("deliverables guidance is not duplicated when the prompt already carries it (audit B5)", { timeout: 15000 }, async () => {
+  /* sessions.ts' practices block interpolates the same paragraph into
+     POSTING_GUIDE_PI — when that block wrapped the first prompt, the adapter
+     must skip its own copy or turn one reads the paragraph twice */
+  const { deliverablesGuidance } = await import("../src/deliverables.js");
+  await withFakePi("dedupe", async (fake) => {
+    const handle = await piAdapter.spawn({ sessionId: "t-dedupe", cwd: tmpdir(), provider: "truss-fw", model: "m" });
+    const { events, finished } = collect(handle);
+    try {
+      piAdapter.send(handle, `real user text\n\n[truss practices]\n${deliverablesGuidance()}\n[/truss practices]`);
+      await waitFor(
+        () => events.some((e) => e.type === "msg.done") && statesOf(events).at(-1) === "idle",
+        "run settled",
+      );
+      const prompts = readLog(fake.logPath)
+        .filter((r) => r.cmd?.type === "prompt")
+        .map((r) => r.cmd!.message!);
+      assert.equal(prompts.length, 1);
+      assert.ok(!prompts[0].includes("[truss bootstrap"), "no second block");
+      const copies = prompts[0].split(deliverablesGuidance()).length - 1;
+      assert.equal(copies, 1, "the paragraph appears exactly once");
+    } finally {
+      await shutdown(handle, finished);
+    }
+  });
+});
+
 test("error surfacing (regression): provider 400 arrives only via message_end stopReason error", { timeout: 15000 }, async () => {
   await withFakePi("boom", async (fake) => {
     const handle = await piAdapter.spawn({ sessionId: "t-boom", cwd: tmpdir(), provider: "truss-fw", model: "m" });

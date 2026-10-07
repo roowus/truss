@@ -318,21 +318,27 @@ export const piAdapter: HarnessAdapter = {
   send(handle: AdapterHandle, text: string) {
     const h = handle as PiHandle;
     /* the deliverables guidance rides the first prompt this spawned session
-       sends (issue #203) — pi has no system-prompt flag, and the practices
-       block sessions.ts adds lands only when TRUSS.md files compose. It goes
-       AFTER the user's text: the prompt leads, the briefing follows. */
+       sends (issue #203) — pi has no system-prompt flag. It goes AFTER the
+       user's text: the prompt leads, the briefing follows. When sessions.ts
+       already wrapped this prompt in the practices block, POSTING_GUIDE_PI
+       carries the same paragraph — don't make turn one read it twice. */
     const first = !guidanceSent.has(handle);
     if (first) {
-      text = `${text}\n\n[truss bootstrap — deliverables guidance]\n${deliverablesGuidance()}\n[/truss bootstrap]`;
+      const g = deliverablesGuidance();
+      if (!text.includes(g)) {
+        text = `${text}\n\n[truss bootstrap — deliverables guidance]\n${g}\n[/truss bootstrap]`;
+      }
     }
     // pi rejects a bare prompt while streaming; followUp queues it after the run.
     const cmd = h.busy
       ? { type: "follow_up", message: text }
       : { type: "prompt", message: text };
     h.proc.stdin!.write(JSON.stringify(cmd) + "\n");
-    /* the marker moves only after a delivered write — a dead child throws
-       ERR_STREAM_DESTROYED here, and the retry must still carry the briefing
-       (the discipline sessions.ts documents for the practices preamble) */
+    /* the marker moves only after the write — the channel is fire-and-forget
+       (a dead child surfaces on the swallowed stdin 'error' listener, not a
+       throw), so the real safety net is handle identity: a dead child forces
+       a respawn with a fresh handle, whose first prompt carries the briefing
+       again (audit B7). */
     if (first) guidanceSent.add(handle);
   },
 
