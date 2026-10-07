@@ -3,6 +3,7 @@ import type { ProtoEvent } from "@truss/proto";
 import type { AdapterHandle, HarnessAdapter, SessionOpts } from "./types.js";
 import { cwdFallbackNote, resolveCwd } from "./types.js";
 import { claudeAnthropicBaseUrl } from "../router-resolve.js";
+import { deliverablesGuidance } from "../deliverables.js";
 
 /**
  * Claude Code adapter — bidirectional stream-json over stdio.
@@ -196,6 +197,10 @@ export const claudeAdapter: HarnessAdapter = {
       "mcp__truss_perms__approval",
       "--mcp-config",
       mcpConfig,
+      /* the deliverables guidance rides the system prompt (claude persists
+         it into the session record, so resumes keep it) — issue #203 */
+      "--append-system-prompt",
+      deliverablesGuidance(),
       "--model",
       model,
     ];

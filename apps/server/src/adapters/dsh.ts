@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
 import type { AdapterHandle, HarnessAdapter, SessionOpts } from "./types.js";
 import { resolveCwd } from "./types.js";
+import { deliverablesGuidance } from "../deliverables.js";
 import { lazyCatalog, type CatalogModel } from "./model-catalog-cache.js";
 import {
   AcpClient,
@@ -127,6 +128,11 @@ const catalog = lazyCatalog("models:dsh", async () => {
   return parseModelOptions(res.configOptions);
 });
 
+/* spawned handles that already sent the deliverables guidance — ACP has no
+   system-prompt channel, so the briefing rides the session's first prompt
+   (issue #203); WeakSet, dead handles drop out with GC */
+const guidanceSent = new WeakSet<object>();
+
 function handleServerMessage(h: AcpSessionState, rec: { method?: string; params?: Record<string, unknown>; id?: string | number }) {
   const sid = h.sessionId;
 
@@ -238,6 +244,13 @@ export const dshAdapter: HarnessAdapter = {
       return;
     }
     h.busy = true;
+    /* the deliverables guidance rides the first prompt this spawned session
+       sends (issue #203) — after the busy check so a swallowed prompt can't
+       burn the one-shot; appended so the user's text still leads */
+    if (!guidanceSent.has(handle)) {
+      guidanceSent.add(handle);
+      text = `${text}\n\n[truss bootstrap — deliverables guidance]\n${deliverablesGuidance()}\n[/truss bootstrap]`;
+    }
     beginAcpTurn(h);
 
     void client

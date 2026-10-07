@@ -6,6 +6,8 @@ import { fileURLToPath } from "node:url";
 import type { ProtoEvent } from "@truss/proto";
 import type { AdapterHandle, HarnessAdapter, SessionOpts } from "./types.js";
 import { cwdFallbackNote, resolveCwd } from "./types.js";
+import { deliverablesGuidance } from "../deliverables.js";
+import { syncPiExtension } from "../pi-config.js";
 
 /**
  * pi adapter — drives `pi --mode rpc` (JSONL over stdin/stdout).
@@ -17,6 +19,11 @@ import { cwdFallbackNote, resolveCwd } from "./types.js";
 
 /** tests/ops can point at a different pi binary (issue #29/#97) */
 const PI_BIN = process.env.TRUSS_PI_BIN ?? "pi";
+
+/* spawned handles that already sent the deliverables guidance (issue #203);
+   WeakSet — dead sessions' handles drop out with GC, and a server restart
+   respawns handles, so a resumed session hears it once more */
+const guidanceSent = new WeakSet<object>();
 
 interface PiUsage {
   input?: number;
@@ -178,12 +185,29 @@ export const piAdapter: HarnessAdapter = {
        starts fresh and keeps the transcript visible instead. */
     const { cwd: safeCwd, fellBack: cwdFellBack } = resolveCwd(opts.cwd);
     const canResumeInPlace = !!opts.resumeRef && !cwdFellBack;
+
+    /* pi speaks extensions, not MCP: the truss tools (post_feed, list_feed)
+       come from a generated extension in the agent dir (issue #203). Ensure
+       it at spawn — boot sync covers the normal case, this covers tests,
+       remote node-agents, and a deleted file. */
+    try {
+      syncPiExtension();
+    } catch {
+      /* a read-only HOME must not kill the spawn — the session works, just
+         without feed tools */
+    }
+
     const args = ["--mode", "rpc", "--session-dir", sessionDir, "--provider", provider, "--model", model];
     if (canResumeInPlace && opts.resumeRef) args.push("--session", opts.resumeRef);
     const proc = spawn(PI_BIN, args, {
       cwd: safeCwd,
       stdio: ["pipe", "pipe", "inherit"], // stderr is diagnostics, never protocol
-      env: { ...process.env },
+      env: {
+        ...process.env,
+        /* the extension attributes its feed posts to this session via the
+           MCP route's per-session URL */
+        TRUSS_SESSION_ID: opts.sessionId,
+      },
     });
 
     /* a write can land in the child's death window (kill in flight, prompt
@@ -293,6 +317,14 @@ export const piAdapter: HarnessAdapter = {
 
   send(handle: AdapterHandle, text: string) {
     const h = handle as PiHandle;
+    /* the deliverables guidance rides the first prompt this spawned session
+       sends (issue #203) — pi has no system-prompt flag, and the practices
+       block sessions.ts adds lands only when TRUSS.md files compose. It goes
+       AFTER the user's text: the prompt leads, the briefing follows. */
+    if (!guidanceSent.has(handle)) {
+      guidanceSent.add(handle);
+      text = `${text}\n\n[truss bootstrap — deliverables guidance]\n${deliverablesGuidance()}\n[/truss bootstrap]`;
+    }
     // pi rejects a bare prompt while streaming; followUp queues it after the run.
     const cmd = h.busy
       ? { type: "follow_up", message: text }

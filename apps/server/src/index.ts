@@ -63,7 +63,7 @@ import { modelCatalog } from "./modelcat.js";
 import { modelRouterBaseUrl, modelRouterEnabled, modelRouterPort } from "./router-resolve.js";
 import { routerPickerModels, startModelRouter } from "./model-router.js";
 import { COMMIT } from "./version.js";
-import { syncPiModelsJson } from "./pi-config.js";
+import { syncPiExtension, syncPiModelsJson } from "./pi-config.js";
 import { transcribeAudio, transcribeConfigFromEnv } from "./transcribe.js";
 import { setClaudeModels } from "./adapters/claude.js";
 import {
@@ -123,6 +123,15 @@ void ensureAgentBundle()
 void syncPiModelsJson()
   .then((r) => app.log.info(`pi models.json synced: ${r.providers} providers, ${r.models} models`))
   .catch((err) => app.log.warn(`pi models.json sync failed: ${err}`));
+
+/* pi's truss tools are a generated extension pi auto-loads from its agent
+   dir — install/refresh it on boot (the adapter re-ensures at spawn) */
+try {
+  const ext = syncPiExtension();
+  if (ext.wrote) app.log.info(`pi truss extension installed at ${ext.path}`);
+} catch (err) {
+  app.log.warn(`pi truss extension sync failed: ${err}`);
+}
 
 /* the model router (issue #188): one Anthropic-compatible loopback endpoint
    fanning claude sessions out to every provider the credentials cover.
