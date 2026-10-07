@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { modelRouterBaseUrl, modelRouterEnabled } from "./router-resolve.js";
+import { claudeAnthropicBaseUrl, modelRouterEnabled } from "./router-resolve.js";
 
 /**
  * Router surface — the 9router model gateway (service control + live model
@@ -150,14 +150,14 @@ export function harnessRouting(): {
     }
   }
 
-  /* claude-code: env-driven (the adapter's defaults) — with the model
-     router gated on (issue #188) the default becomes the router's loopback
-     endpoint; an explicit TRUSS_CLAUDE_BASE_URL still wins */
+  /* claude-code: env-driven (the adapter's defaults) — the displayed
+     endpoint must be the adapter's own precedence (audit B5), so the panel
+     can never silently desync from what sessions actually use */
   out.push({
     harness: "claude-code",
     model: process.env.TRUSS_CLAUDE_MODEL ?? "glm-4.7",
     provider: modelRouterEnabled() && !process.env.TRUSS_CLAUDE_BASE_URL ? "model-router" : "zai-local",
-    endpoint: process.env.TRUSS_CLAUDE_BASE_URL ?? (modelRouterEnabled() ? modelRouterBaseUrl() : "http://127.0.0.1:45821/api/anthropic"),
+    endpoint: claudeAnthropicBaseUrl(),
     source: "truss adapter env",
   });
 

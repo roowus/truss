@@ -462,6 +462,39 @@ test("/v1/models serves the aggregated catalog; count_tokens passes through on a
   }
 });
 
+test("the production default catalog path: a handler with NO injected catalogFn still resolves and falls back", async () => {
+  /* audit round 3 warning: every HTTP test injects catalogFn, so the B1
+     cache fix (default catalogFn = () => routerCatalog(), no fetchImpl)
+     had no pin. This boots the handler with zero deps-injection on the
+     catalog side: routerCatalog() really runs — on a box with key-proxy
+     routes it returns the live catalog, in CI it returns [] (fetches fail
+     fast, the missing config reads as "no 9router route"). Either way an
+     impossible model id resolves to null and the fallback provider serves
+     the request — which is the behavior the production default must keep. */
+  const zai = await fakeUpstream((_b, _r, res) => anthropicReply(res, "served by fallback"));
+  const server = http.createServer(
+    createModelRouterHandler({
+      providers: [{ id: "zai", label: "z.ai", protocol: "anthropic", anthropicBase: zai.url }],
+    }),
+  );
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+  const addr = server.address();
+  const base = `http://127.0.0.1:${addr && typeof addr === "object" ? addr.port : 0}`;
+  try {
+    const res = await fetch(`${base}/v1/messages`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "definitely-not-a-model-188-test", max_tokens: 8, messages: [{ role: "user", content: "hi" }] }),
+    });
+    assert.equal(res.status, 200);
+    assert.equal(((await res.json()) as any).content[0].text, "served by fallback");
+    assert.equal(zai.requests.length, 1, "the default catalogFn resolved (to null) and the fallback route served");
+  } finally {
+    await new Promise<void>((r) => server.close(() => r()));
+    await zai.close();
+  }
+});
+
 test("unknown paths 404 in the Anthropic error shape; junk bodies 400", async () => {
   const router = await bootRouter({
     catalog: CATALOG,
