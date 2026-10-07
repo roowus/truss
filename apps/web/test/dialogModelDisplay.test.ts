@@ -26,6 +26,14 @@ test("the dialog's model options come from buildModelOptions (the parsed path)",
   );
 });
 
+test("the harness-default row stays on top of the dialog's options", () => {
+  const src = DIALOG();
+  assert.ok(
+    /\{ value: "", label: "harness default" \}/.test(src),
+    "the dialog must keep its harness-default row ahead of the catalog options (issue #199, audit B1)",
+  );
+});
+
 test("the dialog never renders a raw router path as a label", async () => {
   const models: any = await import("../src/lib/models.js");
   assert.equal(typeof models.buildModelOptions, "function", "the shared builder exists (#169)");
