@@ -48,6 +48,21 @@ body {
 }
 ::selection { background: color-mix(in oklab, var(--t-amber) 35%, transparent); }
 
+/* app-native find marks (issue #194): painted from lib/findRuntime.ts via
+   the CSS Custom Highlight API, which draws WITHOUT touching the DOM —
+   React never loses a text node to a wrapper element. One fixed pair of
+   names is enough: the find target is a single slot, so at most one panel's
+   provider paints at a time. ::highlight supports only paint properties
+   (color/background/text-decoration…), no layout or radius. */
+::highlight(truss-find) {
+  background-color: color-mix(in oklab, var(--t-amber) 32%, transparent);
+  color: var(--t-fg);
+}
+::highlight(truss-find-current) {
+  background-color: var(--t-amber);
+  color: #1b1305;
+}
+
 /* ---------------- Dockview theming (via --dv-* vars, higher specificity) ---------------- */
 .truss-dock .dockview-theme-dark {
   --dv-group-view-background-color: var(--t-bg1);
