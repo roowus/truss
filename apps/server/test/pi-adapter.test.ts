@@ -47,7 +47,7 @@ const FAKE_PI_SOURCE = `#!/usr/bin/env node
 const fs = require("fs");
 const logPath = process.env.FAKE_PI_LOG;
 const log = (rec) => { if (logPath) fs.appendFileSync(logPath, JSON.stringify(rec) + "\\n"); };
-log({ argv: process.argv.slice(2) });
+log({ argv: process.argv.slice(2), envSid: process.env.TRUSS_SESSION_ID ?? null });
 const out = (rec) => process.stdout.write(JSON.stringify(rec) + "\\n");
 const USAGE = { input: 11, output: 4, cacheRead: 0, cacheWrite: 0, totalTokens: 15, cost: { total: 0.0001 } };
 const ERROR_MESSAGE = '400: {"code":"1211","message":"Unknown Model, please check the model code."}';
@@ -226,7 +226,7 @@ function collect(handle: AdapterHandle): { events: ProtoEvent[]; finished: Promi
   return { events, finished };
 }
 
-type LogEntry = { argv?: string[]; cmd?: { type?: string; id?: string; message?: string } };
+type LogEntry = { argv?: string[]; envSid?: string | null; cmd?: { type?: string; id?: string; message?: string } };
 
 function readLog(logPath: string): LogEntry[] {
   if (!existsSync(logPath)) return [];
@@ -349,6 +349,70 @@ test("happy path: full run yields state transitions, text+thinking chunks, usage
       assert.ok(ctx, "ctx.usage from message_update usage.totalTokens");
       assert.equal(ctx.used, 15);
       assert.equal(ctx.total, 200_000, "no catalog entry → default context window");
+    } finally {
+      await shutdown(handle, finished);
+    }
+  });
+});
+
+test("deliverables guidance (issue #203): first prompt carries the block, second goes bare, child gets TRUSS_SESSION_ID, extension installed", { timeout: 15000 }, async () => {
+  await withFakePi("guidance", async (fake) => {
+    const handle = await piAdapter.spawn({ sessionId: "t-guide", cwd: tmpdir(), provider: "truss-fw", model: "m" });
+    const { events, finished } = collect(handle);
+    try {
+      piAdapter.send(handle, "first question");
+      await waitFor(
+        () => events.some((e) => e.type === "msg.done") && statesOf(events).at(-1) === "idle",
+        "first run settled",
+      );
+      piAdapter.send(handle, "second question");
+      await waitFor(
+        () => events.filter((e) => e.type === "msg.done").length >= 2 && statesOf(events).at(-1) === "idle",
+        "second run settled",
+      );
+
+      const recs = readLog(fake.logPath);
+      /* the extension attributes feed posts to THIS session (audit I1) */
+      assert.equal(recs.find((r) => r.argv)?.envSid, "t-guide", "TRUSS_SESSION_ID reaches the child env");
+
+      const prompts = recs.filter((r) => r.cmd?.type === "prompt").map((r) => r.cmd!.message!);
+      assert.equal(prompts.length, 2);
+      assert.ok(prompts[0].startsWith("first question"), "user text leads");
+      assert.ok(prompts[0].includes("[truss bootstrap — deliverables guidance]"), "first prompt carries the block");
+      assert.ok(prompts[0].includes("post_feed"), "the block names the tool");
+      assert.equal(prompts[1], "second question", "second prompt goes out bare");
+
+      /* spawn installed the extension into the (fake) agent dir */
+      const ext = join(FAKE_HOME, ".pi", "agent", "extensions", "truss.ts");
+      assert.ok(existsSync(ext), "syncPiExtension ran at spawn");
+      assert.ok(/registerTool/.test(readFileSync(ext, "utf8")), "the installed file is the truss extension");
+    } finally {
+      await shutdown(handle, finished);
+    }
+  });
+});
+
+test("deliverables guidance is not duplicated when the prompt already carries it (audit B5)", { timeout: 15000 }, async () => {
+  /* sessions.ts' practices block interpolates the same paragraph into
+     POSTING_GUIDE_PI — when that block wrapped the first prompt, the adapter
+     must skip its own copy or turn one reads the paragraph twice */
+  const { deliverablesGuidance } = await import("../src/deliverables.js");
+  await withFakePi("dedupe", async (fake) => {
+    const handle = await piAdapter.spawn({ sessionId: "t-dedupe", cwd: tmpdir(), provider: "truss-fw", model: "m" });
+    const { events, finished } = collect(handle);
+    try {
+      piAdapter.send(handle, `real user text\n\n[truss practices]\n${deliverablesGuidance()}\n[/truss practices]`);
+      await waitFor(
+        () => events.some((e) => e.type === "msg.done") && statesOf(events).at(-1) === "idle",
+        "run settled",
+      );
+      const prompts = readLog(fake.logPath)
+        .filter((r) => r.cmd?.type === "prompt")
+        .map((r) => r.cmd!.message!);
+      assert.equal(prompts.length, 1);
+      assert.ok(!prompts[0].includes("[truss bootstrap"), "no second block");
+      const copies = prompts[0].split(deliverablesGuidance()).length - 1;
+      assert.equal(copies, 1, "the paragraph appears exactly once");
     } finally {
       await shutdown(handle, finished);
     }

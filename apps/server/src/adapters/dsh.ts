@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
 import type { AdapterHandle, HarnessAdapter, SessionOpts } from "./types.js";
 import { resolveCwd } from "./types.js";
+import { deliverablesGuidance } from "../deliverables.js";
 import { lazyCatalog, type CatalogModel } from "./model-catalog-cache.js";
 import {
   AcpClient,
@@ -127,6 +128,11 @@ const catalog = lazyCatalog("models:dsh", async () => {
   return parseModelOptions(res.configOptions);
 });
 
+/* spawned handles that already sent the deliverables guidance — ACP has no
+   system-prompt channel, so the briefing rides the session's first prompt
+   (issue #203); WeakSet, dead handles drop out with GC */
+const guidanceSent = new WeakSet<object>();
+
 function handleServerMessage(h: AcpSessionState, rec: { method?: string; params?: Record<string, unknown>; id?: string | number }) {
   const sid = h.sessionId;
 
@@ -238,6 +244,13 @@ export const dshAdapter: HarnessAdapter = {
       return;
     }
     h.busy = true;
+    /* the deliverables guidance rides the first prompt this spawned session
+       sends (issue #203) — after the busy check so a swallowed prompt can't
+       burn the one-shot; appended so the user's text still leads */
+    const first = !guidanceSent.has(handle);
+    if (first) {
+      text = `${text}\n\n[truss bootstrap — deliverables guidance]\n${deliverablesGuidance()}\n[/truss bootstrap]`;
+    }
     beginAcpTurn(h);
 
     void client
@@ -254,7 +267,14 @@ export const dshAdapter: HarnessAdapter = {
       )
       /* read the result before settling: an instant refusal/empty settle is
          the ghost black hole, a loud failure, never a silent 200 (#97) */
-      .then((result) => settleAcpTurn(h, classifyAcpSettle(h, result)))
+      .then((result) => {
+        /* the marker moves only once the harness answered the prompt — a
+           rejected call never delivered the briefing and the retry must still
+           carry it (sessions.ts documents the same for the practices
+           preamble). Race-free: busy blocks any second send meanwhile. */
+        if (first) guidanceSent.add(handle);
+        settleAcpTurn(h, classifyAcpSettle(h, result));
+      })
       .catch((err: Error) => settleAcpTurn(h, { ok: false, detail: err.message }));
   },
 

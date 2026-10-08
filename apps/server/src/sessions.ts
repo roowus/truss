@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { HarnessId, ProtoEvent } from "@truss/proto";
 import { store } from "./db.js";
-import { composePractices } from "./practices.js";
+import { composePractices, POSTING_GUIDE_PI } from "./practices.js";
 import { piAdapter } from "./adapters/pi.js";
 import { dshAdapter } from "./adapters/dsh.js";
 import { claudeAdapter } from "./adapters/claude.js";
@@ -451,7 +451,8 @@ export async function sendPrompt(
 const MCP_ATTACHED = new Set(["claude-code", "dsh", "hermes"]);
 const firstPromptDone = new Set<string>();
 const baseOf = (harness: string) => harness.split("@")[0];
-const POSTING_GUIDE_PI = `This host has no tool bus, so act on the practices directly and keep the user's task board honest in plain text.`;
+/* POSTING_GUIDE_PI lives in practices.ts next to POSTING_GUIDE (and is
+   pinned there) — it interpolates the canonical deliverablesGuidance() */
 
 
 export function interrupt(sessionId: string) {

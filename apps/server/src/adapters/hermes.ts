@@ -2,6 +2,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type { AdapterHandle, HarnessAdapter, SessionOpts } from "./types.js";
 import { resolveCwd } from "./types.js";
+import { deliverablesGuidance } from "../deliverables.js";
 import { lazyCatalog, type CatalogModel } from "./model-catalog-cache.js";
 import {
   AcpClient,
@@ -80,6 +81,11 @@ function mapModels(state: HermesModelState | undefined): CatalogModel[] {
     label: m.name ?? m.modelId,
   }));
 }
+
+/* spawned handles that already sent the deliverables guidance — ACP has no
+   system-prompt channel, so the briefing rides the session's first prompt
+   (issue #203); WeakSet, dead handles drop out with GC */
+const guidanceSent = new WeakSet<object>();
 
 function handleServerMessage(
   h: AcpSessionState,
@@ -199,6 +205,13 @@ export const hermesAdapter: HarnessAdapter = {
       return;
     }
     h.busy = true;
+    /* the deliverables guidance rides the first prompt this spawned session
+       sends (issue #203) — after the busy check so a swallowed prompt can't
+       burn the one-shot; appended so the user's text still leads */
+    const first = !guidanceSent.has(handle);
+    if (first) {
+      text = `${text}\n\n[truss bootstrap — deliverables guidance]\n${deliverablesGuidance()}\n[/truss bootstrap]`;
+    }
     beginAcpTurn(h);
 
     void client
@@ -219,6 +232,10 @@ export const hermesAdapter: HarnessAdapter = {
            a loud failure, never a silent 200 (issue #97) */
         const usage = (result as { usage?: { inputTokens?: number; outputTokens?: number } } | null)
           ?.usage;
+        /* the guidance marker moves only once the harness answered the
+           prompt — a rejected call never delivered the briefing and the
+           retry must still carry it. Race-free: busy blocks a second send. */
+        if (first) guidanceSent.add(handle);
         settleAcpTurn(h, {
           ...classifyAcpSettle(h, result),
           tokensIn: usage?.inputTokens,

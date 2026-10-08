@@ -2,6 +2,7 @@ import { mkdirSync, readFileSync, writeFileSync, existsSync, copyFileSync } from
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { modelCatalog } from "./modelcat.js";
+import { piTrussExtensionSource } from "./piExtension.js";
 
 /**
  * pi's model picker lives in ~/.pi/agent/models.json — a static file read at
@@ -12,6 +13,26 @@ import { modelCatalog } from "./modelcat.js";
  */
 
 const PI_MODELS = join(homedir(), ".pi", "agent", "models.json");
+const PI_EXTENSION = join(homedir(), ".pi", "agent", "extensions", "truss.ts");
+
+/**
+ * Install the truss extension for pi (post_feed / list_feed — pi has no MCP
+ * surface, so without it pi sessions can't reach the feed at all, issue
+ * #203). pi auto-loads every file in <agent-dir>/extensions at startup, in
+ * RPC mode too. Idempotent: a same-content file is left untouched so pi's
+ * extension watcher doesn't see phantom churn.
+ */
+export function syncPiExtension(): { path: string; wrote: boolean } {
+  const src = piTrussExtensionSource();
+  try {
+    if (readFileSync(PI_EXTENSION, "utf8") === src) return { path: PI_EXTENSION, wrote: false };
+  } catch {
+    /* not installed yet */
+  }
+  mkdirSync(join(homedir(), ".pi", "agent", "extensions"), { recursive: true });
+  writeFileSync(PI_EXTENSION, src);
+  return { path: PI_EXTENSION, wrote: true };
+}
 
 const PROVIDER_IDS = { fireworks: "truss-fw", zai: "truss-zai", openrouter: "truss-or", huggingface: "truss-hf" } as const;
 

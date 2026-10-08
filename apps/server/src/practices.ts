@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve, sep } from "node:path";
+import { deliverablesGuidance } from "./deliverables.js";
 
 /**
  * Practices — TRUSS.md, Truss's take on CLAUDE.md: markdown files where the
@@ -97,3 +98,13 @@ export function saveGlobalPractices(text: string) {
 
 /** The posting guide always appended to MCP instructions (practices or not). */
 export const POSTING_GUIDE = `Truss tools you have: file_todo / list_todos / update_todo / complete_todo (user-facing tasks with priority, deadline, labels, subtasks — you may only edit your OWN session's todos; a foreign edit asks the user first), post_feed / list_feed (the user's inbox — post reports and heads-ups there; read posts shared to you), plus the task-board and session tools. Follow the user's TRUSS.md practices when provided.`;
+
+/* pi's tool bus is its shipped extension (post_feed / list_feed bridge onto
+   the MCP route — issue #203), not MCP itself; the practices block still
+   rides pi's first prompt because pi never calls the server's initialize.
+   The deliverables sentence is the canonical paragraph, interpolated — edit
+   it in deliverables.ts, not here. */
+export const POSTING_GUIDE_PI =
+  `Your truss tools come from the truss pi extension (post_feed, list_feed). ` +
+  `${deliverablesGuidance()} ` +
+  `Act on the practices above directly and keep the user's task board honest in plain text.`;
