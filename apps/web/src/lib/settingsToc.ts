@@ -42,3 +42,17 @@ export function activeSectionId(readLine: number, anchors: SectionAnchor[]): str
   }
   return active;
 }
+
+export interface RailEntry extends SettingsSection {
+  /** false when the section's anchor isn't in the page (Network/Practices
+      mount late, and a failed fetch keeps Network away for good) — the rail
+      disables the entry instead of offering a click that silently no-ops */
+  enabled: boolean;
+}
+
+/** the rail's rows: the shared list joined with the section ids actually
+    present in the page, order preserved */
+export function railEntries(presentIds: string[]): RailEntry[] {
+  const present = new Set(presentIds);
+  return settingsSections().map((s) => ({ ...s, enabled: present.has(s.id) }));
+}

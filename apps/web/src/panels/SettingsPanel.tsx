@@ -4,7 +4,7 @@ import { useApp } from "@/lib/store";
 import { Btn, Icon, Select } from "@/components/ui";
 import { cn } from "@/utils/cn";
 import type { NetInfo } from "@/lib/proto";
-import { activeSectionId, settingsSections } from "@/lib/settingsToc";
+import { activeSectionId, railEntries, settingsSections } from "@/lib/settingsToc";
 
 /** px below the scroller's top where "what am I reading" is judged */
 const READ_OFFSET = 96;
@@ -34,7 +34,7 @@ export function SettingsPanel() {
   const saveStatus = useDesktops((s) => s.saveStatus);
   const mode = useApp((s) => s.backend?.mode);
   const scrollerRef = useRef<HTMLDivElement>(null);
-  const active = useSectionSpy(scrollerRef);
+  const { active, presentIds } = useSectionSpy(scrollerRef);
 
   const jumpTo = (id: string) => {
     scrollerRef.current
@@ -75,16 +75,20 @@ export function SettingsPanel() {
         <nav aria-label="Settings sections" className="hidden @3xl:block w-36 shrink-0">
           <div className="sticky top-6">
             <div className="px-2 mb-1.5 text-[10.5px] font-medium uppercase tracking-[0.08em] text-[var(--t-dim)]">On this page</div>
-            {SECTION_LIST.map((s) => (
+            {railEntries(presentIds).map((s) => (
               <button
                 key={s.id}
                 onClick={() => jumpTo(s.id)}
+                disabled={!s.enabled}
                 aria-current={active === s.id ? "location" : undefined}
+                title={s.enabled ? undefined : "This section isn't available right now"}
                 className={cn(
                   "block w-full text-left px-2 py-1 rounded-r text-[12px] border-l-2 transition-colors",
-                  active === s.id
-                    ? "border-[var(--t-amber)] text-[var(--t-fg)] font-medium"
-                    : "border-transparent text-[var(--t-dim)] hover:text-[var(--t-fg2)]",
+                  !s.enabled
+                    ? "border-transparent text-[var(--t-dim)]/50 cursor-default"
+                    : active === s.id
+                      ? "border-[var(--t-amber)] text-[var(--t-fg)] font-medium"
+                      : "border-transparent text-[var(--t-dim)] hover:text-[var(--t-fg2)]",
                 )}
               >
                 {s.label}
@@ -97,11 +101,13 @@ export function SettingsPanel() {
   );
 }
 
-/** scroll-spy: which section sits at the read line right now. Re-measures on
+/** scroll-spy: which section sits at the read line right now, plus which
+    sections are actually mounted (a rail entry for an unmounted section is
+    disabled — a dead click is worse than a greyed row). Re-measures on
     scroll (rAF-throttled), on content growth (Network/Practices load late),
     and on panel resizes. */
-function useSectionSpy(scroller: React.RefObject<HTMLDivElement | null>): string {
-  const [active, setActive] = useState(SECTION_LIST[0].id);
+function useSectionSpy(scroller: React.RefObject<HTMLDivElement | null>): { active: string; presentIds: string[] } {
+  const [state, setState] = useState(() => ({ active: SECTION_LIST[0].id, presentIds: SECTION_LIST.map((s) => s.id) }));
   useEffect(() => {
     const sc = scroller.current;
     if (!sc) return;
@@ -116,7 +122,10 @@ function useSectionSpy(scroller: React.RefObject<HTMLDivElement | null>): string
       // never reaches the read line
       const atBottom = sc.scrollTop + sc.clientHeight >= sc.scrollHeight - 2;
       const last = anchors[anchors.length - 1];
-      setActive(atBottom && last ? last.id : activeSectionId(sc.scrollTop + READ_OFFSET, anchors));
+      setState({
+        active: atBottom && last ? last.id : activeSectionId(sc.scrollTop + READ_OFFSET, anchors),
+        presentIds: anchors.map((a) => a.id),
+      });
     };
     const scheduleMeasure = () => {
       cancelAnimationFrame(raf);
@@ -135,7 +144,7 @@ function useSectionSpy(scroller: React.RefObject<HTMLDivElement | null>): string
       ro.disconnect();
     };
   }, [scroller]);
-  return active;
+  return state;
 }
 
 function SectionTitle({ children }: { children: React.ReactNode }) {
