@@ -80,53 +80,57 @@ export function Sidebar({ onNew }: { onNew: () => void }) {
           <Icon name="search" size={12} className="text-[var(--t-dim)]" />
           <input id="session-search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search" className="flex-1 min-w-0 bg-transparent text-[12.5px] outline-none text-[var(--t-fg)] placeholder:text-[var(--t-dim)]" />
         </div>
-        {/* group sessions by project tag or by workspace folder */}
-        <div className="mt-1.5 flex items-center gap-1 px-0.5" role="group" aria-label="Group sessions by">
-          {([["project", "tag", "Project"], ["folder", "folder", "Folder"]] as const).map(([mode, icon, label]) => (
-            <button
-              key={mode}
-              onClick={() => desktops.updateSettings({ groupMode: mode })}
-              title={`Group by ${label.toLowerCase()}`}
-              aria-pressed={groupMode === mode}
-              className={cn(
-                "flex items-center gap-1 h-5 px-1.5 rounded text-[10px] font-medium uppercase tracking-[0.06em] transition-colors",
-                groupMode === mode
-                  ? "bg-[var(--t-bg3)] text-[var(--t-fg)]"
-                  : "text-[var(--t-dim)] hover:text-[var(--t-mute)]",
-              )}
-            >
-              <Icon name={icon} size={10} />
-              {label}
-            </button>
-          ))}
-        </div>
-        {/* the label filter (issue #174): the registry's chips, one active
-            at a time; a label nobody carries stops advertising itself */}
-        {labelsRegistry.length > 0 && (
-          <div className="mt-1.5 flex items-center gap-1 px-0.5 overflow-x-auto t-scroll" role="group" aria-label="Filter by label">
-            <Icon name="tag" size={10} className="shrink-0 text-[var(--t-dim)]" />
-            {labelsRegistry.map((l) => {
-              const active = labelFilter === l;
-              const color = labelColor(l);
-              return (
-                <button
-                  key={l}
-                  onClick={() => setLabelFilter(active ? null : l)}
-                  aria-pressed={active}
-                  title={active ? `Clear the “${l}” filter` : `Show only sessions labeled “${l}”`}
-                  className={cn("shrink-0 inline-flex items-center h-4 px-1.5 rounded-full text-[9.5px] font-medium leading-none transition-opacity", !active && "opacity-50 hover:opacity-90")}
-                  style={{
-                    color,
-                    background: `color-mix(in oklab, ${color} ${active ? 24 : 10}%, transparent)`,
-                    boxShadow: `inset 0 0 0 1px color-mix(in oklab, ${color} ${active ? 60 : 25}%, transparent)`,
-                  }}
-                >
-                  {l}
-                </button>
-              );
-            })}
+        {/* one row: the group-by toggles, then the label filter's chips
+            sharing the line (review feedback on PR #209 — a separate row
+            read as clutter). Chips scroll sideways in the leftover space;
+            the toggles never move. */}
+        <div className="mt-1.5 flex items-center gap-1 px-0.5">
+          <div className="shrink-0 flex items-center gap-1" role="group" aria-label="Group sessions by">
+            {([["project", "tag", "Project"], ["folder", "folder", "Folder"]] as const).map(([mode, icon, label]) => (
+              <button
+                key={mode}
+                onClick={() => desktops.updateSettings({ groupMode: mode })}
+                title={`Group by ${label.toLowerCase()}`}
+                aria-pressed={groupMode === mode}
+                className={cn(
+                  "flex items-center gap-1 h-5 px-1.5 rounded text-[10px] font-medium uppercase tracking-[0.06em] transition-colors",
+                  groupMode === mode
+                    ? "bg-[var(--t-bg3)] text-[var(--t-fg)]"
+                    : "text-[var(--t-dim)] hover:text-[var(--t-mute)]",
+                )}
+              >
+                <Icon name={icon} size={10} />
+                {label}
+              </button>
+            ))}
           </div>
-        )}
+          {/* the label filter (issue #174): the registry's chips, one active
+              at a time; a label nobody carries stops advertising itself */}
+          {labelsRegistry.length > 0 && (
+            <div className="flex-1 min-w-0 flex items-center gap-1 overflow-x-auto t-scroll" role="group" aria-label="Filter by label">
+              {labelsRegistry.map((l) => {
+                const active = labelFilter === l;
+                const color = labelColor(l);
+                return (
+                  <button
+                    key={l}
+                    onClick={() => setLabelFilter(active ? null : l)}
+                    aria-pressed={active}
+                    title={active ? `Clear the “${l}” filter` : `Show only sessions labeled “${l}”`}
+                    className={cn("shrink-0 inline-flex items-center h-4 px-1.5 rounded-full text-[9.5px] font-medium leading-none transition-opacity max-w-[96px] truncate", !active && "opacity-50 hover:opacity-90")}
+                    style={{
+                      color,
+                      background: `color-mix(in oklab, ${color} ${active ? 24 : 10}%, transparent)`,
+                      boxShadow: `inset 0 0 0 1px color-mix(in oklab, ${color} ${active ? 60 : 25}%, transparent)`,
+                    }}
+                  >
+                    {l}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
       </div>
 
       <div className="flex-1 min-h-0 overflow-y-auto t-scroll px-1.5 pb-3">
