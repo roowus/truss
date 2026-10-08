@@ -313,8 +313,11 @@ function LabelStrip({ id, meta }: { id: string; meta: SessionMeta }) {
   };
   const add = (name: string) => {
     const next = name.trim();
-    setDraft("");
+    /* guards before the clear (audit round 4, B5): Enter during an
+       in-flight write must keep the draft — clearing first read exactly
+       like an accepted add while nothing landed */
     if (!next || busy) return;
+    setDraft("");
     write([...labels, next]);
   };
   const draftKey = draft.trim().toLowerCase();
