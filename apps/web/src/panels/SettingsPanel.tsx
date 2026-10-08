@@ -44,8 +44,33 @@ export function SettingsPanel() {
 
   return (
     <div ref={scrollerRef} className="h-full overflow-y-auto t-scroll bg-[var(--t-bg1)] @container">
-      <div className="max-w-[824px] mx-auto px-6 py-7 flex justify-center gap-10">
-        <div className="w-full max-w-[580px] min-w-0">
+      {/* TOC rail — floats in the left margin off a zero-height sticky holder,
+          so the content column keeps its exact centering and never shifts when
+          the rail shows or tucks away (container too narrow for the margin) */}
+      <div className="hidden @4xl:block sticky top-6 z-10 h-0">
+        <nav aria-label="Settings sections" className="absolute w-32" style={{ left: "max(0.75rem, calc(50% - 290px - 8px - 8rem))" }}>
+          {railEntries(presentIds).map((s) => (
+            <button
+              key={s.id}
+              onClick={() => jumpTo(s.id)}
+              disabled={!s.enabled}
+              aria-current={active === s.id ? "location" : undefined}
+              title={s.enabled ? undefined : "This section isn't available right now"}
+              className={cn(
+                "block w-full text-left px-2 py-1 rounded-r text-[12px] border-l-2 transition-colors",
+                !s.enabled
+                  ? "border-transparent text-[var(--t-dim)]/50 cursor-default"
+                  : active === s.id
+                    ? "border-[var(--t-amber)] text-[var(--t-fg)] font-medium"
+                    : "border-transparent text-[var(--t-dim)] hover:text-[var(--t-fg2)]",
+              )}
+            >
+              {s.label}
+            </button>
+          ))}
+        </nav>
+      </div>
+      <div className="max-w-[580px] mx-auto px-6 py-7">
           <div className="flex items-start gap-3">
             <div className="w-9 h-9 rounded-lg border border-[var(--t-line2)] grid place-items-center text-[var(--t-amber)]">
               <Icon name="settings" size={18} />
@@ -68,34 +93,6 @@ export function SettingsPanel() {
           <div className="mt-9 pt-4 border-t border-[var(--t-line)] text-[11.5px] text-[var(--t-dim)] leading-relaxed">
             {mode === "demo" ? "Demo mode: preferences persist in this browser." : "Preferences and workspace layouts are saved on this Truss server via /api/layout."} Harness and remote node-agent configuration isn't writable through the current API.
           </div>
-        </div>
-
-        {/* TOC rail — sticky beside the scroll; the container query tucks it
-            away when the panel is too narrow to spare the width */}
-        <nav aria-label="Settings sections" className="hidden @3xl:block w-36 shrink-0">
-          <div className="sticky top-6">
-            <div className="px-2 mb-1.5 text-[10.5px] font-medium uppercase tracking-[0.08em] text-[var(--t-dim)]">On this page</div>
-            {railEntries(presentIds).map((s) => (
-              <button
-                key={s.id}
-                onClick={() => jumpTo(s.id)}
-                disabled={!s.enabled}
-                aria-current={active === s.id ? "location" : undefined}
-                title={s.enabled ? undefined : "This section isn't available right now"}
-                className={cn(
-                  "block w-full text-left px-2 py-1 rounded-r text-[12px] border-l-2 transition-colors",
-                  !s.enabled
-                    ? "border-transparent text-[var(--t-dim)]/50 cursor-default"
-                    : active === s.id
-                      ? "border-[var(--t-amber)] text-[var(--t-fg)] font-medium"
-                      : "border-transparent text-[var(--t-dim)] hover:text-[var(--t-fg2)]",
-                )}
-              >
-                {s.label}
-              </button>
-            ))}
-          </div>
-        </nav>
       </div>
     </div>
   );
