@@ -311,6 +311,10 @@ function ScheduleRow({ task, now, busy, editingAllowed, onSave }: {
   const paused = task.status === "done" || task.status === "archived";
 
   const commit = async () => {
+    /* audit round 2 (B6): Enter starts the save, busy disables the focused
+       input, and the disable fires blur — without this guard the blur runs a
+       second identical commit while the first PATCH is still in flight */
+    if (busy) return;
     const schedule = draft.trim() ? draft.trim() : null;
     if (schedule === (task.schedule ?? null)) {
       setEditing(false);
