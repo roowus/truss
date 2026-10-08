@@ -113,28 +113,20 @@ try:
 except Exception: pass
 ")
 
-# 4. archive merged worker sessions idle over a week — the sidebar is a
-#    workbench, not a museum; archive (not delete) keeps history recoverable.
-#    The archive route REFUSES sessions with running work, so an active one
-#    is safe by construction.
+# 4. archive merged worker sessions immediately — the sidebar is a workbench,
+#    not a museum; archive (not delete) keeps history recoverable. The
+#    archive route REFUSES sessions with running work, so a busy one is safe
+#    by construction (409 → retried on the next tick).
 python3 - "$LEDGER" <<'EOF'
 import json, sys, urllib.request
-from datetime import datetime, timezone, timedelta
 try:
     entries = json.load(open(sys.argv[1]))
 except Exception:
     sys.exit(0)
-cutoff = datetime.now(timezone.utc) - timedelta(days=7)
 for e in entries:
     if e.get("state") != "merged" or e.get("archived"):
         continue
     stamp = e.get("mergedAt") or e.get("since")
-    try:
-        when = datetime.fromisoformat(str(stamp).replace("Z", "+00:00"))
-    except Exception:
-        continue
-    if when > cutoff:
-        continue
     req = urllib.request.Request(
         "http://127.0.0.1:3080/plugins/dsh-spawn/archive",
         data=json.dumps({"sessionId": e["session"]}).encode(),
