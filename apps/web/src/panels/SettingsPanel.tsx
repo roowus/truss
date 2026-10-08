@@ -1,149 +1,276 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { desktops, useDesktops, type UiSettings } from "@/lib/desktops";
 import { useApp } from "@/lib/store";
 import { Btn, Icon, Select } from "@/components/ui";
 import { cn } from "@/utils/cn";
 import type { NetInfo } from "@/lib/proto";
+import { activeSectionId, railEntries, settingsSections } from "@/lib/settingsToc";
+
+/** px below the scroller's top where "what am I reading" is judged */
+const READ_OFFSET = 96;
+
+/** the shared section list — the page's anchors and the rail's links both
+    come from it, so they can't drift apart */
+const SECTION_LIST = settingsSections();
+
+/** update one UiSettings key */
+const changeSetting = <K extends keyof UiSettings>(key: K, value: UiSettings[K]) => desktops.updateSettings({ [key]: value });
+
+type SectionBody = (props: { id: string }) => React.JSX.Element | null;
+
+/** one content component per section id; the panel maps SECTION_LIST to
+    these, so order and anchor ids come from the shared list */
+const SECTION_BODY: Record<string, SectionBody> = {
+  appearance: AppearanceSection,
+  sessions: SessionsSection,
+  workspaces: WorkspacesSection,
+  feed: FeedSection,
+  integrations: DoubletakeSection,
+  network: NetworkSection,
+  practices: PracticesSection,
+};
 
 export function SettingsPanel() {
-  const settings = useDesktops((s) => s.settings);
   const saveStatus = useDesktops((s) => s.saveStatus);
-  const spaces = useDesktops((s) => s.spaces);
   const mode = useApp((s) => s.backend?.mode);
-  const [cwd, setCwd] = useState(settings.defaultCwd);
-  const [error, setError] = useState("");
+  const scrollerRef = useRef<HTMLDivElement>(null);
+  const { active, presentIds } = useSectionSpy(scrollerRef);
 
-  useEffect(() => setCwd(settings.defaultCwd), [settings.defaultCwd]);
-  const change = <K extends keyof UiSettings>(key: K, value: UiSettings[K]) => desktops.updateSettings({ [key]: value });
+  const jumpTo = (id: string) => {
+    scrollerRef.current
+      ?.querySelector<HTMLElement>(`#${CSS.escape(id)}`)
+      ?.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
 
   return (
-    <div className="h-full overflow-y-auto t-scroll bg-[var(--t-bg1)]">
+    <div ref={scrollerRef} className="h-full overflow-y-auto t-scroll bg-[var(--t-bg1)] @container">
       <div className="max-w-[580px] mx-auto px-6 py-7">
-        <div className="flex items-start gap-3">
-          <div className="w-9 h-9 rounded-lg border border-[var(--t-line2)] grid place-items-center text-[var(--t-amber)]">
-            <Icon name="settings" size={18} />
-          </div>
-          <div>
-            <h1 className="text-[18px] font-semibold text-[var(--t-fg)] leading-tight">Settings</h1>
-            <p className="mt-1 text-[12px] text-[var(--t-dim)]">Your Truss interface. Changes are saved to /api/layout.</p>
-          </div>
-          <span className={cn("ml-auto text-[11px]", saveStatus === "error" ? "text-[var(--t-red)]" : "text-[var(--t-dim)]")}>
-            {saveStatus === "saving" ? "Saving…" : saveStatus === "error" ? "Save failed" : saveStatus === "saved" ? "Saved" : ""}
-          </span>
-          {saveStatus === "error" && <Btn variant="outline" size="xs" icon="retry" onClick={() => desktops.retrySave()}>Retry</Btn>}
-        </div>
-
-        <section className="mt-9">
-          <SectionTitle>Appearance</SectionTitle>
-          <Row label="Density" description="How much space navigation and tabs use.">
-            <Toggle options={[{ id: "comfortable", name: "Comfortable" }, { id: "compact", name: "Compact" }]} value={settings.density} onChange={(v) => change("density", v as UiSettings["density"])} />
-          </Row>
-          <Row label="Terminal font size" description="Applies to all shell tabs. Code and terminal keep their monospace font.">
-            <Select
-              ariaLabel="Terminal font size"
-              className="!w-[150px]"
-              value={String(settings.terminalFontSize)}
-              onChange={(v) => change("terminalFontSize", Number(v))}
-              options={[11, 12, 13, 14, 16].map((n) => ({ value: String(n), label: `${n} px` }))}
-            />
-          </Row>
-        </section>
-
-        <section className="mt-8">
-          <SectionTitle>Sessions</SectionTitle>
-          <Row label="Open sessions" description="What happens when you click a session in the sidebar.">
-            <Toggle options={[{ id: "chat", name: "Chat" }, { id: "daily", name: "Full view" }]} value={settings.openMode} onChange={(v) => change("openMode", v as UiSettings["openMode"])} />
-          </Row>
-          <div className="py-3 border-b border-[var(--t-line)]">
-            <div className="text-[12.5px] text-[var(--t-fg)]">Default working directory</div>
-            <p className="mt-0.5 mb-2 text-[11.5px] text-[var(--t-dim)]">Prefills new sessions when a host has no specific default.</p>
-            <div className="flex gap-2">
-              <input aria-label="Default working directory" className="t-input font-code flex-1" value={cwd} onChange={(e) => { setCwd(e.target.value); setError(""); }} placeholder="Use most recent session" />
-              <Btn variant="outline" onClick={() => {
-                if (cwd.trim() && !cwd.trim().startsWith("/")) { setError("Use an absolute path."); return; }
-                change("defaultCwd", cwd.trim());
-              }}>Save</Btn>
-            </div>
-            {error && <div role="alert" className="mt-1 text-[11.5px] text-[var(--t-red)]">{error}</div>}
-          </div>
-        </section>
-
-        <section className="mt-8">
-          <SectionTitle>Workspaces</SectionTitle>
-          <p className="text-[12px] text-[var(--t-mute)] leading-relaxed mb-3">
-            Think of workspaces as desktops. Each keeps its own tab groups and layout; the same session can appear in several.
-          </p>
-          <div className="flex items-center gap-2">
-            <span className="text-[12px] text-[var(--t-fg2)]">{spaces.length} workspace{spaces.length === 1 ? "" : "s"}</span>
-            <Btn variant="outline" icon="plus" className="ml-auto" onClick={() => desktops.create()}>New workspace</Btn>
-          </div>
-          <p className="mt-2 text-[11.5px] text-[var(--t-dim)]">Switch in the bar above, or with Alt+1–9. Alt+N creates a workspace, Alt+Shift+W closes the active one, Alt+Shift+T reopens what you closed. Right-click a tab to copy or move it to another desktop.</p>
-          {spaces.some((sp) => sp.archived) && (
-            <div className="mt-3">
-              <div className="text-[10.5px] font-medium uppercase tracking-[0.08em] text-[var(--t-dim)] mb-1.5">Archived</div>
-              {spaces.filter((sp) => sp.archived).map((sp) => (
-                <div key={sp.id} className="flex items-center gap-2 py-1">
-                  <Icon name="archive" size={11} className="text-[var(--t-dim)]" />
-                  <span className="text-[12px] text-[var(--t-mute)] truncate">{sp.name}</span>
-                  <Btn size="xs" variant="ghost" className="ml-auto" onClick={() => desktops.archive(sp.id, false)}>Restore</Btn>
-                </div>
+          {/* TOC rail — a zero-height sticky holder inside the column, the rail
+              anchored just off the column's left edge (right: 100%+8px — no
+              width math duplicated from the column). The column keeps its exact
+              centering and never shifts, whether the rail shows or tucks away
+              (container too narrow for the margin) */}
+          <div className="hidden @4xl:block sticky top-6 z-10 h-0">
+            <nav aria-label="Settings sections" className="absolute w-32" style={{ right: "calc(100% + 8px)" }}>
+              {railEntries(presentIds).map((s) => (
+                <button
+                  key={s.id}
+                  onClick={() => jumpTo(s.id)}
+                  disabled={!s.enabled}
+                  aria-current={active === s.id ? "location" : undefined}
+                  title={s.enabled ? undefined : "This section isn't available right now"}
+                  className={cn(
+                    "block w-full text-left px-2 py-1 rounded-r text-[12px] border-l-2 transition-colors",
+                    !s.enabled
+                      ? "border-transparent text-[var(--t-dim)]/50 cursor-default"
+                      : active === s.id
+                        ? "border-[var(--t-amber)] text-[var(--t-fg)] font-medium"
+                        : "border-transparent text-[var(--t-dim)] hover:text-[var(--t-fg2)]",
+                  )}
+                >
+                  {s.label}
+                </button>
               ))}
+            </nav>
+          </div>
+          <div className="flex items-start gap-3">
+            <div className="w-9 h-9 rounded-lg border border-[var(--t-line2)] grid place-items-center text-[var(--t-amber)]">
+              <Icon name="settings" size={18} />
             </div>
-          )}
-        </section>
+            <div>
+              <h1 className="text-[18px] font-semibold text-[var(--t-fg)] leading-tight">Settings</h1>
+              <p className="mt-1 text-[12px] text-[var(--t-dim)]">Your Truss interface. Changes are saved to /api/layout.</p>
+            </div>
+            <span className={cn("ml-auto text-[11px]", saveStatus === "error" ? "text-[var(--t-red)]" : "text-[var(--t-dim)]")}>
+              {saveStatus === "saving" ? "Saving…" : saveStatus === "error" ? "Save failed" : saveStatus === "saved" ? "Saved" : ""}
+            </span>
+            {saveStatus === "error" && <Btn variant="outline" size="xs" icon="retry" onClick={() => desktops.retrySave()}>Retry</Btn>}
+          </div>
 
-        <section className="mt-8">
-          <SectionTitle>Feed</SectionTitle>
-          <p className="text-[12px] text-[var(--t-mute)] leading-relaxed mb-1">
-            Which system events post a card to your inbox. Agents can always post explicitly (post_feed) regardless.
-          </p>
-          {([
-            ["permissions", "Decisions", "A session pauses on a permission request"],
-            ["workDone", "Work finished", "A running turn settles (one card per turn)"],
-            ["taskRuns", "Task-board runs", "A Tasks-board run finishes"],
-            ["errors", "Errors", "A harness crashes"],
-            ["context", "Context pressure", "A session crosses 85% of its window"],
-          ] as const).map(([key, label, desc]) => (
-            <Row key={key} label={label} description={desc}>
-              <button
-                role="switch"
-                aria-checked={settings.feedSources[key]}
-                onClick={() => change("feedSources", { ...settings.feedSources, [key]: !settings.feedSources[key] })}
-                className={cn("w-8 h-4.5 rounded-full relative transition-colors h-[18px]", settings.feedSources[key] ? "bg-[var(--t-teal)]/70" : "bg-[var(--t-line2)]")}
-              >
-                <span className={cn("absolute top-0.5 w-3.5 h-3.5 rounded-full bg-white transition-all", settings.feedSources[key] ? "left-4" : "left-0.5")} />
-              </button>
-            </Row>
-          ))}
-        </section>
+          {SECTION_LIST.map((s) => {
+            const Body = SECTION_BODY[s.id];
+            return Body ? <Body key={s.id} id={s.id} /> : null;
+          })}
 
-        <DoubletakeSection />
-
-        <NetworkSection />
-
-        <PracticesSection />
-
-        <div className="mt-9 pt-4 border-t border-[var(--t-line)] text-[11.5px] text-[var(--t-dim)] leading-relaxed">
-          {mode === "demo" ? "Demo mode: preferences persist in this browser." : "Preferences and workspace layouts are saved on this Truss server via /api/layout."} Harness and remote node-agent configuration isn't writable through the current API.
-        </div>
+          <div className="mt-9 pt-4 border-t border-[var(--t-line)] text-[11.5px] text-[var(--t-dim)] leading-relaxed">
+            {mode === "demo" ? "Demo mode: preferences persist in this browser." : "Preferences and workspace layouts are saved on this Truss server via /api/layout."} Harness and remote node-agent configuration isn't writable through the current API.
+          </div>
       </div>
     </div>
   );
+}
+
+/** scroll-spy: which section sits at the read line right now, plus which
+    sections are actually mounted (a rail entry for an unmounted section is
+    disabled — a dead click is worse than a greyed row). Re-measures on
+    scroll (rAF-throttled), on content growth (Network/Practices load late),
+    and on panel resizes. */
+function useSectionSpy(scroller: React.RefObject<HTMLDivElement | null>): { active: string; presentIds: string[] } {
+  const [state, setState] = useState(() => ({ active: SECTION_LIST[0].id, presentIds: SECTION_LIST.map((s) => s.id) }));
+  useEffect(() => {
+    const sc = scroller.current;
+    if (!sc) return;
+    let raf = 0;
+    const measure = () => {
+      const scTop = sc.getBoundingClientRect().top;
+      const anchors = SECTION_LIST.flatMap((s) => {
+        const el = sc.querySelector<HTMLElement>(`#${CSS.escape(s.id)}`);
+        return el ? [{ id: s.id, top: el.getBoundingClientRect().top - scTop + sc.scrollTop }] : [];
+      });
+      // bottomed out: the last rendered section is current even when its top
+      // never reaches the read line
+      const atBottom = sc.scrollTop + sc.clientHeight >= sc.scrollHeight - 2;
+      const last = anchors[anchors.length - 1];
+      const next = {
+        active: atBottom && last ? last.id : activeSectionId(sc.scrollTop + READ_OFFSET, anchors),
+        presentIds: anchors.map((a) => a.id),
+      };
+      // scrolling fires this at rAF rate — bail out when nothing moved, or the
+      // whole panel re-renders every frame (audit round 4, B4)
+      setState((prev) => (prev.active === next.active && prev.presentIds.join("|") === next.presentIds.join("|") ? prev : next));
+    };
+    const scheduleMeasure = () => {
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(measure);
+    };
+    measure();
+    sc.addEventListener("scroll", scheduleMeasure, { passive: true });
+    window.addEventListener("resize", scheduleMeasure);
+    const ro = new ResizeObserver(scheduleMeasure);
+    ro.observe(sc);
+    for (const child of sc.children) ro.observe(child);
+    return () => {
+      cancelAnimationFrame(raf);
+      sc.removeEventListener("scroll", scheduleMeasure);
+      window.removeEventListener("resize", scheduleMeasure);
+      ro.disconnect();
+    };
+  }, [scroller]);
+  return state;
 }
 
 function SectionTitle({ children }: { children: React.ReactNode }) {
   return <h2 className="text-[11px] uppercase tracking-[0.1em] font-medium text-[var(--t-dim)] mb-1">{children}</h2>;
 }
 
+function AppearanceSection({ id }: { id: string }) {
+  const settings = useDesktops((s) => s.settings);
+  return (
+    <section id={id} className="mt-9 scroll-mt-5">
+      <SectionTitle>Appearance</SectionTitle>
+      <Row label="Density" description="How much space navigation and tabs use.">
+        <Toggle options={[{ id: "comfortable", name: "Comfortable" }, { id: "compact", name: "Compact" }]} value={settings.density} onChange={(v) => changeSetting("density", v as UiSettings["density"])} />
+      </Row>
+      <Row label="Terminal font size" description="Applies to all shell tabs. Code and terminal keep their monospace font.">
+        <Select
+          ariaLabel="Terminal font size"
+          className="!w-[150px]"
+          value={String(settings.terminalFontSize)}
+          onChange={(v) => changeSetting("terminalFontSize", Number(v))}
+          options={[11, 12, 13, 14, 16].map((n) => ({ value: String(n), label: `${n} px` }))}
+        />
+      </Row>
+    </section>
+  );
+}
+
+function SessionsSection({ id }: { id: string }) {
+  const settings = useDesktops((s) => s.settings);
+  const [cwd, setCwd] = useState(settings.defaultCwd);
+  const [error, setError] = useState("");
+
+  useEffect(() => setCwd(settings.defaultCwd), [settings.defaultCwd]);
+
+  return (
+    <section id={id} className="mt-8 scroll-mt-5">
+      <SectionTitle>Sessions</SectionTitle>
+      <Row label="Open sessions" description="What happens when you click a session in the sidebar.">
+        <Toggle options={[{ id: "chat", name: "Chat" }, { id: "daily", name: "Full view" }]} value={settings.openMode} onChange={(v) => changeSetting("openMode", v as UiSettings["openMode"])} />
+      </Row>
+      <div className="py-3 border-b border-[var(--t-line)]">
+        <div className="text-[12.5px] text-[var(--t-fg)]">Default working directory</div>
+        <p className="mt-0.5 mb-2 text-[11.5px] text-[var(--t-dim)]">Prefills new sessions when a host has no specific default.</p>
+        <div className="flex gap-2">
+          <input aria-label="Default working directory" className="t-input font-code flex-1" value={cwd} onChange={(e) => { setCwd(e.target.value); setError(""); }} placeholder="Use most recent session" />
+          <Btn variant="outline" onClick={() => {
+            if (cwd.trim() && !cwd.trim().startsWith("/")) { setError("Use an absolute path."); return; }
+            changeSetting("defaultCwd", cwd.trim());
+          }}>Save</Btn>
+        </div>
+        {error && <div role="alert" className="mt-1 text-[11.5px] text-[var(--t-red)]">{error}</div>}
+      </div>
+    </section>
+  );
+}
+
+function WorkspacesSection({ id }: { id: string }) {
+  const spaces = useDesktops((s) => s.spaces);
+  return (
+    <section id={id} className="mt-8 scroll-mt-5">
+      <SectionTitle>Workspaces</SectionTitle>
+      <p className="text-[12px] text-[var(--t-mute)] leading-relaxed mb-3">
+        Think of workspaces as desktops. Each keeps its own tab groups and layout; the same session can appear in several.
+      </p>
+      <div className="flex items-center gap-2">
+        <span className="text-[12px] text-[var(--t-fg2)]">{spaces.length} workspace{spaces.length === 1 ? "" : "s"}</span>
+        <Btn variant="outline" icon="plus" className="ml-auto" onClick={() => desktops.create()}>New workspace</Btn>
+      </div>
+      <p className="mt-2 text-[11.5px] text-[var(--t-dim)]">Switch in the bar above, or with Alt+1–9. Alt+N creates a workspace, Alt+Shift+W closes the active one, Alt+Shift+T reopens what you closed. Right-click a tab to copy or move it to another desktop.</p>
+      {spaces.some((sp) => sp.archived) && (
+        <div className="mt-3">
+          <div className="text-[10.5px] font-medium uppercase tracking-[0.08em] text-[var(--t-dim)] mb-1.5">Archived</div>
+          {spaces.filter((sp) => sp.archived).map((sp) => (
+            <div key={sp.id} className="flex items-center gap-2 py-1">
+              <Icon name="archive" size={11} className="text-[var(--t-dim)]" />
+              <span className="text-[12px] text-[var(--t-mute)] truncate">{sp.name}</span>
+              <Btn size="xs" variant="ghost" className="ml-auto" onClick={() => desktops.archive(sp.id, false)}>Restore</Btn>
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function FeedSection({ id }: { id: string }) {
+  const settings = useDesktops((s) => s.settings);
+  return (
+    <section id={id} className="mt-8 scroll-mt-5">
+      <SectionTitle>Feed</SectionTitle>
+      <p className="text-[12px] text-[var(--t-mute)] leading-relaxed mb-1">
+        Which system events post a card to your inbox. Agents can always post explicitly (post_feed) regardless.
+      </p>
+      {([
+        ["permissions", "Decisions", "A session pauses on a permission request"],
+        ["workDone", "Work finished", "A running turn settles (one card per turn)"],
+        ["taskRuns", "Task-board runs", "A Tasks-board run finishes"],
+        ["errors", "Errors", "A harness crashes"],
+        ["context", "Context pressure", "A session crosses 85% of its window"],
+      ] as const).map(([key, label, desc]) => (
+        <Row key={key} label={label} description={desc}>
+          <button
+            role="switch"
+            aria-checked={settings.feedSources[key]}
+            onClick={() => changeSetting("feedSources", { ...settings.feedSources, [key]: !settings.feedSources[key] })}
+            className={cn("w-8 h-4.5 rounded-full relative transition-colors h-[18px]", settings.feedSources[key] ? "bg-[var(--t-teal)]/70" : "bg-[var(--t-line2)]")}
+          >
+            <span className={cn("absolute top-0.5 w-3.5 h-3.5 rounded-full bg-white transition-all", settings.feedSources[key] ? "left-4" : "left-0.5")} />
+          </button>
+        </Row>
+      ))}
+    </section>
+  );
+}
+
 /** Integrations — doubletake research cards in the feed. The server polls
     its /api/chats; finished research (answered / failed / capped) posts one
     card per chat that links out to the doubletake chat. */
-function DoubletakeSection() {
+function DoubletakeSection({ id }: { id: string }) {
   const settings = useDesktops((s) => s.settings);
   const dt = settings.doubletake;
   const change = (patch: Partial<typeof dt>) => desktops.updateSettings({ doubletake: { ...dt, ...patch } });
   return (
-    <section className="mt-8">
+    <section id={id} className="mt-8 scroll-mt-5">
       <SectionTitle>Integrations</SectionTitle>
       <Row label="Doubletake research" description="When a doubletake item finishes (answered, failed, or capped), a card lands in the feed and opens its chat.">
         <button
@@ -187,7 +314,7 @@ function DoubletakeSection() {
 }
 
 /** Network — how other devices and remote hosts reach this server. */
-function NetworkSection() {
+function NetworkSection({ id }: { id: string }) {
   const be = useApp((s) => s.backend);
   const [net, setNet] = useState<NetInfo | null>(null);
   const [busy, setBusy] = useState(false);
@@ -196,7 +323,7 @@ function NetworkSection() {
   useEffect(() => { void load(); }, [be]);
   if (!net) return null;
   return (
-    <section className="mt-8">
+    <section id={id} className="mt-8 scroll-mt-5">
       <SectionTitle>Network</SectionTitle>
       <p className="text-[12px] text-[var(--t-mute)] leading-relaxed mb-2">
         Addresses other devices (and remote node agents) can reach this server on. Everything on the same private network stays in sync.
@@ -259,7 +386,7 @@ function NetworkSection() {
 
 /** TRUSS.md — the global practices file (coding + posting). Folder/project
     layers are plain TRUSS.md files, editable in the Files panel. */
-function PracticesSection() {
+function PracticesSection({ id }: { id: string }) {
   const be = useApp((s) => s.backend);
   const focus = useApp((s) => (s.focused ? s.sessions[s.focused] : undefined));
   const [text, setText] = useState<string | null>(null);
@@ -277,7 +404,7 @@ function PracticesSection() {
 
   if (text === null) return null;
   return (
-    <section className="mt-8">
+    <section id={id} className="mt-8 scroll-mt-5">
       <SectionTitle>Practices — TRUSS.md</SectionTitle>
       <p className="text-[12px] text-[var(--t-mute)] leading-relaxed mb-2">
         House rules for every harness Truss hosts — coding practices AND posting practices (when to file todos, post reports, how to prioritize). Layers: <span className="font-mono">~/.truss/TRUSS.md</span> (this file) → <span className="font-mono">~/.truss/projects/&lt;project&gt;.md</span> → any <span className="font-mono">TRUSS.md</span> in the session's folder chain (edit those in a Files tab).
