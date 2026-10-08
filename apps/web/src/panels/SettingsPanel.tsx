@@ -44,33 +44,35 @@ export function SettingsPanel() {
 
   return (
     <div ref={scrollerRef} className="h-full overflow-y-auto t-scroll bg-[var(--t-bg1)] @container">
-      {/* TOC rail — floats in the left margin off a zero-height sticky holder,
-          so the content column keeps its exact centering and never shifts when
-          the rail shows or tucks away (container too narrow for the margin) */}
-      <div className="hidden @4xl:block sticky top-6 z-10 h-0">
-        <nav aria-label="Settings sections" className="absolute w-32" style={{ left: "max(0.75rem, calc(50% - 290px - 8px - 8rem))" }}>
-          {railEntries(presentIds).map((s) => (
-            <button
-              key={s.id}
-              onClick={() => jumpTo(s.id)}
-              disabled={!s.enabled}
-              aria-current={active === s.id ? "location" : undefined}
-              title={s.enabled ? undefined : "This section isn't available right now"}
-              className={cn(
-                "block w-full text-left px-2 py-1 rounded-r text-[12px] border-l-2 transition-colors",
-                !s.enabled
-                  ? "border-transparent text-[var(--t-dim)]/50 cursor-default"
-                  : active === s.id
-                    ? "border-[var(--t-amber)] text-[var(--t-fg)] font-medium"
-                    : "border-transparent text-[var(--t-dim)] hover:text-[var(--t-fg2)]",
-              )}
-            >
-              {s.label}
-            </button>
-          ))}
-        </nav>
-      </div>
       <div className="max-w-[580px] mx-auto px-6 py-7">
+          {/* TOC rail — a zero-height sticky holder inside the column, the rail
+              anchored just off the column's left edge (right: 100%+8px — no
+              width math duplicated from the column). The column keeps its exact
+              centering and never shifts, whether the rail shows or tucks away
+              (container too narrow for the margin) */}
+          <div className="hidden @4xl:block sticky top-6 z-10 h-0">
+            <nav aria-label="Settings sections" className="absolute w-32" style={{ right: "calc(100% + 8px)" }}>
+              {railEntries(presentIds).map((s) => (
+                <button
+                  key={s.id}
+                  onClick={() => jumpTo(s.id)}
+                  disabled={!s.enabled}
+                  aria-current={active === s.id ? "location" : undefined}
+                  title={s.enabled ? undefined : "This section isn't available right now"}
+                  className={cn(
+                    "block w-full text-left px-2 py-1 rounded-r text-[12px] border-l-2 transition-colors",
+                    !s.enabled
+                      ? "border-transparent text-[var(--t-dim)]/50 cursor-default"
+                      : active === s.id
+                        ? "border-[var(--t-amber)] text-[var(--t-fg)] font-medium"
+                        : "border-transparent text-[var(--t-dim)] hover:text-[var(--t-fg2)]",
+                  )}
+                >
+                  {s.label}
+                </button>
+              ))}
+            </nav>
+          </div>
           <div className="flex items-start gap-3">
             <div className="w-9 h-9 rounded-lg border border-[var(--t-line2)] grid place-items-center text-[var(--t-amber)]">
               <Icon name="settings" size={18} />
@@ -119,10 +121,13 @@ function useSectionSpy(scroller: React.RefObject<HTMLDivElement | null>): { acti
       // never reaches the read line
       const atBottom = sc.scrollTop + sc.clientHeight >= sc.scrollHeight - 2;
       const last = anchors[anchors.length - 1];
-      setState({
+      const next = {
         active: atBottom && last ? last.id : activeSectionId(sc.scrollTop + READ_OFFSET, anchors),
         presentIds: anchors.map((a) => a.id),
-      });
+      };
+      // scrolling fires this at rAF rate — bail out when nothing moved, or the
+      // whole panel re-renders every frame (audit round 4, B4)
+      setState((prev) => (prev.active === next.active && prev.presentIds.join("|") === next.presentIds.join("|") ? prev : next));
     };
     const scheduleMeasure = () => {
       cancelAnimationFrame(raf);

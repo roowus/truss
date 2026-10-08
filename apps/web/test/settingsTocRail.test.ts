@@ -35,13 +35,15 @@ test("railEntries: empty page disables everything, unknown ids change nothing", 
 });
 
 /* developer feedback on PR #212: no rail heading ("On this page"), and the
-   rail floats in the left margin OUTSIDE the centered content column, so the
-   rest of the page keeps its exact centering whether the rail shows or not. */
+   rail floats in the left margin WITHOUT shifting the centered column.
+   Audit round 4 (B3): the floating must not duplicate the column's width as
+   magic numbers — the rail's sticky holder rides inside the column and
+   anchors off its left edge, so the geometry is self-maintaining. */
 test("read-through: no rail heading; the rail floats left of the centered column", () => {
   const src = readFileSync(new URL("../src/panels/SettingsPanel.tsx", import.meta.url), "utf8");
   assert.ok(!src.includes("On this page"), "the rail has no heading");
-  const nav = src.indexOf('aria-label="Settings sections"');
   const col = src.indexOf("max-w-[580px] mx-auto");
-  assert.ok(nav !== -1 && col !== -1, "rail and the centered content column both exist");
-  assert.ok(nav < col, "the rail renders before/outside the content column — the column's centering never depends on the rail");
+  const nav = src.indexOf('aria-label="Settings sections"');
+  assert.ok(col !== -1 && nav !== -1 && nav > col, "the rail's holder rides inside the centered column — the column never moves");
+  assert.ok(/right:\s*"calc\(100% \+ 8px\)"/.test(src), "the rail anchors off the column's left edge — no width math duplicated from the column");
 });
