@@ -61,6 +61,11 @@ if (!sessionCols.some((c) => c.name === "deleted_at")) {
 if (!sessionCols.some((c) => c.name === "pinned")) {
   db.exec(`ALTER TABLE sessions ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0`);
 }
+/* migration: labels = GitHub-style multi-value tags (issue #174), stored as
+   a JSON array string; NULL predates the feature and reads as [] */
+if (!sessionCols.some((c) => c.name === "labels")) {
+  db.exec(`ALTER TABLE sessions ADD COLUMN labels TEXT`);
+}
 
 /* server-level key-value store (layout persistence, future settings) */
 db.exec(`
@@ -88,12 +93,28 @@ export interface SessionRow {
      sidebar's pin key and the #86 contract want a real flag, not SQLite's int */
   pinned: boolean;
   deleted_at: number | null;
+  /* GitHub-style labels (issue #174) — a real array at the boundary; the
+     column is a JSON string (NULL = pre-labels row = none) */
+  labels: string[];
 }
 
-/* sqlite stores pinned as 0/1; every read path normalizes to a boolean */
+/* sqlite stores pinned as 0/1 and labels as a JSON string; every read path
+   normalizes to a boolean + a string array */
 function asSessionRow(r: unknown): SessionRow {
-  const row = r as Omit<SessionRow, "pinned"> & { pinned: number };
-  return { ...row, pinned: !!row.pinned };
+  const row = r as Omit<SessionRow, "pinned" | "labels"> & { pinned: number; labels: string | null };
+  return { ...row, pinned: !!row.pinned, labels: parseLabels(row.labels) };
+}
+
+/* a corrupt labels cell must not take the whole list down — one bad row
+   reads as unlabeled */
+function parseLabels(raw: string | null): string[] {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.filter((x): x is string => typeof x === "string") : [];
+  } catch {
+    return [];
+  }
 }
 
 const insertSession = db.prepare(`
@@ -259,6 +280,31 @@ export const store = {
   /** every session carrying a project tag (for bulk archive) */
   sessionsInProject(project: string): SessionRow[] {
     return (db.prepare(`SELECT * FROM sessions WHERE project = @p`).all({ p: project }) as unknown[]).map(asSessionRow);
+  },
+
+  /** replace-all write for a session's labels (issue #174); bumps
+      updated_at like a rename — the row's metadata changed */
+  setSessionLabels(id: string, labels: string[]) {
+    db.prepare(`UPDATE sessions SET labels = @l, updated_at = @at WHERE id = @id`).run({
+      id, l: JSON.stringify(labels), at: Date.now(),
+    });
+  },
+
+  /** the label registry (issue #174): every label on a listed session
+      (trash excluded), case-insensitively merged keeping first-seen
+      casing, alpha-sorted — the sidebar filter's universe */
+  listLabels(): string[] {
+    const rows = db.prepare(`SELECT labels FROM sessions WHERE deleted_at IS NULL AND labels IS NOT NULL`).all() as {
+      labels: string;
+    }[];
+    const byKey = new Map<string, string>();
+    for (const r of rows) {
+      for (const name of parseLabels(r.labels)) {
+        const key = name.toLowerCase();
+        if (!byKey.has(key)) byKey.set(key, name);
+      }
+    }
+    return [...byKey.values()].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }));
   },
 
   getKv(key: string): string | undefined {

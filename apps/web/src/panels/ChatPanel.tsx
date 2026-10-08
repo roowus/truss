@@ -16,7 +16,9 @@ import { RAIL_INSET, activeRailIndex, railIndexAtOffset, railMarkTop, railNatura
 import { createBrowserVoiceInput, appendTranscript, type BrowserVoiceController } from "@/lib/voice";
 import type { VoiceState } from "@/lib/voiceInput";
 import { openPanel, openAgentShell, renameSessionPanels } from "@/lib/workspace";
-import { Btn, Empty, HarnessMark, Icon, IconBtn, Select, Spinner, StateDot, STATE_META } from "@/components/ui";
+import { Btn, Empty, HarnessMark, Icon, IconBtn, LabelChip, Select, Spinner, StateDot, STATE_META } from "@/components/ui";
+import { labelChips } from "@/lib/labels";
+import type { SessionMeta } from "@/lib/proto";
 import { VoiceVisualizer } from "@/components/VoiceVisualizer";
 import { Markdown } from "./Markdown";
 import { cn } from "@/utils/cn";
@@ -161,6 +163,7 @@ function ChatHeader({ id }: { id: string }) {
         </span>
       </span>
       <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-[var(--t-fg)]" title={tooltip}>{meta.title}</span>
+      <LabelStrip id={id} meta={meta} />
       <div className="ml-auto flex items-center gap-1.5 shrink-0">
         {plan.visible.includes("trajectory") && (
           <IconBtn icon="wave" label="Trajectory" onClick={() => openPanel("trajectory", { sessionId: id })} />
@@ -278,6 +281,89 @@ function ChatHeader({ id }: { id: string }) {
         </>
       )}
     </div>
+  );
+}
+
+/* ---------------- session labels (issue #174) ----------------
+   Colored chips next to the title — × removes, + adds (free text or a
+   registry pick). The server cleans (trim/dedupe/cap 8) and broadcasts
+   session.updated, so this strip and every sidebar row repaint together. */
+function LabelStrip({ id, meta }: { id: string; meta: SessionMeta }) {
+  const registry = useApp((s) => s.labelsRegistry);
+  const [open, setOpen] = useState(false);
+  const [draft, setDraft] = useState("");
+  const labels = meta.labels ?? [];
+  const chips = labelChips(labels, 3);
+  /* the cap lives server-side (SESSION_LABEL_CAP = 8); mirror it here so the
+     add affordance disables honestly instead of silently no-opping */
+  const full = labels.length >= 8;
+  const add = (name: string) => {
+    const next = name.trim();
+    setDraft("");
+    if (!next) return;
+    void store.setSessionLabels(id, [...labels, next]);
+  };
+  const draftKey = draft.trim().toLowerCase();
+  const suggestions = registry.filter(
+    (l) => !labels.some((x) => x.toLowerCase() === l.toLowerCase()) && (!draftKey || l.toLowerCase().includes(draftKey)),
+  );
+  return (
+    <span className="relative flex items-center gap-1 min-w-0 overflow-hidden shrink-0 max-w-[45%]">
+      {chips.shown.map((l) => (
+        <LabelChip key={l} name={l} className="max-w-[90px]" onRemove={() => void store.setSessionLabels(id, labels.filter((x) => x !== l))} />
+      ))}
+      {chips.overflow > 0 && (
+        <span className="text-[10px] text-[var(--t-dim)] tabular-nums" title={labels.slice(chips.shown.length).join(", ")}>
+          +{chips.overflow}
+        </span>
+      )}
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        disabled={full && !open}
+        title={full ? "A session carries at most 8 labels" : "Add a label"}
+        aria-label="Add a label"
+        aria-expanded={open}
+        className={cn(
+          "shrink-0 inline-grid place-items-center w-4 h-4 rounded-full border border-dashed border-[var(--t-line2)] text-[var(--t-dim)] hover:text-[var(--t-mute)] hover:border-[var(--t-mute)] disabled:opacity-30",
+          open && "text-[var(--t-fg)] border-[var(--t-mute)]",
+        )}
+      >
+        <Icon name="plus" size={9} />
+      </button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
+          <div className="absolute right-0 top-[24px] z-50 w-56 rounded-lg bg-[var(--t-bg2)] border border-[var(--t-line2)] shadow-2xl p-2 t-pop">
+            <input
+              autoFocus
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") add(draft);
+                else if (e.key === "Escape") setOpen(false);
+              }}
+              placeholder="New label name"
+              maxLength={32}
+              aria-label="New label name"
+              className="w-full h-7 px-2 rounded-md bg-[var(--t-bg1)] border border-[var(--t-line2)] text-[12px] text-[var(--t-fg)] outline-none focus:border-[var(--t-line2)] placeholder:text-[var(--t-dim)]"
+            />
+            {suggestions.length > 0 && (
+              <div className="mt-1.5 flex flex-wrap gap-1" role="group" aria-label="Labels already in use">
+                {suggestions.map((l) => (
+                  <button key={l} type="button" onClick={() => add(l)} className="hover:brightness-125" title={`Add “${l}”`}>
+                    <LabelChip name={l} />
+                  </button>
+                ))}
+              </div>
+            )}
+            <div className="mt-1.5 text-[10px] text-[var(--t-dim)]">
+              {full ? "At the 8-label cap — remove one first." : "Enter adds. Names trim, dedupe case-insensitively, cap at 8."}
+            </div>
+          </div>
+        </>
+      )}
+    </span>
   );
 }
 

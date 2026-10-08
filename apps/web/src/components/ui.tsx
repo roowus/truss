@@ -9,6 +9,7 @@ import { clampPopoverPos } from "@/lib/popover";
 import { selectTriggerHeight } from "@/lib/controls";
 import { HarnessLogo } from "./harnessLogos";
 import { ICON_PATHS } from "@/lib/icons";
+import { labelColor } from "@/lib/labels";
 import type { SessionState } from "@/lib/proto";
 
 /* the glyph registry lives in @/lib/icons (issue #99); filled entries
@@ -144,6 +145,41 @@ export function IconBtn({ icon, label, className, active, ...rest }: ButtonHTMLA
 export const Kbd = ({ children }: { children: ReactNode }) => (
   <kbd className="inline-grid place-items-center min-w-[18px] h-[18px] px-1 rounded border border-[var(--t-line2)] bg-[var(--t-bg2)] font-mono text-[10px] text-[var(--t-mute)]">{children}</kbd>
 );
+
+/* GitHub-style label chip (issue #174): the color comes from labelColor, so
+   the same name reads as the same chip on every surface — sidebar rows, the
+   sidebar filter, the chat header. Display-only by default; onRemove adds a
+   small × (the header's editor). The chip's own width is capped by the
+   caller's className (rows are tight); the name truncates inside. */
+export function LabelChip({ name, onRemove, className }: { name: string; onRemove?: () => void; className?: string }) {
+  const color = labelColor(name);
+  return (
+    <span
+      className={cn("inline-flex items-center gap-0.5 h-4 pl-1.5 rounded-full text-[9.5px] font-medium leading-none min-w-0", onRemove ? "pr-0.5" : "pr-1.5", className)}
+      style={{
+        color,
+        background: `color-mix(in oklab, ${color} 14%, transparent)`,
+        boxShadow: `inset 0 0 0 1px color-mix(in oklab, ${color} 30%, transparent)`,
+      }}
+    >
+      <span className="truncate">{name}</span>
+      {onRemove && (
+        <button
+          type="button"
+          aria-label={`Remove label “${name}”`}
+          title={`Remove label “${name}”`}
+          onClick={(e) => {
+            e.stopPropagation();
+            onRemove();
+          }}
+          className="shrink-0 inline-grid place-items-center w-3.5 h-3.5 rounded-full hover:bg-white/10"
+        >
+          <Icon name="x" size={8} />
+        </button>
+      )}
+    </span>
+  );
+}
 
 export function Empty({ icon, title, children }: { icon: string; title: string; children?: ReactNode }) {
   return (
