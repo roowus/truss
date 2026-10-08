@@ -42,7 +42,8 @@ import { Btn, Icon, StateDot, TrussLogo } from "./ui";
 import { harnessStyle } from "@/lib/format";
 import { cn } from "@/utils/cn";
 
-/* Every panel's text is findable (issue #194 + PR #210 review): wrap each
+/* Every panel's text is findable (issue #194 + the developer's review
+   feedback on PR #210): wrap each
    panel in one generic DOM find provider keyed by (dock api, panel id).
    Terminals are the ONE opt-out — TerminalPanel registers its own xterm
    SearchAddon provider because the DOM only holds the buffer's visible

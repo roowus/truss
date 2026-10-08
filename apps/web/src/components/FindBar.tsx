@@ -4,7 +4,8 @@ import { Icon } from "@/components/ui";
 import { cn } from "@/utils/cn";
 
 /**
- * The in-app find bar (issue #194; scope picker from PR #210 review). One
+ * The in-app find bar (issue #194; the scope picker is the developer's
+ * review feedback on PR #210, given in the working session). One
  * global row under the desktop strip, rendered by Workspace while the find
  * state is open. The bar owns the keystrokes; the controller
  * (lib/findRuntime.ts) owns the query, the scope, and every panel's marks.
@@ -79,7 +80,10 @@ export function FindBar() {
         style={{ caretColor: "var(--t-amber)" }}
       />
       <span className={cn("shrink-0 min-w-12 text-center text-[10.5px] tabular-nums", s.total ? "text-[var(--t-mute)]" : "text-[var(--t-dim)]")}>
-        {s.query.trim() ? (s.total ? `${s.pos + 1} / ${s.total}` : "none") : ""}
+        {/* pos -1 with matches: the leading hit sits in a hidden tab or
+            another workspace — typing never navigates (audit round 2, B2);
+            Enter crosses to it */}
+        {s.query.trim() ? (s.total ? (s.pos >= 0 ? `${s.pos + 1} / ${s.total}` : `${s.total} found`) : "none") : ""}
       </span>
       {/* every button in the bar: mousedown preventDefault keeps keyboard
           focus in the input — a click that moved focus would turn the next
@@ -106,7 +110,7 @@ export function FindBar() {
         <Icon name="down" size={11} />
       </button>
       {/* the scope picker: one quiet cycler — panel → workspace → all
-          (PR #210 review: every panel's text is fair game, and the choice
+          (the developer's PR #210 review: every panel's text is fair game, and the choice
           stays out of the way until wanted) */}
       <button
         onMouseDown={(e) => e.preventDefault()}
