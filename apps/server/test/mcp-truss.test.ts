@@ -457,6 +457,14 @@ test("schedule_task: files recurring cards, validates cron, clears; posts a feed
   assert.equal(resched.isError, false, resched.text);
   assert.equal(resched.data.schedule, "*/30 * * * *");
 
+  /* audit B3: omitting the schedule key on the update path must NOT silently
+     clear the card — only an explicit null/"" clears */
+  const omitted = await call("schedule_task", { id: made.data.id }, agentA);
+  assert.equal(omitted.isError, true);
+  assert.ok(omitted.text.includes("schedule is required"), omitted.text);
+  const stillThere = await call("list_tasks");
+  assert.equal(stillThere.data.find((t: Ev) => t.id === made.data.id)?.schedule, "*/30 * * * *", "schedule survives the omitted-key call");
+
   /* clearing with null drops schedule + next slot */
   const cleared = await call("schedule_task", { id: made.data.id, schedule: null }, agentA);
   assert.equal(cleared.data.schedule, undefined);

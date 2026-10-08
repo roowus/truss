@@ -517,7 +517,12 @@ async function callTool(name: string, a: Record<string, any>, callerId?: string)
     }
     case "schedule_task": {
       if (!callerId) throw new Error("unscoped MCP connection — respawn the session");
-      const sched = a.schedule === null ? null : String(a.schedule ?? "");
+      /* audit B3: an OMITTED schedule on the update path must not silently
+         clear a card's recurrence — only an explicit null/"" clears */
+      if (a.schedule === undefined) {
+        throw new Error("schedule is required (pass null explicitly to clear a card's schedule)");
+      }
+      const sched = a.schedule === null ? null : String(a.schedule);
       let task;
       if (a.id) {
         task = updateTask(String(a.id), { schedule: sched });

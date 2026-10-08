@@ -267,6 +267,83 @@ test("tick failure: spawn errors stamp the card, advance the slot, and report", 
   }
 });
 
+test("overlapping ticks never double-fire (audit B1): a slow spawn serializes the loop", async () => {
+  const { db, cleanup } = await freshServer("sched-race");
+  const tasks = await import("../src/tasks.js");
+  const feed = await import("../src/feed.js");
+  const sessions = await import("../src/sessions.js");
+  const scheduler = await import("../src/scheduler.js");
+  /* first spawn blocks on a gate we control; later spawns go through */
+  let gate!: () => void;
+  let spawnCalls = 0;
+  let firstSpawnEntered!: Promise<void>;
+  {
+    let entered!: () => void;
+    firstSpawnEntered = new Promise((r) => (entered = r));
+    const slow: HarnessAdapter = {
+      id: "fakeslow" as never,
+      capabilities: { permissions: false, subagents: false, streaming: true, queueWhileRunning: true },
+      async listModels() {
+        return [];
+      },
+      async spawn(opts: SessionOpts): Promise<AdapterHandle> {
+        spawnCalls++;
+        if (spawnCalls === 1) {
+          entered();
+          await new Promise<void>((r) => (gate = r));
+        }
+        return { sessionId: opts.sessionId };
+      },
+      send() {},
+      interrupt() {},
+      async *events() {
+        await new Promise(() => {});
+        yield undefined as never;
+      },
+      dispose() {},
+    };
+    sessions.registerAdapter("fakeslow" as never, slow);
+  }
+  const spawnedIds: string[] = [];
+  try {
+    wipe(tasks, db, feed);
+    /* TWO cards due in the same tick: the pre-fix bug had tick 2 fire B from
+       its stale snapshot while tick 1 was still awaiting A's spawn */
+    const a = tasks.createTask({ title: "A", prompt: "a", cwd: "/tmp", harness: "fakeslow", schedule: "* * * * *" });
+    const b = tasks.createTask({ title: "B", prompt: "b", cwd: "/tmp", harness: "fakeslow", schedule: "* * * * *" });
+    const past = Date.now() - 60_000;
+    db.store.run(`UPDATE tasks SET next_run_at = ? WHERE id IN (?, ?)`, past, a.id, b.id);
+
+    const tick1 = scheduler.runSchedulerTick(Date.now()); // not awaited: parks inside A's spawn
+    await firstSpawnEntered;
+
+    const tick2 = await scheduler.runSchedulerTick(Date.now() + 1000);
+    assert.deepEqual(tick2, { ran: [], skipped: [], failed: [] }, "a collided tick is a no-op, not a second pass");
+
+    gate(); // let A's spawn finish; tick 1 then processes B itself
+    const r1 = await tick1;
+    assert.deepEqual([...r1.ran].sort(), [a.id, b.id].sort());
+    assert.equal(spawnCalls, 2, "each card spawned exactly once across both ticks");
+    for (const s of [a.id, b.id]) {
+      const sid = tasks.getTaskApi(s)!.sessionId!;
+      assert.ok(sid);
+      spawnedIds.push(sid);
+    }
+    /* waterlines advanced once per card, not twice */
+    const now = Date.now();
+    assert.ok(tasks.getTaskApi(a.id)!.nextRunAt! > now - 60_000);
+    assert.ok(tasks.getTaskApi(b.id)!.nextRunAt! > now - 60_000);
+  } finally {
+    sessions.unregisterAdapter("fakeslow" as never);
+    for (const sid of spawnedIds) {
+      sessions.closeSession(sid);
+      db.store.deleteSession(sid);
+    }
+    wipe(tasks, db, feed);
+    cleanup();
+  }
+});
+
 test("tick only fires todo/doing cards; restoring a parked card re-arms future slots", async () => {
   const { db, cleanup } = await freshServer("sched-columns");
   const tasks = await import("../src/tasks.js");

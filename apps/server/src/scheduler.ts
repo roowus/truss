@@ -1,6 +1,6 @@
 import { store } from "./db.js";
 import { nextCronRun } from "./cron.js";
-import { advanceTaskSchedule, dueScheduledTasks, runTask, stampTaskRun } from "./tasks.js";
+import { advanceTaskSchedule, dueScheduledTasks, getTask, runTask, stampTaskRun } from "./tasks.js";
 import { isLive } from "./sessions.js";
 import { postFeed } from "./feed.js";
 
@@ -34,13 +34,13 @@ export interface TickResult {
   failed: string[];
 }
 
-/** Fire times of `schedule` in [firstMiss, nowMs], capped — the cap keeps a
-    months-down every-minute card from iterating half a million slots just
-    to write a feed note. */
+/** Fire times of `schedule` in [firstMiss, nowMs], capped at 501 — the cap
+    keeps a months-down every-minute card from iterating half a million slots
+    just to write a feed note. 501 means "500 or more missed". */
 function countSlots(schedule: string, firstMiss: number, nowMs: number): number {
   let count = 0;
   let t = firstMiss;
-  while (t <= nowMs && count < 500) {
+  while (t <= nowMs && count <= 500) {
     count++;
     const next = nextCronRun(schedule, t);
     if (next == null || next <= t) break; // unreachable for validated schedules
@@ -49,55 +49,73 @@ function countSlots(schedule: string, firstMiss: number, nowMs: number): number 
   return count;
 }
 
+/* Ticks are serialized (audit B1): a slow spawn must not let the next
+   minute's tick re-fire cards from a stale due-snapshot. A collided tick
+   simply skips — the waterlines make the following minute catch anything
+   still due, so skipping costs at most a minute of latency. */
+let tickInFlight = false;
+
 export async function runSchedulerTick(nowMs = Date.now()): Promise<TickResult> {
   const result: TickResult = { ran: [], skipped: [], failed: [] };
-  for (const task of dueScheduledTasks(nowMs)) {
-    const schedule = task.schedule!;
-    const missed = countSlots(schedule, task.next_run_at!, nowMs) - 1; // minus the slot we fire now
-    /* consume the slot(s) first: whatever happens below, this firing is over */
-    advanceTaskSchedule(task.id, nowMs);
+  if (tickInFlight) return result;
+  tickInFlight = true;
+  try {
+    for (const due of dueScheduledTasks(nowMs)) {
+      /* re-read the row fresh: the snapshot goes stale the moment an await
+         (or the user) intervenes — a card deleted, cleared, or fired since
+         the snapshot must not run */
+      const task = getTask(due.id);
+      if (!task?.schedule || task.next_run_at == null || task.next_run_at > nowMs) continue;
+      if (task.status !== "todo" && task.status !== "doing") continue;
+      const schedule = task.schedule;
+      const missed = countSlots(schedule, task.next_run_at, nowMs) - 1; // minus the slot we fire now
+      /* consume the slot(s) first: whatever happens below, this firing is over */
+      advanceTaskSchedule(task.id, nowMs);
 
-    const linked = task.session_id ? store.getSession(task.session_id) : undefined;
-    if (linked && isLive(linked.id) && (linked.state === "running" || linked.state === "spawning")) {
-      result.skipped.push(task.id);
-      postFeed({
-        type: "note",
-        title: `Skipped scheduled run: ${task.title}`,
-        body: "The card's previous run is still going, so this slot was skipped. The next slot stays on schedule.",
-        importance: "low",
-        data: { taskId: task.id },
-        dedupeKey: `cron-skip:${task.id}:${Math.floor(nowMs / 3_600_000)}`,
-      });
-      continue;
-    }
-
-    try {
-      await runTask(task.id);
-      result.ran.push(task.id);
-      if (missed > 0) {
+      const linked = task.session_id ? store.getSession(task.session_id) : undefined;
+      if (linked && isLive(linked.id) && (linked.state === "running" || linked.state === "spawning")) {
+        result.skipped.push(task.id);
         postFeed({
-          type: "task_run",
-          title: `Caught up scheduled task: ${task.title}`,
-          body: `Ran once now; skipped ${missed} missed run${missed === 1 ? "" : "s"} while down. Coalesce policy: downtime collapses to a single run.`,
-          importance: "normal",
+          type: "note",
+          title: `Skipped scheduled run: ${task.title}`,
+          body: "The card's previous run is still going, so this slot was skipped. The next slot stays on schedule.",
+          importance: "low",
           data: { taskId: task.id },
-          dedupeKey: `cron-catchup:${task.id}:${Math.floor(nowMs / 86_400_000)}`,
+          dedupeKey: `cron-skip:${task.id}:${Math.floor(nowMs / 3_600_000)}`,
+        });
+        continue;
+      }
+
+      try {
+        await runTask(task.id);
+        result.ran.push(task.id);
+        if (missed > 0) {
+          postFeed({
+            type: "task_run",
+            title: `Caught up scheduled task: ${task.title}`,
+            body: `Ran once now; skipped ${missed >= 500 ? "500+" : missed} missed run${missed === 1 ? "" : "s"} while down. Coalesce policy: downtime collapses to a single run.`,
+            importance: "normal",
+            data: { taskId: task.id },
+            dedupeKey: `cron-catchup:${task.id}:${Math.floor(nowMs / 86_400_000)}`,
+          });
+        }
+      } catch (err) {
+        result.failed.push(task.id);
+        stampTaskRun(task.id, nowMs);
+        postFeed({
+          type: "error",
+          title: `Scheduled run failed: ${task.title}`,
+          body: String(err instanceof Error ? err.message : err),
+          importance: "high",
+          data: { taskId: task.id },
+          dedupeKey: `cron-fail:${task.id}:${Math.floor(nowMs / 3_600_000)}`,
         });
       }
-    } catch (err) {
-      result.failed.push(task.id);
-      stampTaskRun(task.id, nowMs);
-      postFeed({
-        type: "error",
-        title: `Scheduled run failed: ${task.title}`,
-        body: String(err instanceof Error ? err.message : err),
-        importance: "high",
-        data: { taskId: task.id },
-        dedupeKey: `cron-fail:${task.id}:${Math.floor(nowMs / 3_600_000)}`,
-      });
     }
+    return result;
+  } finally {
+    tickInFlight = false;
   }
-  return result;
 }
 
 /** Boot: catch up once from the waterlines, then tick just past each minute
