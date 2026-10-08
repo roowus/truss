@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { detectBackend } from "@/lib/backend";
 import { store, useApp } from "@/lib/store";
 import { desktops, useDesktops } from "@/lib/desktops";
@@ -62,6 +62,13 @@ function Shell() {
   const [palette, setPalette] = useState(false);
   const [addHost, setAddHost] = useState(false);
   const [sidebar, setSidebar] = useState(() => window.innerWidth >= 900);
+  /* a modal owns the keyboard: the find chord is still intercepted (the
+     browser find never opens) but no bar mounts under an overlay — its
+     autofocus would steal the dialog's field (audit B3). Read through a
+     ref: the capture listener below registers once. */
+  const modalOpen = dialog || palette || addHost;
+  const modalRef = useRef(modalOpen);
+  modalRef.current = modalOpen;
   const density = useDesktops((s) => s.settings.density);
   const sidebarWidth = density === "compact" ? 246 : 276;
   const openNew = useCallback((preset?: NewSessionPreset) => {
@@ -127,6 +134,7 @@ function Shell() {
     const find = (e: KeyboardEvent) => {
       if (!isFindChord(e)) return;
       e.preventDefault();
+      if (modalRef.current) return;
       openFindInActivePanel();
     };
     const onAddHost = () => setAddHost(true);
