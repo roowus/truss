@@ -377,10 +377,12 @@ function LabelStrip({ id, meta }: { id: string; meta: SessionMeta }) {
               className="fixed z-[170] w-56 rounded-lg bg-[var(--t-bg2)] border border-[var(--t-line2)] shadow-2xl p-2 t-pop"
               style={popPos ?? { top: -9999, left: -9999 }}
             >
+              {/* the input stays enabled while a write is in flight (busy is
+                  enforced inside add) — disabling it would drop focus, so a
+                  follow-up Escape would miss the close handler */}
               <input
                 autoFocus
                 value={draft}
-                disabled={busy}
                 onChange={(e) => setDraft(e.target.value)}
                 onKeyDown={(e) => {
                   if (e.key === "Enter") add(draft);
@@ -388,7 +390,7 @@ function LabelStrip({ id, meta }: { id: string; meta: SessionMeta }) {
                 }}
                 placeholder="New label name"
                 maxLength={32}
-                className="w-full h-7 px-2 rounded-md bg-[var(--t-bg1)] border border-[var(--t-line2)] text-[12px] text-[var(--t-fg)] outline-none focus:border-[var(--t-line2)] placeholder:text-[var(--t-dim)] disabled:opacity-50"
+                className="w-full h-7 px-2 rounded-md bg-[var(--t-bg1)] border border-[var(--t-line2)] text-[12px] text-[var(--t-fg)] outline-none focus:border-[var(--t-line2)] placeholder:text-[var(--t-dim)]"
               />
               {suggestions.length > 0 && (
                 <div className="mt-1.5 flex flex-wrap gap-1" role="group" aria-label="Labels already in use">
