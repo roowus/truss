@@ -24,11 +24,12 @@ issue right now, and if so, which one. Cheap and deterministic: no wandering.
    - is already being worked: a PR body or title references it
      (`gh pr list --repo roowus/truss --state open --json number,title,body`
      and match `#<issue>`), or a branch named for it exists
-   - needs planning, not coding: labeled `new feature` or `area: platform` —
-     UNLESS it also carries `build-me`, the developer's explicit go signal
-     (they label it when they want it built; everything else in those classes
-     stays parked). The developer designs those first; `build-me` is how they
-     release one to the pipeline at their own pace.
+   - labeled `new feature` or `area: platform` WITHOUT `build-me`. Those are
+     the developer's to design and release at their pace.
+   FIRST RULE, overrides everything: **any issue labeled `build-me` is
+   eligible immediately, whatever its other labels.** The developer applied
+   it by hand as a go signal. Never exclude, hold, or skip a `build-me`
+   issue; if several carry it, they sort by priority like anything else.
    - is labeled `question`, `duplicate`, `wontfix`, `invalid`
 3. Sort what remains: `priority: critical` first, then `high`, then
    `medium`, then `low`; ties broken by oldest first.
