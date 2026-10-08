@@ -1,10 +1,12 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { IDockviewPanelProps } from "dockview-react";
 import { createPortal } from "react-dom";
 import { store, useApp, useNow } from "@/lib/store";
 import { ago } from "@/lib/format";
 import { Btn, Empty, HarnessMark, Icon, Select, Spinner } from "@/components/ui";
 import { openPanel } from "@/lib/workspace";
+import { closeFind, domFindProvider, registerFindProvider, useFindOpen } from "@/lib/findRuntime";
+import { FindBar } from "@/components/FindBar";
 import { Markdown } from "./Markdown";
 import type { FeedItem, FeedState, FeedType } from "@/lib/proto";
 import { cn } from "@/utils/cn";
@@ -31,7 +33,7 @@ const TYPE_META: Record<FeedType, { icon: string; color: string; label: string }
 
 const IMPORTANCE_RANK: Record<string, number> = { urgent: 0, high: 1, normal: 2, low: 3 };
 
-export function FeedPanel(_props: IDockviewPanelProps) {
+export function FeedPanel({ api, containerApi }: IDockviewPanelProps) {
   const feed = useApp((s) => s.feed);
   const loaded = useApp((s) => s.feedLoaded);
   const sessions = useApp((s) => s.sessions);
@@ -40,6 +42,14 @@ export function FeedPanel(_props: IDockviewPanelProps) {
   const [types, setTypes] = useState<Set<FeedType>>(new Set());
   const [stateFilter, setStateFilter] = useState<"inbox" | "unread" | "saved" | "done" | "dismissed" | "all">("inbox");
   const [q, setQ] = useState("");
+
+  /* app-native find (issue #194): the visible cards' text is searchable.
+     (The header's own box above FILTERS the inbox; the find bar MARKS —
+     they compose.) */
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const findProvider = useMemo(() => domFindProvider(() => scrollRef.current), []);
+  useEffect(() => registerFindProvider(containerApi, api?.id, findProvider), [containerApi, api?.id, findProvider]);
+  const find = useFindOpen(containerApi, api?.id);
 
   const items = useMemo(() => {
     const needle = q.trim().toLowerCase();
@@ -102,12 +112,17 @@ export function FeedPanel(_props: IDockviewPanelProps) {
         {types.size > 0 && <button onClick={() => setTypes(new Set())} className="text-[10px] text-[var(--t-dim)] hover:text-[var(--t-fg)] px-1">clear</button>}
       </div>
 
-      <div className="flex-1 min-h-0 overflow-auto t-scroll p-3 space-y-2">
-        {items.length === 0 ? (
-          <Empty icon="bolt" title="Inbox zero">{stateFilter === "inbox" ? "Nothing waiting. Agents post reports and file decisions here." : "Nothing matches these filters."}</Empty>
-        ) : (
-          items.map((item) => <FeedCard key={item.id} item={item} sessions={sessions} now={now} setState={setState} />)
-        )}
+      {/* the relative wrapper keeps the find bar parked at the panel's
+          top-right instead of scrolling away with the cards */}
+      <div className="relative flex-1 min-h-0">
+        {find.open && <FindBar provider={findProvider} nonce={find.nonce} onClose={closeFind} />}
+        <div ref={scrollRef} className="h-full overflow-auto t-scroll p-3 space-y-2">
+          {items.length === 0 ? (
+            <Empty icon="bolt" title="Inbox zero">{stateFilter === "inbox" ? "Nothing waiting. Agents post reports and file decisions here." : "Nothing matches these filters."}</Empty>
+          ) : (
+            items.map((item) => <FeedCard key={item.id} item={item} sessions={sessions} now={now} setState={setState} />)
+          )}
+        </div>
       </div>
     </div>
   );

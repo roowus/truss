@@ -16,6 +16,8 @@ import { RAIL_INSET, activeRailIndex, railIndexAtOffset, railMarkTop, railNatura
 import { createBrowserVoiceInput, appendTranscript, type BrowserVoiceController } from "@/lib/voice";
 import type { VoiceState } from "@/lib/voiceInput";
 import { openPanel, openAgentShell, renameSessionPanels } from "@/lib/workspace";
+import { closeFind, domFindProvider, registerFindProvider, useFindOpen } from "@/lib/findRuntime";
+import { FindBar } from "@/components/FindBar";
 import { Btn, Empty, HarnessMark, Icon, IconBtn, Select, Spinner, StateDot, STATE_META } from "@/components/ui";
 import { VoiceVisualizer } from "@/components/VoiceVisualizer";
 import { Markdown } from "./Markdown";
@@ -24,7 +26,7 @@ import { cn } from "@/utils/cn";
 type P = { sessionId: string };
 const drafts = new Map<string, string>();
 
-export function ChatPanel({ params, api }: IDockviewPanelProps<P>) {
+export function ChatPanel({ params, api, containerApi }: IDockviewPanelProps<P>) {
   const id = params.sessionId;
   const meta = useApp((s) => s.sessions[id]);
   const view = useApp((s) => s.views[id]);
@@ -67,7 +69,7 @@ export function ChatPanel({ params, api }: IDockviewPanelProps<P>) {
           </Empty>
         </div>
       ) : (
-        <ChatWidthProvider timeline={<Timeline id={id} view={view} />} composer={<Composer id={id} active={active} />} perms={view ? <PermDock id={id} view={view} /> : null} />
+        <ChatWidthProvider timeline={<Timeline id={id} view={view} api={api} containerApi={containerApi} />} composer={<Composer id={id} active={active} />} perms={view ? <PermDock id={id} view={view} /> : null} />
       )}
     </div>
   );
@@ -282,11 +284,18 @@ function ChatHeader({ id }: { id: string }) {
 }
 
 /* ---------------- timeline ---------------- */
-function Timeline({ id, view }: { id: string; view: SessionView }) {
+function Timeline({ id, view, api, containerApi }: { id: string; view: SessionView; api: { id: string }; containerApi: object }) {
   const ref = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
   const [showJump, setShowJump] = useState(false);
   const meta = useApp((s) => s.sessions[id]);
+
+  /* app-native find (issue #194): this transcript is searchable — the
+     provider walks the scroll element's text and paints with CSS
+     highlights; the bar renders only while this panel is the find target */
+  const findProvider = useMemo(() => domFindProvider(() => ref.current), []);
+  useEffect(() => registerFindProvider(containerApi, api?.id, findProvider), [containerApi, api?.id, findProvider]);
+  const find = useFindOpen(containerApi, api?.id);
 
   const onScroll = () => {
     const el = ref.current!;
@@ -314,6 +323,7 @@ function Timeline({ id, view }: { id: string; view: SessionView }) {
 
   return (
     <div className="relative flex-1 min-h-0">
+      {find.open && <FindBar provider={findProvider} nonce={find.nonce} onClose={closeFind} />}
       <div ref={ref} onScroll={() => { onScroll(); railSpy(ref.current, railItems, setRailActive); }} className="absolute inset-0 overflow-y-auto t-scroll">
         {view.items.length === 0 ? (
           <EmptyChat id={id} />

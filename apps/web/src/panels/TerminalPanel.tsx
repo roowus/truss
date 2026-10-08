@@ -1,12 +1,15 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { IDockviewPanelProps } from "dockview-react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
+import { SearchAddon } from "@xterm/addon-search";
 import "@xterm/xterm/css/xterm.css";
 import { store, useApp } from "@/lib/store";
 import { cn } from "@/utils/cn";
 import { desktops, useDesktops } from "@/lib/desktops";
 import { shortPath } from "@/lib/format";
+import { closeFind, registerFindProvider, terminalFindProvider, useFindOpen } from "@/lib/findRuntime";
+import { FindBar } from "@/components/FindBar";
 import { Btn, Icon } from "@/components/ui";
 import { openFreeShell } from "@/lib/workspace";
 
@@ -41,6 +44,14 @@ export function TerminalPanel({ params, api, containerApi }: IDockviewPanelProps
   activeRef.current = workspaceActive;
   const [nonce, setNonce] = useState(0);
 
+  /* app-native find (issue #194): the shell's scrollback is searchable via
+     xterm's SearchAddon. The live pair is read through a ref — the provider
+     outlives any one terminal instance (reattach, font-size rebuilds) */
+  const termRef = useRef<{ term: Terminal; search: SearchAddon } | null>(null);
+  const findProvider = useMemo(() => terminalFindProvider(() => termRef.current), []);
+  useEffect(() => registerFindProvider(containerApi, api?.id, findProvider), [containerApi, api?.id, findProvider]);
+  const find = useFindOpen(containerApi, api?.id);
+
   useEffect(() => {
     if (workspaceActive) requestAnimationFrame(() => refit.current());
   }, [workspaceActive]);
@@ -60,7 +71,10 @@ export function TerminalPanel({ params, api, containerApi }: IDockviewPanelProps
     });
     const fit = new FitAddon();
     term.loadAddon(fit);
+    const search = new SearchAddon();
+    term.loadAddon(search);
     term.open(el);
+    termRef.current = { term, search };
     let lastSent = { cols: 0, rows: 0 };
     const conn = backend.connectTerminal(params.terminalId, {
       onHello: (h) => {
@@ -110,6 +124,7 @@ export function TerminalPanel({ params, api, containerApi }: IDockviewPanelProps
       vis?.dispose();
       act?.dispose();
       conn.close();
+      termRef.current = null;
       term.dispose();
       refit.current = () => {};
     };
@@ -127,6 +142,7 @@ export function TerminalPanel({ params, api, containerApi }: IDockviewPanelProps
         {cwd && <><span>·</span><span className="truncate">{shortPath(cwd)}</span></>}
       </div>
       <div className="relative flex-1 min-h-0">
+        {find.open && <FindBar provider={findProvider} nonce={find.nonce} onClose={closeFind} />}
         <div ref={host} className="absolute inset-0 pl-2 pt-1" />
         {status.kind === "exited" && (
           <div className="absolute right-3 bottom-3 flex items-center gap-2 rounded-md bg-[var(--t-bg2)] border border-[var(--t-line2)] px-2.5 py-1.5 shadow-xl">
