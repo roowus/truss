@@ -98,7 +98,7 @@ test("terminalMatchCount: literal, case-insensitive, wrap-aware, scrollback incl
   assert.equal(terminalMatchCount(stubTerm([]), "x"), 0, "empty buffer");
 });
 
-/* ---- the scope picker math (PR #210 review: search any panel, choose the
+/* ---- the scope picker math (developer feedback on PR #210: search any panel, choose the
    scope) — the cycle order and the cross-entry step are the parts a UI
    smoke can't pin exhaustively. ---- */
 

@@ -1,6 +1,7 @@
 /**
  * The app-side machinery for app-native find (issue #194; the scope picker
- * is PR #210 review feedback) — everything the pure core
+ * is the developer's review feedback on PR #210, given in the working
+ * session) — everything the pure core
  * (lib/findInPanel.ts) deliberately does not know: which panel is focused,
  * how a panel paints its matches, and how a search spans panels and
  * workspaces.
@@ -57,6 +58,8 @@ export interface FindProvider {
   clearCurrent(): void;
   /** Remove every mark and stop watching for content changes. */
   clear(): void;
+  /** The panel unmounted — release everything (clear + the provider's style element). */
+  dispose?(): void;
   /** Hand focus back to the panel content after the bar closes. */
   focus?(): void;
   /** True when the panel is on screen — hidden tabs/workspaces get activated before a reveal. */
@@ -83,7 +86,10 @@ export function registerFindProvider(dockApi: object | undefined, panelId: strin
   byPanel.set(panelId, provider);
   return () => {
     const m = providers.get(dockApi);
-    if (m?.get(panelId) === provider) m.delete(panelId);
+    if (m?.get(panelId) === provider) {
+      m.delete(panelId);
+      provider.dispose?.();
+    }
   };
 }
 
@@ -225,6 +231,23 @@ const prodSource: FindScopeSource = {
       .filter((s): s is { api: DockviewApi } => !!s.api),
 };
 
+/* read-only debug surface (store.ts exposes window.__truss the same way) —
+   the controller's state is otherwise invisible to a browser smoke */
+if (typeof window !== "undefined") {
+  (window as unknown as { __trussFind?: unknown }).__trussFind = {
+    state: () => snap,
+    entries: () =>
+      entries.map((e, i) => ({
+        i,
+        panel: e.panel,
+        count: e.count,
+        current: e.current,
+        visible: e.provider.isVisible(),
+        active: i === activeEntry,
+      })),
+  };
+}
+
 /**
  * Rebuild the entry list for the current scope. Providers that fell out of
  * scope (a narrower scope, a closed panel) get their marks wiped; surviving
@@ -308,14 +331,12 @@ function applyQuery(): void {
     if (ai >= 0) {
       activeEntry = ai;
       const e = entries[ai];
+      /* typing marks and counts; it NAVIGATES only within what's already on
+         screen (audit round 2, B2 — Chrome/VS Code reveal on Enter, not on
+         keystrokes). A leading match in a hidden tab or another workspace
+         waits for Enter/Shift+Enter, which crosses via findStep. */
       if (e.provider.isVisible()) {
         e.current = e.provider.reveal(0);
-      } else {
-        e.current = 0;
-        activateEntry(e, () => {
-          e.current = e.provider.reveal(0);
-          refreshTotals();
-        });
       }
     }
   }
@@ -326,7 +347,7 @@ function applyQuery(): void {
  * The Cmd/Ctrl+F handler (App.tsx). Intercepted unconditionally up there —
  * the browser's find can only misfire over dockview. Anchors on the focused
  * panel (the ACTIVE workspace's active panel). Every panel is searchable
- * (PR #210 review), so there is no "nothing to search" toast anymore — an
+ * (the developer's PR #210 review feedback), so there is no "nothing to search" toast anymore — an
  * empty workspace is the only no-op.
  */
 export function openFindInActivePanel(): void {
@@ -339,6 +360,11 @@ export function openFindInActivePanel(): void {
 
 export function closeFind(): void {
   if (!snap.open) return;
+  if (queryRaf) {
+    /* a coalesced applyQuery must not re-mark after close */
+    cancelAnimationFrame(queryRaf);
+    queryRaf = 0;
+  }
   for (const e of entries) {
     e.provider.onRecount = undefined;
     e.provider.clear();
@@ -349,10 +375,17 @@ export function closeFind(): void {
   set({ open: false, total: 0, pos: -1 });
 }
 
-/** The bar's typing path. */
+/** The bar's typing path. The input updates instantly; the scope-wide
+    re-search coalesces to one pass per frame (audit round 2, B4) — in "all
+    workspaces" a keystroke per panel per character would stutter. */
+let queryRaf = 0;
 export function findSetQuery(query: string): void {
   set({ query });
-  applyQuery();
+  if (queryRaf) return;
+  queryRaf = requestAnimationFrame(() => {
+    queryRaf = 0;
+    applyQuery();
+  });
 }
 
 /** Enter / Shift+Enter from the bar. */
@@ -395,29 +428,25 @@ export function cycleFindScope(): void {
 
 /* The CSS Custom Highlight API paints without touching the DOM — React
    never loses a text node to a wrapper element. Highlight names are
-   PER-PROVIDER (several panels paint at once in the wider scopes), with
-   their two ::highlight() rules injected into one shared style element —
-   the pseudo-class can't wildcard names, so static CSS can't serve. */
-const HL_STYLE_ID = "truss-find-hl";
+   PER-PROVIDER (several panels paint at once in the wider scopes), each
+   with its own tiny <style> — the pseudo-class can't wildcard names, so
+   static CSS can't serve; the element is removed when the panel unmounts
+   (audit round 2, B3: one shared sheet grew without bound). */
 let hlSeq = 0;
 
-function claimHighlightNames(): { all: string; current: string } {
+function claimHighlightNames(): { all: string; current: string; dispose(): void } {
   const id = ++hlSeq;
   const all = `truss-find-${id}`;
   const current = `truss-find-current-${id}`;
   const doc = typeof document !== "undefined" ? document : null;
-  if (doc) {
-    let el = doc.getElementById(HL_STYLE_ID) as HTMLStyleElement | null;
-    if (!el) {
-      el = doc.createElement("style");
-      el.id = HL_STYLE_ID;
-      doc.head.appendChild(el);
-    }
-    el.textContent +=
+  const el = doc?.createElement("style") ?? null;
+  if (el && doc) {
+    el.textContent =
       `::highlight(${all}){background-color:color-mix(in oklab,var(--t-amber) 32%,transparent);color:var(--t-fg)}` +
       `::highlight(${current}){background-color:var(--t-amber);color:#1b1305}`;
+    doc.head.appendChild(el);
   }
-  return { all, current };
+  return { all, current, dispose: () => el?.remove() };
 }
 
 const highlightsOK = () => typeof CSS !== "undefined" && "highlights" in CSS;
@@ -557,6 +586,10 @@ export function domFindProvider(root: () => HTMLElement | null): FindProvider {
         raf = 0;
       }
       clearMarks();
+    },
+    dispose() {
+      self.clear();
+      names.dispose(); // the per-provider style element (audit round 2, B3)
     },
     isVisible() {
       const el = root();
