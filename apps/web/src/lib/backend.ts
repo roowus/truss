@@ -139,8 +139,8 @@ export interface Backend {
   tailscaleServe(on: boolean): Promise<{ tailscale: NetInfo["tailscale"] }>;
   /** Tasks panel (kanban) */
   tasks(): Promise<{ tasks: TaskInfo[] }>;
-  createTask(body: { title: string; prompt: string; cwd: string; harness: string }): Promise<{ task: TaskInfo }>;
-  updateTask(id: string, patch: Partial<Pick<TaskInfo, "title" | "prompt" | "status">>): Promise<unknown>;
+  createTask(body: { title: string; prompt: string; cwd: string; harness: string; schedule?: string }): Promise<{ task: TaskInfo }>;
+  updateTask(id: string, patch: Partial<Pick<TaskInfo, "title" | "prompt" | "status">> & { schedule?: string | null }): Promise<unknown>;
   deleteTask(id: string): Promise<unknown>;
   runTask(id: string): Promise<{ session: SessionMeta }>;
   /** Todos (user-facing tasks filed by agents) */
