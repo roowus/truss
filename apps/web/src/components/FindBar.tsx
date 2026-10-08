@@ -1,57 +1,40 @@
-import { useEffect, useRef, useState } from "react";
-import type { FindProvider } from "@/lib/findRuntime";
+import { useEffect, useRef } from "react";
+import { closeFind, cycleFindScope, findSetQuery, findStep, useFindState, type FindScope } from "@/lib/findRuntime";
 import { Icon } from "@/components/ui";
 import { cn } from "@/utils/cn";
 
 /**
- * The in-app find bar (issue #194): one of these per searchable panel,
- * rendered as an overlay at the panel's top-right corner while that panel
- * is the find target (Cmd/Ctrl+F — App.tsx picks the focused panel).
+ * The in-app find bar (issue #194; scope picker from PR #210 review). One
+ * global row under the desktop strip, rendered by Workspace while the find
+ * state is open. The bar owns the keystrokes; the controller
+ * (lib/findRuntime.ts) owns the query, the scope, and every panel's marks.
  *
- * The bar owns the keystrokes, the provider (lib/findRuntime.ts) owns the
- * marks: typing paints every match and jumps to the first, Enter /
- * Shift+Enter cycle with wrap-around, Esc closes and hands focus back to
- * the panel. The browser's native find never opens — App intercepts the
- * chord before anything else sees it.
+ * Typing marks matches across the whole scope and jumps to the first;
+ * Enter / Shift+Enter cycle with wrap-around (crossing panels, and
+ * workspaces in the widest scope); Esc closes. The scope cycler widens the
+ * search: this panel → this workspace → all workspaces.
+ *
+ * The browser's native find never opens — App intercepts the chord in the
+ * capture phase before anything else (xterm included) sees it.
  */
-export function FindBar({ provider, nonce, onClose }: { provider: FindProvider; nonce: number; onClose: () => void }) {
-  const [q, setQ] = useState("");
-  const [count, setCount] = useState(0);
-  const [idx, setIdx] = useState(-1);
+
+const SCOPE_LABEL: Record<FindScope, string> = {
+  panel: "This panel",
+  space: "This workspace",
+  all: "All workspaces",
+};
+
+export function FindBar() {
+  const s = useFindState((x) => x);
   const inputRef = useRef<HTMLInputElement>(null);
   const rootRef = useRef<HTMLDivElement>(null);
 
+  /* mount + every chord re-fire: focus and select the query, browser-style */
   useEffect(() => {
     inputRef.current?.focus();
     inputRef.current?.select();
-  }, []);
-  /* re-firing Cmd/Ctrl+F with the bar already open re-selects the query,
-     browser-style (the nonce bump is the signal) */
-  useEffect(() => {
-    if (nonce > 0) {
-      inputRef.current?.focus();
-      inputRef.current?.select();
-    }
-  }, [nonce]);
-  /* a live panel (streaming chat, polling monitor) repaints under the open
-     bar and pushes the fresh count here */
-  useEffect(() => {
-    provider.onRecount = (n) => {
-      setCount(n);
-      setIdx((i) => (n ? Math.min(Math.max(i, 0), n - 1) : -1));
-    };
-    return () => {
-      provider.onRecount = undefined;
-    };
-  }, [provider]);
-  /* marks die with the bar: close, re-target, or the panel unmounting */
-  useEffect(
-    () => () => {
-      provider.clear();
-      provider.focus?.();
-    },
-    [provider],
-  );
+  }, [s.nonce]);
+
   /* Chrome/VS Code parity (audit B1): Esc dismisses the bar even after
      focus moves to the panel — clicking a match to read it must not strand
      the bar. The guards keep Esc's other owners: the bar's own input
@@ -65,72 +48,86 @@ export function FindBar({ provider, nonce, onClose }: { provider: FindProvider; 
       const t = e.target as HTMLElement | null;
       if (!t || rootRef.current?.contains(t)) return;
       if (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable || t.closest(".xterm")) return;
-      onClose();
+      closeFind();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
-
-  const apply = (value: string) => {
-    setQ(value);
-    const n = provider.setQuery(value);
-    setCount(n);
-    setIdx(n ? 0 : -1);
-  };
-  const step = (dir: 1 | -1) => setIdx(provider.step(dir));
+  }, []);
 
   return (
-    <div ref={rootRef} role="search" aria-label="Find in this panel" className="absolute top-2 right-3 z-20 flex items-center gap-1 h-7 pl-2 pr-1 rounded-md bg-[var(--t-bg2)] border border-[var(--t-line2)] shadow-xl t-pop">
-      <Icon name="search" size={11} className="text-[var(--t-dim)] shrink-0" />
+    <div ref={rootRef} role="search" aria-label="Find" className="shrink-0 flex items-center gap-2 px-3 h-8 border-b border-[var(--t-line)] bg-[var(--t-bg1)] t-pop">
+      <Icon name="search" size={12} className="text-[var(--t-dim)] shrink-0" />
       <input
         ref={inputRef}
-        value={q}
-        onChange={(e) => apply(e.target.value)}
+        value={s.query}
+        onChange={(e) => findSetQuery(e.target.value)}
         onKeyDown={(e) => {
           /* an IME composition confirm is text input, never a command
              (audit B4 — the composer's own rule, ChatPanel onKeyDown) */
           if (e.nativeEvent.isComposing) return;
           if (e.key === "Enter") {
             e.preventDefault();
-            step(e.shiftKey ? -1 : 1);
+            findStep(e.shiftKey ? -1 : 1);
           } else if (e.key === "Escape") {
             e.preventDefault();
-            onClose();
+            closeFind();
           }
         }}
-        placeholder="Find in panel"
-        aria-label="Find in this panel"
-        /* Cmd/Ctrl held while typing would re-fire the chord via App's
-           capture listener — the input itself needs no guard */
-        className="w-44 bg-transparent outline-none text-[12px] text-[var(--t-fg)] placeholder:text-[var(--t-dim)]"
+        placeholder="Find"
+        aria-label="Find text"
+        className="w-56 min-w-0 bg-transparent outline-none text-[12px] text-[var(--t-fg)] placeholder:text-[var(--t-dim)]"
         style={{ caretColor: "var(--t-amber)" }}
       />
-      <span className={cn("shrink-0 min-w-11 text-center text-[10px] tabular-nums", count ? "text-[var(--t-mute)]" : "text-[var(--t-dim)]")}>
-        {q.trim() ? (count ? `${idx + 1} / ${count}` : "none") : ""}
+      <span className={cn("shrink-0 min-w-12 text-center text-[10.5px] tabular-nums", s.total ? "text-[var(--t-mute)]" : "text-[var(--t-dim)]")}>
+        {s.query.trim() ? (s.total ? `${s.pos + 1} / ${s.total}` : "none") : ""}
       </span>
+      {/* every button in the bar: mousedown preventDefault keeps keyboard
+          focus in the input — a click that moved focus would turn the next
+          Enter into "activate this button" (found in the round-3 smoke:
+          the scope cycler appeared to ignore Enter) */}
       <button
-        onClick={() => step(-1)}
-        disabled={!count}
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={() => findStep(-1)}
+        disabled={!s.total}
         title="Previous match (Shift+Enter)"
         aria-label="Previous match"
-        className="w-5.5 h-5.5 grid place-items-center rounded text-[var(--t-mute)] hover:text-[var(--t-fg)] hover:bg-white/5 disabled:opacity-30 disabled:pointer-events-none"
+        className="w-6 h-6 grid place-items-center rounded text-[var(--t-mute)] hover:text-[var(--t-fg)] hover:bg-white/5 disabled:opacity-30 disabled:pointer-events-none"
       >
         <Icon name="down" size={11} className="rotate-180" />
       </button>
       <button
-        onClick={() => step(1)}
-        disabled={!count}
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={() => findStep(1)}
+        disabled={!s.total}
         title="Next match (Enter)"
         aria-label="Next match"
-        className="w-5.5 h-5.5 grid place-items-center rounded text-[var(--t-mute)] hover:text-[var(--t-fg)] hover:bg-white/5 disabled:opacity-30 disabled:pointer-events-none"
+        className="w-6 h-6 grid place-items-center rounded text-[var(--t-mute)] hover:text-[var(--t-fg)] hover:bg-white/5 disabled:opacity-30 disabled:pointer-events-none"
       >
         <Icon name="down" size={11} />
       </button>
+      {/* the scope picker: one quiet cycler — panel → workspace → all
+          (PR #210 review: every panel's text is fair game, and the choice
+          stays out of the way until wanted) */}
       <button
-        onClick={onClose}
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={cycleFindScope}
+        title="Find scope — click to widen: this panel, this workspace, all workspaces"
+        aria-label={`Find scope: ${SCOPE_LABEL[s.scope]}`}
+        className={cn(
+          "shrink-0 h-5.5 px-2 rounded-full border text-[10px] font-mono transition-colors",
+          s.scope === "panel"
+            ? "border-[var(--t-line)] text-[var(--t-dim)] hover:text-[var(--t-mute)]"
+            : "border-[var(--t-amber)]/50 bg-[var(--t-amber)]/10 text-[var(--t-amber)]",
+        )}
+      >
+        {SCOPE_LABEL[s.scope]}
+      </button>
+      <button
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={closeFind}
         title="Close find (Esc)"
         aria-label="Close find"
-        className="w-5.5 h-5.5 grid place-items-center rounded text-[var(--t-mute)] hover:text-[var(--t-fg)] hover:bg-white/5"
+        className="w-6 h-6 grid place-items-center rounded text-[var(--t-mute)] hover:text-[var(--t-fg)] hover:bg-white/5"
       >
         <Icon name="x" size={11} />
       </button>

@@ -1,10 +1,8 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import type { IDockviewPanelProps } from "dockview-react";
 import { store, useApp, useNow } from "@/lib/store";
 import { ago } from "@/lib/format";
 import { Btn, Empty, Icon, Spinner } from "@/components/ui";
-import { closeFind, domFindProvider, registerFindProvider, useFindOpen } from "@/lib/findRuntime";
-import { FindBar } from "@/components/FindBar";
 import { Spark } from "./Inspectors";
 import { fmtSize, procCell, fmtUptime } from "@/lib/format";
 import { gaugeRing } from "@/lib/gaugeGeometry";
@@ -48,7 +46,7 @@ const HIST_WINS = [
   ["60m", 3600],
 ] as const;
 
-export function MonitorPanel({ api, containerApi }: IDockviewPanelProps) {
+export function MonitorPanel(_props: IDockviewPanelProps) {
   const be = useApp((s) => s.backend);
   const hosts = useApp((s) => s.hosts);
   const [data, setData] = useState<MonitorData | null>(null);
@@ -56,13 +54,6 @@ export function MonitorPanel({ api, containerApi }: IDockviewPanelProps) {
   const [device, setDevice] = useState<string>("local");
   const [paused, setPaused] = useState(false);
   const now = useNow(30_000);
-
-  /* app-native find (issue #194): the dashboard's text (procs, journal,
-     filesystems…) is searchable; the 3s poll repaints the marks live */
-  const scrollRef = useRef<HTMLDivElement>(null);
-  const findProvider = useMemo(() => domFindProvider(() => scrollRef.current), []);
-  useEffect(() => registerFindProvider(containerApi, api?.id, findProvider), [containerApi, api?.id, findProvider]);
-  const find = useFindOpen(containerApi, api?.id);
 
   useEffect(() => {
     if (!be || paused) return;
@@ -136,25 +127,20 @@ export function MonitorPanel({ api, containerApi }: IDockviewPanelProps) {
         </span>
       </div>
 
-      {/* the relative wrapper keeps the find bar parked at the panel's
-          top-right instead of scrolling away with the metrics */}
-      <div className="relative flex-1 min-h-0">
-        {find.open && <FindBar provider={findProvider} nonce={find.nonce} onClose={closeFind} />}
-        <div ref={scrollRef} className="h-full overflow-auto t-scroll">
-          {err && !data ? (
-            <Empty icon="alert" title="Couldn't load metrics">{err}</Empty>
-          ) : !m ? (
-            <div className="h-full grid place-items-center">
-              {selDevice && !selDevice.online ? (
-                <Empty icon="host" title={`${selDevice.label} is offline`}>Start its agent and it shows up here live.</Empty>
-              ) : (
-                <Spinner />
-              )}
-            </div>
-          ) : (
-            <MonitorBody m={m} hist={hist} />
-          )}
-        </div>
+      <div className="flex-1 min-h-0 overflow-auto t-scroll">
+        {err && !data ? (
+          <Empty icon="alert" title="Couldn't load metrics">{err}</Empty>
+        ) : !m ? (
+          <div className="h-full grid place-items-center">
+            {selDevice && !selDevice.online ? (
+              <Empty icon="host" title={`${selDevice.label} is offline`}>Start its agent and it shows up here live.</Empty>
+            ) : (
+              <Spinner />
+            )}
+          </div>
+        ) : (
+          <MonitorBody m={m} hist={hist} />
+        )}
       </div>
     </div>
   );

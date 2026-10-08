@@ -8,8 +8,7 @@ import { store, useApp } from "@/lib/store";
 import { cn } from "@/utils/cn";
 import { desktops, useDesktops } from "@/lib/desktops";
 import { shortPath } from "@/lib/format";
-import { closeFind, registerFindProvider, terminalFindProvider, useFindOpen } from "@/lib/findRuntime";
-import { FindBar } from "@/components/FindBar";
+import { isFindNavigating, registerFindProvider, terminalFindProvider } from "@/lib/findRuntime";
 import { Btn, Icon } from "@/components/ui";
 import { openFreeShell } from "@/lib/workspace";
 
@@ -45,12 +44,14 @@ export function TerminalPanel({ params, api, containerApi }: IDockviewPanelProps
   const [nonce, setNonce] = useState(0);
 
   /* app-native find (issue #194): the shell's scrollback is searchable via
-     xterm's SearchAddon. The live pair is read through a ref — the provider
-     outlives any one terminal instance (reattach, font-size rebuilds) */
+     xterm's SearchAddon — the one panel that opts out of Workspace's
+     generic DOM wrapper, because the DOM only holds the buffer's visible
+     rows. The live pair is read through a ref: the provider outlives any
+     one terminal instance (reattach, font-size rebuilds). The bar itself is
+     global (Workspace renders it). */
   const termRef = useRef<{ term: Terminal; search: SearchAddon } | null>(null);
   const findProvider = useMemo(() => terminalFindProvider(() => termRef.current), []);
   useEffect(() => registerFindProvider(containerApi, api?.id, findProvider), [containerApi, api?.id, findProvider]);
-  const find = useFindOpen(containerApi, api?.id);
 
   useEffect(() => {
     if (workspaceActive) requestAnimationFrame(() => refit.current());
@@ -116,7 +117,10 @@ export function TerminalPanel({ params, api, containerApi }: IDockviewPanelProps
     requestAnimationFrame(doFit);
     const sub = term.onData((d) => conn.send(d));
     const vis = api.onDidVisibilityChange?.((e: { isVisible: boolean }) => e.isVisible && requestAnimationFrame(doFit));
-    const act = api.onDidActiveChange?.((e: { isActive: boolean }) => e.isActive && term.focus());
+    /* focus xterm when its tab activates so a click lets you type — but NOT
+       when the find controller did the activating (a match cycled into this
+       shell): the keyboard stays in the find bar (issue #194, round 2) */
+    const act = api.onDidActiveChange?.((e: { isActive: boolean }) => e.isActive && !isFindNavigating() && term.focus());
     return () => {
       cancelAnimationFrame(raf);
       ro.disconnect();
@@ -142,7 +146,6 @@ export function TerminalPanel({ params, api, containerApi }: IDockviewPanelProps
         {cwd && <><span>·</span><span className="truncate">{shortPath(cwd)}</span></>}
       </div>
       <div className="relative flex-1 min-h-0">
-        {find.open && <FindBar provider={findProvider} nonce={find.nonce} onClose={closeFind} />}
         <div ref={host} className="absolute inset-0 pl-2 pt-1" />
         {status.kind === "exited" && (
           <div className="absolute right-3 bottom-3 flex items-center gap-2 rounded-md bg-[var(--t-bg2)] border border-[var(--t-line2)] px-2.5 py-1.5 shadow-xl">

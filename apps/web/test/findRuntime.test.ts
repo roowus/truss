@@ -12,14 +12,16 @@ import assert from "node:assert/strict";
    the dynamic imports. Same shim store.test.ts needs. */
 (globalThis as any).window ??= {};
 
-const { registerFindProvider, findProviderFor, terminalMatchCount } = await import("../src/lib/findRuntime");
+const { registerFindProvider, findProviderFor, terminalMatchCount, scopeEntries, stepEntries } = await import("../src/lib/findRuntime");
 type FindProvider = import("../src/lib/findRuntime").FindProvider;
 type Terminal = import("@xterm/xterm").Terminal;
 
 const stubProvider = (tag: string): FindProvider => ({
   setQuery: () => 0,
-  step: () => -1,
+  reveal: () => -1,
+  clearCurrent: () => {},
   clear: () => {},
+  isVisible: () => true,
   /* tags let the assertions tell instances apart */
   ...({ tag } as object),
 });
@@ -94,4 +96,54 @@ test("terminalMatchCount: literal, case-insensitive, wrap-aware, scrollback incl
   assert.equal(terminalMatchCount(term, ""), 0, "blank query matches nothing");
   assert.equal(terminalMatchCount(term, "one TODO"), 0, "a hard break is never straddled: the rows join with \\n, which a single-line query can't hold");
   assert.equal(terminalMatchCount(stubTerm([]), "x"), 0, "empty buffer");
+});
+
+/* ---- the scope picker math (PR #210 review: search any panel, choose the
+   scope) — the cycle order and the cross-entry step are the parts a UI
+   smoke can't pin exhaustively. ---- */
+
+test("scopeEntries: panel scope is the anchor alone; space is its workspace in tab order; all spans workspaces", () => {
+  const apiA = {};
+  const apiB = {};
+  const anchor = { api: apiA, panel: "chat:s1" };
+  const has = (api: object, panel: string) =>
+    (api === apiA && (panel === "chat:s1" || panel === "feed")) || (api === apiB && panel === "settings");
+  const src = {
+    panelIds: (api: object) => (api === apiA ? ["chat:s1", "feed", "welcome"] : ["settings"]),
+    spaces: () => [{ api: apiA }, { api: apiB }],
+  };
+
+  assert.deepEqual(scopeEntries("panel", anchor, src, has), [anchor]);
+  assert.deepEqual(
+    scopeEntries("space", anchor, src, has),
+    [
+      { api: apiA, panel: "chat:s1" },
+      { api: apiA, panel: "feed" },
+    ],
+    "the workspace's findable panels, dockview order, unregistered ones (welcome here) skipped",
+  );
+  assert.deepEqual(
+    scopeEntries("all", anchor, src, has),
+    [
+      { api: apiA, panel: "chat:s1" },
+      { api: apiA, panel: "feed" },
+      { api: apiB, panel: "settings" },
+    ],
+    "every live workspace in order",
+  );
+});
+
+test("stepEntries: within an entry, across entries, wrapping the whole scope", () => {
+  /* entry0: 2 matches · entry1: 0 · entry2: 3 */
+  const E = (count: number, current: number) => ({ count, current });
+
+  assert.deepEqual(stepEntries([E(2, 0), E(0, -1), E(3, -1)], 0, 1), { entry: 0, index: 1, crossed: false }, "plain next");
+  assert.deepEqual(stepEntries([E(2, 1), E(0, -1), E(3, -1)], 0, 1), { entry: 2, index: 0, crossed: true }, "off the end crosses, SKIPPING the empty entry");
+  assert.deepEqual(stepEntries([E(2, 0), E(0, -1), E(3, 0)], 2, -1), { entry: 0, index: 1, crossed: true }, "Shift+Enter off the top crosses backward to the previous entry's LAST match");
+  assert.deepEqual(stepEntries([E(2, 1), E(0, -1), E(3, 2)], 2, 1), { entry: 0, index: 0, crossed: true }, "the scope wraps around");
+  assert.deepEqual(stepEntries([E(3, 2), E(0, -1)], 0, 1), { entry: 0, index: 0, crossed: false }, "one match-bearing entry wraps inside itself");
+  assert.deepEqual(stepEntries([E(3, 0), E(0, -1)], 0, -1), { entry: 0, index: 2, crossed: false }, "…both directions");
+  assert.deepEqual(stepEntries([E(0, -1), E(0, -1)], -1, 1), { entry: -1, index: -1, crossed: false }, "no matches anywhere");
+  assert.deepEqual(stepEntries([E(2, -1), E(3, -1)], -1, 1), { entry: 0, index: 0, crossed: true }, "first step enters the first match-bearing entry");
+  assert.deepEqual(stepEntries([E(2, -1), E(3, -1)], -1, -1), { entry: 1, index: 2, crossed: true }, "first Shift+Enter enters the LAST match-bearing entry at its last match");
 });
