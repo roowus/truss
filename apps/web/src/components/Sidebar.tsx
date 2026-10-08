@@ -4,7 +4,8 @@ import { desktops, useDesktops } from "@/lib/desktops";
 import { ago, shortPath, until } from "@/lib/format";
 import { harnessDisplay, hostAliases } from "@/lib/device";
 import { openAgentShell, openDailyDriver, openFreeShell, openPanel, openSession } from "@/lib/workspace";
-import { HarnessMark, Icon, IconBtn, StateDot, TrussLogo, Spinner, STATE_META } from "./ui";
+import { HarnessMark, Icon, IconBtn, LabelChip, StateDot, TrussLogo, Spinner, STATE_META } from "./ui";
+import { labelChips, labelColor, sessionHasLabel } from "@/lib/labels";
 import type { HostInfo, SessionMeta, TerminalInfo } from "@/lib/proto";
 import { clusterRestState, hostRowActions, sessionRowActions, shellRowActions, type SessionRowAction } from "@/lib/rowActions";
 import { rowRenameTarget } from "@/lib/rowRename";
@@ -24,9 +25,19 @@ export function Sidebar({ onNew }: { onNew: () => void }) {
   const agentsError = useApp((s) => s.agentsError);
   const hostPrefs = useDesktops((s) => s.hosts);
   const groupMode = useDesktops((s) => s.settings.groupMode);
+  const labelsRegistry = useApp((s) => s.labelsRegistry);
   const [q, setQ] = useState("");
+  /* the label filter (issue #174): one active label at a time, click again
+     to clear — GitHub's own sidebar behaves the same */
+  const [labelFilter, setLabelFilter] = useState<string | null>(null);
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const now = useNow(15_000);
+
+  /* a filter whose label vanished from every session (renamed away, or its
+     last carrier trashed) would pin the list at "no matches" — drop it */
+  useEffect(() => {
+    if (labelFilter && !labelsRegistry.some((l) => l.toLowerCase() === labelFilter.toLowerCase())) setLabelFilter(null);
+  }, [labelsRegistry, labelFilter]);
 
   /* group sessions by project tag, or by workspace folder (cwd);
      archived sessions leave the main list and collect below */
@@ -36,7 +47,8 @@ export function Sidebar({ onNew }: { onNew: () => void }) {
     for (const id of order) {
       const s = sessions[id];
       if (!s) continue;
-      if (q && !(s.title + " " + s.cwd + " " + (s.project ?? "") + " " + s.harness).toLowerCase().includes(q.toLowerCase())) continue;
+      if (!sessionHasLabel(s.labels, labelFilter)) continue;
+      if (q && !(s.title + " " + s.cwd + " " + (s.project ?? "") + " " + s.harness + " " + (s.labels ?? []).join(" ")).toLowerCase().includes(q.toLowerCase())) continue;
       if (s.archived) {
         arch.push(s);
         continue;
@@ -53,7 +65,7 @@ export function Sidebar({ onNew }: { onNew: () => void }) {
         .map(([k, list]) => [k, sortWithPinned(list, (s) => !!s.pinned)] as [string, SessionMeta[]]),
       sortWithPinned(arch, (s) => !!s.pinned),
     ] as const;
-  }, [order, sessions, q, groupMode]);
+  }, [order, sessions, q, groupMode, labelFilter]);
 
   return (
     <aside className="h-full flex flex-col bg-[var(--t-bg0)] border-r border-[var(--t-line)]">
@@ -68,25 +80,56 @@ export function Sidebar({ onNew }: { onNew: () => void }) {
           <Icon name="search" size={12} className="text-[var(--t-dim)]" />
           <input id="session-search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search" className="flex-1 min-w-0 bg-transparent text-[12.5px] outline-none text-[var(--t-fg)] placeholder:text-[var(--t-dim)]" />
         </div>
-        {/* group sessions by project tag or by workspace folder */}
-        <div className="mt-1.5 flex items-center gap-1 px-0.5" role="group" aria-label="Group sessions by">
-          {([["project", "tag", "Project"], ["folder", "folder", "Folder"]] as const).map(([mode, icon, label]) => (
-            <button
-              key={mode}
-              onClick={() => desktops.updateSettings({ groupMode: mode })}
-              title={`Group by ${label.toLowerCase()}`}
-              aria-pressed={groupMode === mode}
-              className={cn(
-                "flex items-center gap-1 h-5 px-1.5 rounded text-[10px] font-medium uppercase tracking-[0.06em] transition-colors",
-                groupMode === mode
-                  ? "bg-[var(--t-bg3)] text-[var(--t-fg)]"
-                  : "text-[var(--t-dim)] hover:text-[var(--t-mute)]",
-              )}
-            >
-              <Icon name={icon} size={10} />
-              {label}
-            </button>
-          ))}
+        {/* one row: the group-by toggles, then the label filter's chips
+            sharing the line (review feedback on PR #209 — a separate row
+            read as clutter). Chips scroll sideways in the leftover space;
+            the toggles never move. */}
+        <div className="mt-1.5 flex items-center gap-1 px-0.5">
+          <div className="shrink-0 flex items-center gap-1" role="group" aria-label="Group sessions by">
+            {([["project", "tag", "Project"], ["folder", "folder", "Folder"]] as const).map(([mode, icon, label]) => (
+              <button
+                key={mode}
+                onClick={() => desktops.updateSettings({ groupMode: mode })}
+                title={`Group by ${label.toLowerCase()}`}
+                aria-pressed={groupMode === mode}
+                className={cn(
+                  "flex items-center gap-1 h-5 px-1.5 rounded text-[10px] font-medium uppercase tracking-[0.06em] transition-colors",
+                  groupMode === mode
+                    ? "bg-[var(--t-bg3)] text-[var(--t-fg)]"
+                    : "text-[var(--t-dim)] hover:text-[var(--t-mute)]",
+                )}
+              >
+                <Icon name={icon} size={10} />
+                {label}
+              </button>
+            ))}
+          </div>
+          {/* the label filter (issue #174): the registry's chips, one active
+              at a time; a label nobody carries stops advertising itself */}
+          {labelsRegistry.length > 0 && (
+            <div className="flex-1 min-w-0 flex items-center gap-1 overflow-x-auto t-scroll" role="group" aria-label="Filter by label">
+              {labelsRegistry.map((l) => {
+                const active = labelFilter === l;
+                const color = labelColor(l);
+                return (
+                  <button
+                    key={l}
+                    onClick={() => setLabelFilter(active ? null : l)}
+                    aria-pressed={active}
+                    title={active ? `Clear the “${l}” filter` : `Show only sessions labeled “${l}”`}
+                    className={cn("shrink-0 inline-flex items-center h-4 px-1.5 rounded-full text-[9.5px] font-medium leading-none transition-opacity max-w-[96px] truncate", !active && "opacity-50 hover:opacity-90")}
+                    style={{
+                      color,
+                      background: `color-mix(in oklab, ${color} ${active ? 24 : 10}%, transparent)`,
+                      boxShadow: `inset 0 0 0 1px color-mix(in oklab, ${color} ${active ? 60 : 25}%, transparent)`,
+                    }}
+                  >
+                    {l}
+                  </button>
+                );
+              })}
+            </div>
+          )}
         </div>
       </div>
 
@@ -259,6 +302,9 @@ function SessionRow({ s, now, archived }: { s: SessionMeta; now: number; archive
      timestamp+dot reach the row's right edge); a pinned row rests with only
      the solid pin */
   const rest = clusterRestState(actions);
+  /* label chips (issue #174): two visible + an honest "+k", the full set is
+     a hover away on the strip's title — the row stays one line */
+  const chips = labelChips(s.labels ?? [], 2);
   const runAction = (a: SessionRowAction) => {
     /* destructive entries keep the two-click confirm (the #85 rule) */
     if (a.confirm) {
@@ -323,6 +369,14 @@ function SessionRow({ s, now, archived }: { s: SessionMeta; now: number; archive
           onDoubleClick={renameTarget ? () => { setName(s.title); setEditing(true); } : undefined}
           className={cn("flex-1 min-w-0 truncate text-[12.5px]", dead ? "text-[var(--t-mute)]" : "text-[var(--t-fg)]", archived && "opacity-60", attention === "unread" && "font-medium")}
         >{s.title}</span>
+      )}
+      {chips.shown.length > 0 && (
+        <span className="shrink-0 flex items-center gap-1" title={`labels: ${(s.labels ?? []).join(", ")}`}>
+          {chips.shown.map((l) => (
+            <LabelChip key={l} name={l} className="max-w-[72px]" />
+          ))}
+          {chips.overflow > 0 && <span className="text-[9.5px] text-[var(--t-dim)] tabular-nums">+{chips.overflow}</span>}
+        </span>
       )}
       {pending > 0 && (
         <span className="shrink-0 inline-grid place-items-center w-4 h-4 rounded-full bg-[var(--t-amber)] text-[#1b1305] text-[9.5px] font-bold t-pulse-soft" title="Permission waiting">{pending}</span>

@@ -1,6 +1,7 @@
 /* In-browser simulation of a Truss server. Speaks the exact same contract as the
    live backend so the UI can be exercised without a host. */
 import { ApiError, type Backend, type ConnStatus, type TerminalHandlers } from "./backend";
+import { cleanLabelNames } from "./labels";
 import type {
   Capabilities,
   CreateSessionBody,
@@ -957,6 +958,29 @@ export function createDemoBackend(): Backend {
       sess.meta.title = next;
       emit(sess, { type: "session.updated", title: next });
       return { ok: true };
+    },
+    /* GitHub-style labels (issue #174): the demo cleans with the same rules
+       the server does (cleanLabelNames mirrors it) so the chips and the
+       filter behave identically without a server */
+    async setSessionLabels(sid, labels) {
+      await net(20);
+      const sess = sessions.get(sid);
+      if (!sess) throw new ApiError(404, `no such session: ${sid}`);
+      const cleaned = cleanLabelNames(labels);
+      sess.meta.labels = cleaned;
+      emit(sess, { type: "session.updated", labels: cleaned });
+      return { id: sid, labels: cleaned };
+    },
+    async listLabels() {
+      await ready;
+      const byKey = new Map<string, string>();
+      for (const sess of sessions.values()) {
+        for (const name of sess.meta.labels ?? []) {
+          const key = name.toLowerCase();
+          if (!byKey.has(key)) byKey.set(key, name);
+        }
+      }
+      return { labels: [...byKey.values()].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" })) };
     },
     credentials: async () => ({ routes: [], service: "demo", serviceActive: false }),
     upsertCredential: async () => ({ ok: true, restarted: false }),

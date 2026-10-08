@@ -287,6 +287,35 @@ test("session.updated patches model/provider in place (model switch reflects imm
   delete store.state.sessions["ms-1"];
 });
 
+test("session.updated patches labels in place (issue #174: chips repaint live, no reload)", async () => {
+  store.set((s) => ({
+    sessions: {
+      ...s.sessions,
+      "lbl-1": {
+        id: "lbl-1", harness: "pi", title: "t", cwd: "/tmp",
+        state: "idle", created_at: 0, updated_at: 0, live: true, labels: ["old"],
+      } as never,
+    },
+  }));
+  const s = store as unknown as { onFrame: (f: { seq: number; ev: unknown }) => void; refreshLabels: () => Promise<void> };
+  let registryRefreshes = 0;
+  const orig = s.refreshLabels;
+  s.refreshLabels = async () => {
+    registryRefreshes++;
+  };
+  try {
+    s.onFrame({ seq: 30, ev: { type: "session.updated", sessionId: "lbl-1", labels: ["bug", "ui"] } as never });
+    assert.deepEqual(store.state.sessions["lbl-1"].labels, ["bug", "ui"], "the row carries the new set");
+    assert.equal(registryRefreshes, 1, "a labels frame refreshes the sidebar filter's registry");
+    s.onFrame({ seq: 31, ev: { type: "session.updated", sessionId: "lbl-1", title: "renamed" } as never });
+    assert.deepEqual(store.state.sessions["lbl-1"].labels, ["bug", "ui"], "unrelated updates keep the labels");
+    assert.equal(registryRefreshes, 1, "and a labels-less frame leaves the registry alone");
+  } finally {
+    s.refreshLabels = orig;
+    delete store.state.sessions["lbl-1"];
+  }
+});
+
 test("session.updated for an unknown session refreshes the trash list too (restore drops the ghost for every client)", async () => {
   /* restoreSession broadcasts session.updated; only the restoring client
      refreshes its own trash list, so other clients kept the restored session

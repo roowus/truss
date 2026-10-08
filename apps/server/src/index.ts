@@ -28,6 +28,8 @@ import {
   purgeSession,
   renameSession,
   restoreSession,
+  setSessionLabels,
+  listLabels,
   type EventFrame,
 } from "./sessions.js";
 import { attachTerminal, closeTerminal, createTerminal, listTerminals, renameTerminal, setTerminalPinned } from "./terminal.js";
@@ -882,6 +884,27 @@ app.post("/api/sessions/:id/rename", async (req, reply) => {
     return reply.code(e.status ?? 400).send({ error: e.message ?? String(e) });
   }
 });
+
+/* GitHub-style session labels (issue #174): replace-all set — names are
+   cleaned server-side (trimmed, blanks dropped, case-insensitive dedupe
+   keeping the first casing, capped at 8), persist, and broadcast live over
+   session.updated. Unknown id 404s; a non-array body is a 400. */
+app.post("/api/sessions/:id/labels", async (req, reply) => {
+  const { id } = req.params as { id: string };
+  const { labels } = (req.body ?? {}) as { labels?: unknown };
+  if (!Array.isArray(labels)) return reply.code(400).send({ error: "labels[] required" });
+  try {
+    return setSessionLabels(id, labels);
+  } catch (err) {
+    const e = err as Error & { status?: number };
+    return reply.code(e.status ?? 400).send({ error: e.message ?? String(e) });
+  }
+});
+
+/* the label registry (issue #174): every label in use, for the sidebar
+   filter — computed from the live list, so a trashed session's labels
+   stop advertising themselves */
+app.get("/api/labels", async () => ({ labels: listLabels() }));
 
 /* the 30-day trash (issue #5): list, restore, delete-forever */
 app.get("/api/trash", async () => ({ sessions: store.listDeletedSessions() }));

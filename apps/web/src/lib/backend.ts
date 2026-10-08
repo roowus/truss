@@ -82,6 +82,11 @@ export interface Backend {
   pinSession(id: string, pinned: boolean): Promise<unknown>;
   /** retitle a chat (issue #141): the tab's double-click rename */
   renameSession(id: string, title: string): Promise<unknown>;
+  /** GitHub-style labels (issue #174): replace-all set — the server cleans
+      (trim/dedupe/cap) and returns the authoritative list */
+  setSessionLabels(id: string, labels: string[]): Promise<{ id: string; labels: string[] }>;
+  /** the label registry — every label in use, for the sidebar filter */
+  listLabels(): Promise<{ labels: string[] }>;
   listTerminals(): Promise<{ terminals: TerminalInfo[] }>;
   createTerminal(body: { cwd?: string; title?: string }): Promise<{ terminal: TerminalInfo }>;
   deleteTerminal(id: string): Promise<unknown>;
@@ -237,6 +242,9 @@ export function createLiveBackend(): Backend {
       req("POST", `/api/sessions/${encodeURIComponent(id)}/pin`, { pinned }),
     renameSession: (id, title) =>
       req("POST", `/api/sessions/${encodeURIComponent(id)}/rename`, { title }),
+    setSessionLabels: (id, labels) =>
+      req("POST", `/api/sessions/${encodeURIComponent(id)}/labels`, { labels }),
+    listLabels: () => req("GET", "/api/labels"),
     listTerminals: async () => {
       const r = await req<any>("GET", "/api/terminals");
       return { terminals: r.terminals ?? r ?? [] };
