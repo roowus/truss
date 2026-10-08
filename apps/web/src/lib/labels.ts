@@ -4,6 +4,12 @@
    name is the same color on every render and every client) and how many
    chips a crowded row shows. */
 
+/* mirrors the server's SESSION_LABEL_CAP (apps/server/src/sessions.ts).
+   Web carries no dependency on @truss/proto/the server package, so the
+   constant is duplicated deliberately — one web-side definition shared by
+   the header's disable-at-cap and the demo's cleaning mirror */
+export const SESSION_LABEL_CAP = 8;
+
 /* FNV-1a over the lowercased name — stable across renders, clients, and
    casing ("Research" and "research" are one label, one color) */
 function labelHash(name: string): number {
@@ -71,7 +77,7 @@ export function cleanLabelNames(input: string[]): string[] {
     if (seen.has(key)) continue;
     seen.add(key);
     out.push(name);
-    if (out.length >= 8) break;
+    if (out.length >= SESSION_LABEL_CAP) break;
   }
   return out;
 }
