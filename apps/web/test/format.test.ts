@@ -14,6 +14,7 @@ import {
   daysLeftInTrash,
   TRASH_RETENTION_DAYS,
   until,
+  nextRunHint,
   fmtSize,
   shortPath,
   argSummary,
@@ -135,6 +136,21 @@ test("until: countdown twin of ago — future reads as time LEFT, past clamps to
   assert.equal(until(now + 2 * 86_400_000, now), "2d");
   assert.equal(until(now, now), "now");
   assert.equal(until(now - 60_000, now), "now"); // past timestamps clamp via Math.max(0, ...)
+});
+
+test("nextRunHint: weekday+time within a week, month+day beyond (issue #16)", () => {
+  /* local-time fixtures, same contract as the server-side cron suite */
+  const now = new Date(2026, 0, 7, 12, 0, 0).getTime(); // a Wednesday
+  const monday = new Date(2026, 0, 12, 9, 0).getTime();
+  assert.equal(nextRunHint(monday, now), "Mon 09:00");
+  const sameDay = new Date(2026, 0, 7, 12, 30).getTime();
+  assert.equal(nextRunHint(sameDay, now), "Wed 12:30");
+  /* past the 7-day horizon the weekday alone would lie about which week */
+  const leapDay = new Date(2028, 1, 29, 0, 0).getTime();
+  assert.equal(nextRunHint(leapDay, now), "Feb 29, 00:00");
+  /* single digits zero-pad */
+  const early = new Date(2026, 0, 8, 6, 5).getTime();
+  assert.equal(nextRunHint(early, now), "Thu 06:05");
 });
 
 test("fmtSize: B rounding, KB decimals, MB/GB/TB boundaries", () => {

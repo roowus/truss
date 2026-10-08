@@ -1,14 +1,17 @@
 import { randomUUID } from "node:crypto";
 import { store } from "./db.js";
 import { createSession, sendPrompt } from "./sessions.js";
+import { cronSyntaxError, nextCronRun } from "./cron.js";
 import type { HarnessId } from "@truss/proto";
 
 /**
  * Task board (a lean clone of the dsh-lab task-board plugin): a persistent
  * kanban of agent tasks. "Run" spawns a real session with the task's pinned
  * harness + cwd and sends the task prompt; the card links to that session.
- * No cron/scheduling in v1 — the board is user- and agent-driven (agents get
- * mcp__truss__ task tools, so a running agent can file cards itself).
+ * Cards may carry a 5-field cron schedule (issue #16): the scheduler tick in
+ * scheduler.ts fires due cards through this same runTask path. Agents get
+ * mcp__truss__ task tools (including schedule_task), so a running agent can
+ * file cards and recurring work itself.
  */
 
 export type TaskStatus = "todo" | "doing" | "done" | "archived";
@@ -24,6 +27,8 @@ export interface TaskRow {
   created_at: number;
   updated_at: number;
   last_run_at: number | null;
+  schedule: string | null;
+  next_run_at: number | null;
 }
 
 function ensureTable() {
@@ -41,6 +46,14 @@ function ensureTable() {
       last_run_at INTEGER
     );
   `);
+  /* migrations (issue #16): the cron schedule + its computed next slot */
+  const cols = store.all<{ name: string }>(`PRAGMA table_info(tasks)`);
+  if (!cols.some((c) => c.name === "schedule")) {
+    store.exec(`ALTER TABLE tasks ADD COLUMN schedule TEXT`);
+  }
+  if (!cols.some((c) => c.name === "next_run_at")) {
+    store.exec(`ALTER TABLE tasks ADD COLUMN next_run_at INTEGER`);
+  }
 }
 
 let ready = false;
@@ -51,7 +64,7 @@ function table() {
   }
 }
 
-/** cross-module readers (feed autoposter) must guarantee the table exists */
+/** cross-module readers (feed autoposter, scheduler) must guarantee the table exists */
 export function ensureTasksTable() {
   table();
 }
@@ -69,7 +82,20 @@ function camel(t: TaskRow) {
     createdAt: t.created_at,
     updatedAt: t.updated_at,
     lastRunAt: t.last_run_at ?? undefined,
+    schedule: t.schedule ?? undefined,
+    nextRunAt: t.next_run_at ?? undefined,
   };
+}
+
+/** Validate a cron expression for storage; throws with the parse reason. */
+function assertValidSchedule(schedule: string): string {
+  const expr = schedule.trim();
+  const err = cronSyntaxError(expr);
+  if (err) throw new Error(`bad schedule: ${err}`);
+  if (nextCronRun(expr, Date.now()) === null) {
+    throw new Error(`bad schedule: ${JSON.stringify(expr)} parses but never fires (e.g. February 31)`);
+  }
+  return expr;
 }
 
 export function listTasks() {
@@ -87,26 +113,65 @@ export function getTaskApi(id: string) {
   return t ? camel(t) : undefined;
 }
 
-export function createTask(input: { title: string; prompt: string; cwd: string; harness: string }) {
+/** Cards the scheduler tick owes a look: scheduled, in an active column, due. */
+export function dueScheduledTasks(nowMs: number): TaskRow[] {
+  table();
+  return store.all<TaskRow>(
+    `SELECT * FROM tasks WHERE schedule IS NOT NULL AND next_run_at IS NOT NULL AND next_run_at <= ? AND status IN ('todo', 'doing')`,
+    nowMs,
+  );
+}
+
+/** Consume a firing: advance the card's waterline past `fromMs`. */
+export function advanceTaskSchedule(id: string, fromMs: number) {
+  table();
+  const t = getTask(id);
+  if (!t?.schedule) return;
+  store.run(`UPDATE tasks SET next_run_at = ? WHERE id = ?`, nextCronRun(t.schedule, fromMs), id);
+}
+
+/** Planning refinement (issue #16): even a failed run stamps the card, so a
+    broken schedule reports instead of silently skipping forever. */
+export function stampTaskRun(id: string, atMs: number) {
+  table();
+  store.run(`UPDATE tasks SET last_run_at = ?, updated_at = ? WHERE id = ?`, atMs, atMs, id);
+}
+
+export function createTask(input: { title: string; prompt: string; cwd: string; harness: string; schedule?: string | null }) {
   table();
   if (!input.title.trim()) throw new Error("title required");
+  const schedule = input.schedule?.trim() ? assertValidSchedule(input.schedule) : null;
   const now = Date.now();
   const id = randomUUID().slice(0, 8);
   store.run(
-    `INSERT INTO tasks (id, title, prompt, cwd, harness, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'todo', ?, ?)`,
-    id, input.title.trim(), input.prompt, input.cwd, input.harness, now, now,
+    `INSERT INTO tasks (id, title, prompt, cwd, harness, status, created_at, updated_at, schedule, next_run_at) VALUES (?, ?, ?, ?, ?, 'todo', ?, ?, ?, ?)`,
+    id, input.title.trim(), input.prompt, input.cwd, input.harness, now, now, schedule,
+    schedule ? nextCronRun(schedule, now) : null,
   );
   return getTaskApi(id)!;
 }
 
-export function updateTask(id: string, patch: { title?: string; prompt?: string; status?: TaskStatus }) {
+export function updateTask(id: string, patch: { title?: string; prompt?: string; status?: TaskStatus; schedule?: string | null }) {
   table();
   const t = getTask(id);
   if (!t) throw new Error(`no such task: ${id}`);
   if (patch.status && !["todo", "doing", "done", "archived"].includes(patch.status)) throw new Error("bad status");
+  /* schedule: undefined leaves it; null/"" clears; anything else validates */
+  let schedule = t.schedule;
+  if (patch.schedule !== undefined) {
+    schedule = patch.schedule?.trim() ? assertValidSchedule(patch.schedule) : null;
+  }
+  /* recompute the waterline whenever the schedule or the column changes —
+     a card parked in done for a month must not fire a month of catch-ups on
+     restore; its next run is the next FUTURE slot */
+  const nextRunAt = !schedule
+    ? null
+    : patch.schedule !== undefined || patch.status !== undefined || t.next_run_at == null
+      ? nextCronRun(schedule, Date.now())
+      : t.next_run_at;
   store.run(
-    `UPDATE tasks SET title = ?, prompt = ?, status = ?, updated_at = ? WHERE id = ?`,
-    patch.title ?? t.title, patch.prompt ?? t.prompt, patch.status ?? t.status, Date.now(), id,
+    `UPDATE tasks SET title = ?, prompt = ?, status = ?, updated_at = ?, schedule = ?, next_run_at = ? WHERE id = ?`,
+    patch.title ?? t.title, patch.prompt ?? t.prompt, patch.status ?? t.status, Date.now(), schedule, nextRunAt, id,
   );
   return getTaskApi(id)!;
 }

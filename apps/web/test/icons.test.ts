@@ -32,7 +32,7 @@ function segments(d: string): { cmd: string; nums: number[] }[] {
 }
 
 test("the registry is complete — every glyph survived the extraction", () => {
-  assert.equal(Object.keys(ICON_PATHS).length, 38, "37 glyphs extracted from ui.tsx + pinSolid added by #99");
+  assert.equal(Object.keys(ICON_PATHS).length, 39, "37 glyphs extracted from ui.tsx + pinSolid (#99) + clock (#16)");
 });
 
 test("every glyph is well-formed path data on the 16px grid", () => {

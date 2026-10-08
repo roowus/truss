@@ -263,6 +263,27 @@ const TOOLS = [
     inputSchema: { type: "object", properties: { id: { type: "string" } }, required: ["id"] },
   },
   {
+    name: "schedule_task",
+    description:
+      "Put a cron schedule on a task card (issue #16). 5-field cron in the SERVER's local time, " +
+      "e.g. '0 9 * * 1-5' = weekdays 9am. With id: set/replace that card's schedule (null or '' clears it). " +
+      "Without id: file a NEW recurring card (title/cwd/harness + schedule required). Due cards spawn sessions " +
+      "exactly like the Run button; invalid expressions are rejected with the parse reason. Every schedule you " +
+      "set posts a feed note so the user sees new recurring spend.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        id: { type: "string", description: "existing card id; omit to create a new card" },
+        schedule: { type: ["string", "null"], description: "5-field cron, server-local; null/'' clears (with id)" },
+        title: { type: "string" },
+        prompt: { type: "string", description: "the prompt each run sends" },
+        cwd: { type: "string" },
+        harness: { type: "string", description: "pi | dsh | claude-code | hermes" },
+      },
+      required: ["schedule"],
+    },
+  },
+  {
     name: "file_todo",
     description:
       "File a task FOR THE USER (they complete it): things to verify, decisions only they can make, chores with deadlines. " +
@@ -493,6 +514,39 @@ async function callTool(name: string, a: Record<string, any>, callerId?: string)
     case "run_task": {
       const { session } = await runTask(String(a.id));
       return { sessionId: session.id, title: session.title, harness: session.harness, cwd: session.cwd };
+    }
+    case "schedule_task": {
+      if (!callerId) throw new Error("unscoped MCP connection — respawn the session");
+      const sched = a.schedule === null ? null : String(a.schedule ?? "");
+      let task;
+      if (a.id) {
+        task = updateTask(String(a.id), { schedule: sched });
+      } else {
+        if (!sched?.trim()) throw new Error("schedule is required when filing a new recurring card");
+        task = createTask({
+          title: String(a.title ?? ""),
+          prompt: String(a.prompt ?? ""),
+          cwd: String(a.cwd ?? ""),
+          harness: String(a.harness ?? ""),
+          schedule: sched,
+        });
+      }
+      /* visibility policy (issue #16, planning Q4): scheduling is
+         pre-approved like create_task/run_task — both already spawn sessions
+         ungated — but every agent-set schedule posts a feed note so
+         unattended recurring spend is never silent */
+      if (task.schedule) {
+        postFeed({
+          type: "note",
+          sessionId: callerId,
+          title: `Recurring task scheduled: ${task.title}`,
+          body: `Schedule \`${task.schedule}\` (server-local time) — next run fires automatically. Clear it from the task board or with schedule_task and a null schedule.`,
+          importance: "normal",
+          data: { taskId: task.id },
+          dedupeKey: `cron-file:${task.id}:${task.schedule}`,
+        });
+      }
+      return task;
     }
     /* ── todos (user-facing tasks; ownership enforced) ── */
     case "file_todo": {

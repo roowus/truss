@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import type { IDockviewPanelProps } from "dockview-react";
 import { store, useApp, useNow } from "@/lib/store";
 import { useDesktops } from "@/lib/desktops";
-import { ago, harnessStyle, shortPath } from "@/lib/format";
+import { ago, harnessStyle, nextRunHint, shortPath } from "@/lib/format";
 import { harnessDisplay, hostAliases } from "@/lib/device";
 import { Btn, Empty, HarnessMark, Icon, Select, Spinner } from "@/components/ui";
 import { openPanel } from "@/lib/workspace";
@@ -21,7 +21,9 @@ const COLS: { id: TaskStatus; label: string; color: string }[] = [
  * Tasks — a persistent kanban of agent tasks (lean clone of the dsh-lab
  * task-board plugin). Cards pin a harness + working directory; "Run" spawns a
  * real session and sends the prompt, and the card links to it. Agents can
- * file cards themselves through the mcp__truss__ task tools. No cron in v1.
+ * file cards themselves through the mcp__truss__ task tools. Cards may carry
+ * a cron schedule (issue #16) — the server ticks every minute and fires due
+ * cards through the same Run path; schedules are server-local wall-clock.
  */
 export function TasksPanel({ params }: IDockviewPanelProps<P>) {
   const backend = useApp((s) => s.backend);
@@ -35,8 +37,8 @@ export function TasksPanel({ params }: IDockviewPanelProps<P>) {
   const [showArchived, setShowArchived] = useState(false);
   const [creating, setCreating] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
-  const [form, setForm] = useState({ title: "", prompt: "", cwd: "", harness: "" });
-  const now = useNow(30_000);
+  const [form, setForm] = useState({ title: "", prompt: "", cwd: "", harness: "", schedule: "" });
+  const now = useNow(30_000); // 30s granularity keeps the "next run" hints fresh enough
 
   const load = useCallback(() => {
     if (!backend) return;
@@ -75,9 +77,15 @@ export function TasksPanel({ params }: IDockviewPanelProps<P>) {
     if (!backend || !form.title.trim() || !form.cwd.trim() || !form.harness) return;
     setBusy("new");
     try {
-      await backend.createTask({ title: form.title.trim(), prompt: form.prompt, cwd: form.cwd.trim(), harness: form.harness });
+      await backend.createTask({
+        title: form.title.trim(),
+        prompt: form.prompt,
+        cwd: form.cwd.trim(),
+        harness: form.harness,
+        ...(form.schedule.trim() ? { schedule: form.schedule.trim() } : {}),
+      });
       setCreating(false);
-      setForm({ title: "", prompt: "", cwd: focus?.cwd ?? "", harness: focus?.harness ?? "" });
+      setForm({ title: "", prompt: "", cwd: focus?.cwd ?? "", harness: focus?.harness ?? "", schedule: "" });
       load();
     } catch (e: any) {
       setErr(e.message ?? String(e));
@@ -88,6 +96,24 @@ export function TasksPanel({ params }: IDockviewPanelProps<P>) {
 
   const byStatus = (s: TaskStatus) => (tasks ?? []).filter((t) => t.status === s);
   const archived = byStatus("archived");
+
+  /* schedule edits share the busy/err lane but report success so the inline
+     editor keeps the user's text when the server rejects the expression */
+  const saveSchedule = async (id: string, schedule: string | null): Promise<boolean> => {
+    if (!backend) return false;
+    setBusy(id);
+    setErr(null);
+    try {
+      await backend.updateTask(id, { schedule });
+      load();
+      return true;
+    } catch (e: any) {
+      setErr(e.message ?? String(e));
+      return false;
+    } finally {
+      setBusy(null);
+    }
+  };
 
   return (
     <div className="h-full flex flex-col bg-[var(--t-bg1)] t-panel">
@@ -117,6 +143,12 @@ export function TasksPanel({ params }: IDockviewPanelProps<P>) {
             placeholder="Prompt the agent runs (optional until Run)…"
             rows={3}
             className="t-input w-full resize-y font-mono text-[11.5px]"
+          />
+          <input
+            value={form.schedule}
+            onChange={(e) => setForm({ ...form, schedule: e.target.value })}
+            placeholder="schedule — cron, optional, server-local time: 0 9 * * 1-5 = weekdays 9am"
+            className="t-input w-full font-mono text-[11.5px]"
           />
           <div className="flex items-center gap-2">
             <input
@@ -154,10 +186,10 @@ export function TasksPanel({ params }: IDockviewPanelProps<P>) {
         ) : (
           <div className={cn("grid gap-2 p-3", showArchived ? "grid-cols-2 lg:grid-cols-4" : "grid-cols-1 md:grid-cols-3")}>
             {COLS.map((col) => (
-              <Column key={col.id} col={col} tasks={byStatus(col.id)} busy={busy} now={now} sessions={sessions} act={act} />
+              <Column key={col.id} col={col} tasks={byStatus(col.id)} busy={busy} now={now} sessions={sessions} act={act} saveSchedule={saveSchedule} />
             ))}
             {showArchived && (
-              <Column col={{ id: "archived", label: "Archived", color: "var(--t-dim)" }} tasks={archived} busy={busy} now={now} sessions={sessions} act={act} archived />
+              <Column col={{ id: "archived", label: "Archived", color: "var(--t-dim)" }} tasks={archived} busy={busy} now={now} sessions={sessions} act={act} saveSchedule={saveSchedule} archived />
             )}
           </div>
         )}
@@ -166,13 +198,14 @@ export function TasksPanel({ params }: IDockviewPanelProps<P>) {
   );
 }
 
-function Column({ col, tasks, busy, now, sessions, act, archived }: {
+function Column({ col, tasks, busy, now, sessions, act, saveSchedule, archived }: {
   col: { id: TaskStatus; label: string; color: string };
   tasks: TaskInfo[];
   busy: string | null;
   now: number;
   sessions: Record<string, { title: string; state: string } | undefined>;
   act: (id: string, fn: () => Promise<unknown>, flag?: string) => Promise<void>;
+  saveSchedule: (id: string, schedule: string | null) => Promise<boolean>;
   archived?: boolean;
 }) {
   const backend = store.be;
@@ -194,6 +227,15 @@ function Column({ col, tasks, busy, now, sessions, act, archived }: {
                 <span className="min-w-0 flex-1 text-[12px] text-[var(--t-fg)] leading-snug">{t.title}</span>
               </div>
               {t.prompt && <div className="mt-1 font-mono text-[10.5px] text-[var(--t-dim)] leading-snug line-clamp-2 whitespace-pre-wrap">{t.prompt}</div>}
+              {(t.schedule || !archived) && (
+                <ScheduleRow
+                  task={t}
+                  now={now}
+                  busy={busy === t.id}
+                  editingAllowed={!archived}
+                  onSave={saveSchedule}
+                />
+              )}
               <div className="mt-1.5 flex items-center gap-1 text-[10px] font-mono text-[var(--t-dim)]">
                 <span className="truncate" title={t.cwd}>{shortPath(t.cwd)}</span>
                 <span className="ml-auto shrink-0 tabular-nums">{t.lastRunAt ? `ran ${ago(t.lastRunAt, now)}` : ago(t.updatedAt, now)}</span>
@@ -248,5 +290,95 @@ function CardBtn({ icon, label, onClick, dangerous }: { icon: string; label: str
     >
       <Icon name={icon} size={11} />
     </button>
+  );
+}
+
+/** The cron line on a task card (issue #16). Read state shows the expr and
+    the server's next slot ("paused" in done/archived — the tick only fires
+    todo/doing cards); click (or the hover ghost on an unscheduled card) turns
+    it into an inline editor. Enter saves, Esc cancels, empty clears. A
+    rejected expression keeps the editor open; the panel's error banner
+    carries the server's reason. */
+function ScheduleRow({ task, now, busy, editingAllowed, onSave }: {
+  task: TaskInfo;
+  now: number;
+  busy: boolean;
+  editingAllowed: boolean;
+  onSave: (id: string, schedule: string | null) => Promise<boolean>;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(task.schedule ?? "");
+  const paused = task.status === "done" || task.status === "archived";
+
+  const commit = async () => {
+    const schedule = draft.trim() ? draft.trim() : null;
+    if (schedule === (task.schedule ?? null)) {
+      setEditing(false);
+      return;
+    }
+    if (await onSave(task.id, schedule)) setEditing(false);
+  };
+
+  if (editing) {
+    return (
+      <div className="mt-1.5 flex items-center gap-1">
+        <Icon name="clock" size={11} className="shrink-0 text-[var(--t-dim)]" />
+        <input
+          autoFocus
+          value={draft}
+          disabled={busy}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") void commit();
+            if (e.key === "Escape") {
+              setDraft(task.schedule ?? "");
+              setEditing(false);
+            }
+          }}
+          onBlur={() => void commit()}
+          placeholder="0 9 * * 1-5 — empty clears"
+          aria-label="Cron schedule"
+          className="t-input flex-1 !py-0.5 font-mono text-[10.5px]"
+        />
+      </div>
+    );
+  }
+
+  if (task.schedule) {
+    return (
+      <div className="mt-1.5 flex items-center gap-1 text-[10px] font-mono text-[var(--t-dim)]">
+        <Icon name="clock" size={11} className="shrink-0 text-[var(--t-amber)]" />
+        <button
+          className={cn("truncate text-left", editingAllowed && "hover:text-[var(--t-fg)]")}
+          title={editingAllowed ? `cron: ${task.schedule} (server-local) — click to edit` : `cron: ${task.schedule} (server-local)`}
+          onClick={() => {
+            if (!editingAllowed) return;
+            setDraft(task.schedule ?? "");
+            setEditing(true);
+          }}
+        >
+          {task.schedule}
+        </button>
+        <span className="ml-auto shrink-0 tabular-nums">
+          {paused ? "paused" : task.nextRunAt ? `next: ${nextRunHint(task.nextRunAt, now)}` : "next: —"}
+        </span>
+      </div>
+    );
+  }
+
+  /* unscheduled card: a hover-only ghost keeps the card quiet */
+  return (
+    <div className="mt-1 h-4 flex items-center">
+      <button
+        className="opacity-0 group-hover:opacity-60 focus:opacity-100 hover:!opacity-100 flex items-center gap-1 text-[10px] font-mono text-[var(--t-dim)] hover:text-[var(--t-fg)]"
+        title="Add a cron schedule (server-local time)"
+        onClick={() => {
+          setDraft("");
+          setEditing(true);
+        }}
+      >
+        <Icon name="clock" size={11} /> schedule…
+      </button>
+    </div>
   );
 }

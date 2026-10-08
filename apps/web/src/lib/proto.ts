@@ -362,6 +362,10 @@ export interface TaskInfo {
   createdAt: number;
   updatedAt: number;
   lastRunAt?: number;
+  /* cron schedule (issue #16): the 5-field expr + the server's computed next
+     slot, both in SERVER-local wall-clock semantics */
+  schedule?: string;
+  nextRunAt?: number;
 }
 
 type Base = { sessionId: string };
