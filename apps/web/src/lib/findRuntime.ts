@@ -76,6 +76,12 @@ export function registerFindProvider(dockApi: object | undefined, panelId: strin
   };
 }
 
+/** The provider registered for (dock api, panel id), if any — the exact lookup the chord makes. */
+export function findProviderFor(dockApi: object | undefined, panelId: string | undefined): FindProvider | undefined {
+  if (!dockApi || !panelId) return undefined;
+  return providers.get(dockApi)?.get(panelId);
+}
+
 /* ------------------------------------------------------------------ */
 /* the target: which panel the bar is open on                          */
 /* ------------------------------------------------------------------ */
@@ -106,7 +112,7 @@ export function openFindInActivePanel(): void {
   const api = desktops.getApi();
   const panel = api?.activePanel;
   if (!api || !panel) return; // an empty workspace has nothing to search
-  if (!providers.get(api)?.get(panel.id)) {
+  if (!findProviderFor(api, panel.id)) {
     store.toast("info", "Nothing to search in this panel", "Find searches chat transcripts, shell output, the feed, and the monitor.");
     return;
   }
@@ -254,9 +260,17 @@ export function domFindProvider(root: () => HTMLElement | null): FindProvider {
   function setQuery(q: string): number {
     query = q;
     const count = paint();
-    if (!count) return 0;
+    if (!q.trim()) {
+      /* a blanked query stops watching too — the observer would repaint
+         nothing on every mutation */
+      observer?.disconnect();
+      observer = null;
+      return 0;
+    }
+    /* watch even at 0 matches: a transcript streams, and a match that does
+       not exist yet can arrive a second later (audit B2) */
     watch();
-    reveal(0);
+    if (count) reveal(0);
     return count;
   }
 
@@ -317,12 +331,24 @@ export function terminalFindProvider(get: () => { term: Terminal; search: Search
   let query = "";
   let count = 0;
   let current = -1;
+  /* shells stream under an open bar: the SearchAddon re-scans a live buffer
+     it has decorations on and reports the fresh total, which keeps "n / N"
+     honest (audit B2). The subscription follows the CURRENT addon instance
+     — a reattach/font rebuild replaces it (termRef in TerminalPanel) */
+  let subscribedTo: SearchAddon | null = null;
+  let resultsSub: { dispose(): void } | null = null;
+  const unwatch = () => {
+    resultsSub?.dispose();
+    resultsSub = null;
+    subscribedTo = null;
+  };
 
-  return {
+  const self: FindProvider = {
     setQuery(q) {
       query = q;
       const t = get();
       if (!t || !q.trim()) {
+        unwatch();
         t?.search.clearDecorations();
         t?.search.clearActiveDecoration();
         count = 0;
@@ -330,6 +356,15 @@ export function terminalFindProvider(get: () => { term: Terminal; search: Search
         return 0;
       }
       count = terminalMatchCount(t.term, q);
+      if (subscribedTo !== t.search) {
+        unwatch();
+        subscribedTo = t.search;
+        resultsSub = t.search.onDidChangeResults((e) => {
+          if (!query || e.resultCount <= 0 || e.resultCount === count) return;
+          count = e.resultCount;
+          self.onRecount?.(count);
+        });
+      }
       /* jump to the nearest match as the query is typed, browser-style; the
          addon paints every match when decorations ride along */
       current = t.search.findNext(q, TERM_FIND_OPTIONS) ? 0 : -1;
@@ -343,6 +378,7 @@ export function terminalFindProvider(get: () => { term: Terminal; search: Search
       return current;
     },
     clear() {
+      unwatch();
       const t = get();
       t?.search.clearDecorations();
       t?.search.clearActiveDecoration();
@@ -354,4 +390,5 @@ export function terminalFindProvider(get: () => { term: Terminal; search: Search
       get()?.term.focus();
     },
   };
+  return self;
 }

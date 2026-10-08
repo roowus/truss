@@ -19,6 +19,7 @@ export function FindBar({ provider, nonce, onClose }: { provider: FindProvider; 
   const [count, setCount] = useState(0);
   const [idx, setIdx] = useState(-1);
   const inputRef = useRef<HTMLInputElement>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     inputRef.current?.focus();
@@ -51,6 +52,24 @@ export function FindBar({ provider, nonce, onClose }: { provider: FindProvider; 
     },
     [provider],
   );
+  /* Chrome/VS Code parity (audit B1): Esc dismisses the bar even after
+     focus moves to the panel — clicking a match to read it must not strand
+     the bar. The guards keep Esc's other owners: the bar's own input
+     handles it directly (below), other inputs keep their own (the feed
+     filter's Esc clears it), and xterm keeps it — vim in a shell is
+     unusable otherwise. Enter stays INPUT-scoped on purpose: in the panel
+     it edits; VS Code cycles from the widget only, same as here. */
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || e.isComposing) return;
+      const t = e.target as HTMLElement | null;
+      if (!t || rootRef.current?.contains(t)) return;
+      if (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable || t.closest(".xterm")) return;
+      onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
 
   const apply = (value: string) => {
     setQ(value);
@@ -61,13 +80,16 @@ export function FindBar({ provider, nonce, onClose }: { provider: FindProvider; 
   const step = (dir: 1 | -1) => setIdx(provider.step(dir));
 
   return (
-    <div role="search" aria-label="Find in this panel" className="absolute top-2 right-3 z-20 flex items-center gap-1 h-7 pl-2 pr-1 rounded-md bg-[var(--t-bg2)] border border-[var(--t-line2)] shadow-xl t-pop">
+    <div ref={rootRef} role="search" aria-label="Find in this panel" className="absolute top-2 right-3 z-20 flex items-center gap-1 h-7 pl-2 pr-1 rounded-md bg-[var(--t-bg2)] border border-[var(--t-line2)] shadow-xl t-pop">
       <Icon name="search" size={11} className="text-[var(--t-dim)] shrink-0" />
       <input
         ref={inputRef}
         value={q}
         onChange={(e) => apply(e.target.value)}
         onKeyDown={(e) => {
+          /* an IME composition confirm is text input, never a command
+             (audit B4 — the composer's own rule, ChatPanel onKeyDown) */
+          if (e.nativeEvent.isComposing) return;
           if (e.key === "Enter") {
             e.preventDefault();
             step(e.shiftKey ? -1 : 1);
