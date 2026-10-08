@@ -67,6 +67,8 @@ export interface SessionMeta {
   /** the harness's own session id (pi sessionId, dsh uuid) — the resume
      target for the harness's own CLI (issue #131) */
   harness_ref?: string | null;
+  /** GitHub-style labels (issue #174): cleaned server-side, replace-all */
+  labels?: string[];
 }
 
 export interface CreateSessionBody {
@@ -370,7 +372,7 @@ type At = string | number;
 export type ProtoEvent =
   | (Base & { type: "session.created"; harness: HarnessId; title: string; cwd: string; model?: string; project?: string; at: At })
   | (Base & { type: "session.state"; state: SessionState; detail?: string })
-  | (Base & { type: "session.updated"; title?: string; project?: string | null; archived?: boolean; pinned?: boolean; model?: string | null; provider?: string | null })
+  | (Base & { type: "session.updated"; title?: string; project?: string | null; archived?: boolean; pinned?: boolean; model?: string | null; provider?: string | null; labels?: string[] })
   | (Base & { type: "session.deleted" })
   | (Base & { type: "todo.upsert"; todo: TodoItem })
   | (Base & { type: "feed.upsert"; item: FeedItem })

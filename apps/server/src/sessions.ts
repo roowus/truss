@@ -587,6 +587,47 @@ export function renameSession(sessionId: string, title: string): { id: string; t
   return { id: sessionId, title: trimmed };
 }
 
+/* GitHub-style session labels (issue #174): multi-value, colored client-side,
+   filterable. The server owns the cleaning rules so every writer (the web
+   header, future MCP tools) gets the same set back. */
+export const SESSION_LABEL_CAP = 8; // a session isn't a sticker wall
+export const SESSION_LABEL_MAX_LEN = 32;
+
+/** trim, cap at 32 chars (the rename rule: cap, never reject), drop blanks
+    and non-strings, case-insensitive dedupe keeping first-seen casing,
+    stop at the cap */
+export function cleanSessionLabels(input: unknown): string[] {
+  if (!Array.isArray(input)) return [];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of input) {
+    if (typeof raw !== "string") continue;
+    const name = raw.trim().slice(0, SESSION_LABEL_MAX_LEN);
+    if (!name) continue;
+    const key = name.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(name);
+    if (out.length >= SESSION_LABEL_CAP) break;
+  }
+  return out;
+}
+
+/** replace-all set: persists and broadcasts so open sidebars repaint live */
+export function setSessionLabels(sessionId: string, input: unknown): { id: string; labels: string[] } {
+  const row = store.getSession(sessionId);
+  if (!row) throw Object.assign(new Error(`no such session: ${sessionId}`), { status: 404 });
+  const labels = cleanSessionLabels(input);
+  store.setSessionLabels(sessionId, labels);
+  sink({ type: "session.updated", sessionId, labels });
+  return { id: sessionId, labels };
+}
+
+/** every label in use (the sidebar filter's registry) */
+export function listLabels(): string[] {
+  return store.listLabels();
+}
+
 /** every session under a project tag */
 export function setProjectArchived(project: string, archived: boolean): number {
   const rows = store.sessionsInProject(project);

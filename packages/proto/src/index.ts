@@ -35,7 +35,7 @@ export interface SessionStateEvent {
   state: SessionState;
   detail?: string;
 }
-/** metadata changed (archive, retitle, regroup, model switch, pin) without a lifecycle change */
+/** metadata changed (archive, retitle, regroup, model switch, pin, labels) without a lifecycle change */
 export interface SessionUpdated {
   type: "session.updated";
   sessionId: string;
@@ -45,6 +45,8 @@ export interface SessionUpdated {
   pinned?: boolean;
   model?: string | null;
   provider?: string | null;
+  /** GitHub-style labels (issue #174): the full cleaned set, replace-all */
+  labels?: string[];
 }
 
 /** hard-deleted: the row and its event log are gone. Broadcast-only (the FK
