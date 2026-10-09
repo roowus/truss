@@ -46,9 +46,14 @@ issue right now, and if so, which one. Cheap and deterministic: no wandering.
    {"cwd": "/home/ubuntu/projects/truss-automation",
     "title": "#<n> [working] — <slug>",
     "group": "truss automation",
+    "model": "accounts/fireworks/models/glm-5p3-flash",
     "prompt": "You are a work session for the truss repo. The repo is at /home/ubuntu/projects/truss — work there (cd first; your cwd is the automation home, which only anchors your sidebar group). Read /home/ubuntu/projects/truss/config/agent/work-session.md and follow it fully. Your issue is #<n> — start at phase 1."}
    JSON
    ```
+   The `model` line is the brain budget: GLM 5.3 Flash is the default
+   fixer. ESCALATE to "accounts/fireworks/models/kimi-k3" when the issue is
+   a large design/UI task (multi-file UI work, architecture, gnarly
+   interaction state) — your triage judgment decides from the title/body.
    The `cwd` is the automation home on purpose: DSH groups a session under
    the workspace over its cwd, so workers file under "truss automation"
    while doing the actual work in the real repo. The response is
