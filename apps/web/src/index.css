@@ -48,6 +48,12 @@ body {
 }
 ::selection { background: color-mix(in oklab, var(--t-amber) 35%, transparent); }
 
+/* app-native find marks (issue #194) are painted from lib/findRuntime.ts
+   via the CSS Custom Highlight API — no DOM mutation, so React never loses
+   a text node. The ::highlight() rules live in one injected <style> there:
+   names are per-provider (several panels paint at once in the wider find
+   scopes) and the pseudo-class can't wildcard them. */
+
 /* ---------------- Dockview theming (via --dv-* vars, higher specificity) ---------------- */
 .truss-dock .dockview-theme-dark {
   --dv-group-view-background-color: var(--t-bg1);

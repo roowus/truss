@@ -10,6 +10,7 @@ import {
   type GetTabContextMenuItemsParams,
   type BuiltInContextMenuItem,
   type ReactContextMenuItemConfig,
+  type IDockviewPanelProps,
 } from "dockview-react";
 import "dockview-react/dist/styles/dockview.css";
 import { store, useApp } from "@/lib/store";
@@ -17,6 +18,8 @@ import { tabContextMenuItems } from "@/lib/contextMenu";
 import { cleanTabTitle, tabRenameTarget } from "@/lib/tabRename";
 import { desktops, useDesktops } from "@/lib/desktops";
 import { getDockApi, renameSessionPanels, renameHostPanels } from "@/lib/workspace";
+import { domFindProvider, registerFindProvider, useFindState } from "@/lib/findRuntime";
+import { FindBar } from "./FindBar";
 import { ChatPanel } from "@/panels/ChatPanel";
 import { TrajectoryPanel } from "@/panels/TrajectoryPanel";
 import { TerminalPanel } from "@/panels/TerminalPanel";
@@ -39,26 +42,46 @@ import { Btn, Icon, StateDot, TrussLogo } from "./ui";
 import { harnessStyle } from "@/lib/format";
 import { cn } from "@/utils/cn";
 
+/* Every panel's text is findable (issue #194 + the developer's review
+   feedback on PR #210): wrap each
+   panel in one generic DOM find provider keyed by (dock api, panel id).
+   Terminals are the ONE opt-out — TerminalPanel registers its own xterm
+   SearchAddon provider because the DOM only holds the buffer's visible
+   rows. The wrapper div is layout-transparent (h-full w-full, a positioned
+   ancestor exactly where the panel's own root was). */
+function withFind(Comp: React.ComponentType<any>) {
+  return function FindablePanel(props: IDockviewPanelProps) {
+    const rootRef = useRef<HTMLDivElement>(null);
+    const provider = useMemo(() => domFindProvider(() => rootRef.current), []);
+    useEffect(() => registerFindProvider(props.containerApi, props.api.id, provider), [provider, props.containerApi, props.api.id]);
+    return (
+      <div ref={rootRef} className="relative h-full w-full min-h-0">
+        <Comp {...props} />
+      </div>
+    );
+  };
+}
+
 const components = {
-  chat: ChatPanel,
-  trajectory: TrajectoryPanel,
+  chat: withFind(ChatPanel),
+  trajectory: withFind(TrajectoryPanel),
   terminal: TerminalPanel,
-  context: ContextPanel,
-  team: TeamPanel,
-  skills: SkillsPanel,
-  files: FilesPanel,
-  git: GitPanel,
-  tasks: TasksPanel,
-  todos: TodosPanel,
-  feed: FeedPanel,
-  monitor: MonitorPanel,
-  welcome: WelcomePanel,
-  host: HostPanel,
-  settings: SettingsPanel,
-  cost: CostPanel,
-  credentials: CredentialsPanel,
-  router: RouterPanel,
-  trash: TrashPanel,
+  context: withFind(ContextPanel),
+  team: withFind(TeamPanel),
+  skills: withFind(SkillsPanel),
+  files: withFind(FilesPanel),
+  git: withFind(GitPanel),
+  tasks: withFind(TasksPanel),
+  todos: withFind(TodosPanel),
+  feed: withFind(FeedPanel),
+  monitor: withFind(MonitorPanel),
+  welcome: withFind(WelcomePanel),
+  host: withFind(HostPanel),
+  settings: withFind(SettingsPanel),
+  cost: withFind(CostPanel),
+  credentials: withFind(CredentialsPanel),
+  router: withFind(RouterPanel),
+  trash: withFind(TrashPanel),
 } as any;
 
 const KIND_ICON: Record<string, string> = {
@@ -578,6 +601,7 @@ export function Workspace() {
   const sessions = useApp((s) => s.sessions);
   const hosts = useApp((s) => s.agents);
   const hostPrefs = useDesktops((s) => s.hosts);
+  const findOpen = useFindState((s) => s.open);
 
   // First prompt renames a session. Update its tabs in every desktop, not just the active one.
   useEffect(() => {
@@ -590,6 +614,10 @@ export function Workspace() {
   return (
     <div className="relative h-full min-h-0 w-full flex flex-col">
       <DesktopStrip />
+      {/* the find bar is one global row (issue #194 + #210 review): it can
+          span panels and workspaces, so it lives above the dock rather than
+          inside any one panel */}
+      {findOpen && <FindBar />}
       <div className="relative flex-1 min-h-0 m-1.5">
         {spaces.map((space) => <DesktopCanvas key={space.id} id={space.id} visible={space.id === activeId} />)}
         {loadError && (
