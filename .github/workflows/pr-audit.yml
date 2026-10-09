@@ -164,6 +164,7 @@ jobs:
       # Provider endpoints (Anthropic-compatible).
       ZAI_BASE_URL: https://api.z.ai/api/anthropic
       FW_BASE_URL: https://api.fireworks.ai/inference
+      DS_BASE_URL: https://api.deepseek.com/anthropic
       # Model IDs. If the GLM id 404s, check the id on the Z.AI plan.
       GLM_MODEL: glm-5.3-flash
       KIMI_MODEL: accounts/fireworks/models/kimi-k3
@@ -207,8 +208,23 @@ jobs:
           tail -c 4000 "${{ runner.temp }}/build-out/log.txt" > "${{ runner.temp }}/build-out/tail.txt"
           exit 0
 
+      - name: Run audit (DeepSeek first)
+        id: run-ds
+        if: always()
+        uses: anthropics/claude-code-action@v1
+        continue-on-error: true
+        env:
+          ANTHROPIC_BASE_URL: ${{ env.DS_BASE_URL }}
+          ANTHROPIC_AUTH_TOKEN: ${{ secrets.DEEPSEEK_API_KEY }}
+        with:
+          # Labeled/pushed runs can be initiated by bots.
+          allowed_bots: github-actions
+          github_token: ${{ github.token }}
+          anthropic_api_key: ${{ secrets.DEEPSEEK_API_KEY }}
+          prompt: &audit-prompt |
       - name: Run audit (GLM)
-        id: run
+        id: run-glm
+        if: steps.run-ds.outcome == 'failure'
         uses: anthropics/claude-code-action@v1
         continue-on-error: true
         env:
@@ -417,7 +433,7 @@ jobs:
       # already picked Kimi.
       - name: Run audit (Kimi fallback)
         id: run-fb
-        if: steps.run.outcome == 'failure' && needs.gate.outputs.provider == 'zai'
+        if: steps.run-glm.outcome == 'failure' && steps.run-ds.outcome == 'failure' && needs.gate.outputs.provider == 'zai'
         uses: anthropics/claude-code-action@v1
         env:
           ANTHROPIC_BASE_URL: ${{ env.FW_BASE_URL }}
@@ -439,13 +455,14 @@ jobs:
         if: always()
         env:
           REVIEW: ${{ runner.temp }}/review-out/review.md
-          EXEC_GLM: ${{ steps.run.outputs.execution_file }}
+          EXEC_GLM: ${{ steps.run-glm.outputs.execution_file }}
+          EXEC_DS: ${{ steps.run-ds.outputs.execution_file }}
           EXEC_KIMI: ${{ steps.run-fb.outputs.execution_file }}
         run: |
           # If the agent answered without writing the file, recover the review
           # from its final message in the execution log.
           if [ ! -s "$REVIEW" ]; then
-            for EF in "$EXEC_KIMI" "$EXEC_GLM"; do
+            for EF in "$EXEC_KIMI" "$EXEC_DS" "$EXEC_GLM"; do
               [ -n "$EF" ] && [ -f "$EF" ] || continue
               python3 - "$EF" "$REVIEW" <<'EOF' && break
           import json, sys
@@ -496,7 +513,7 @@ jobs:
           path: |
             ${{ runner.temp }}/review-out/review.md
             ${{ runner.temp }}/build-out/
-            ${{ steps.run.outputs.execution_file }}
+            ${{ steps.run-glm.outputs.execution_file }}
             ${{ steps.run-fb.outputs.execution_file }}
           if-no-files-found: ignore
           retention-days: 7
@@ -510,7 +527,7 @@ jobs:
           SHORT="$(echo '${{ needs.gate.outputs.head_sha }}' | cut -c1-7)"
           MODEL_NOTE="GLM"
           [ "$PROVIDER" = "fireworks" ] && MODEL_NOTE="Kimi (3 stagnant rounds on GLM)"
-          [ "${{ steps.run.outcome }}" = "failure" ] && [ "$PROVIDER" = "zai" ] && MODEL_NOTE="Kimi (GLM run failed)"
+          [ "${{ steps.run-glm.outcome }}" = "failure" ] && [ "$PROVIDER" = "zai" ] && MODEL_NOTE="Kimi (GLM run failed)"
           MAJORS_HASH="$(cat "$RUNNER_TEMP/majors-hash.txt" 2>/dev/null)"
           if [ -s "$REVIEW" ]; then
             {
