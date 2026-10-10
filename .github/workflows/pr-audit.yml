@@ -165,6 +165,7 @@ jobs:
       ZAI_BASE_URL: https://api.z.ai/api/anthropic
       FW_BASE_URL: https://api.fireworks.ai/inference
       DS_BASE_URL: https://api.deepseek.com/anthropic
+      DS_MODEL: deepseek-flash
       # Model IDs. If the GLM id 404s, check the id on the Z.AI plan.
       GLM_MODEL: glm-5.3-flash
       KIMI_MODEL: accounts/fireworks/models/kimi-k3
@@ -221,6 +222,12 @@ jobs:
           allowed_bots: github-actions
           github_token: ${{ github.token }}
           anthropic_api_key: ${{ secrets.DEEPSEEK_API_KEY }}
+          claude_args: |
+            --model ${{ env.DS_MODEL }}
+            --max-turns 80
+            --add-dir ${{ runner.temp }}/review-out
+            --add-dir ${{ runner.temp }}/build-out
+            --allowed-tools "Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh issue view:*),Bash(curl:*),Read,Write,Glob,Grep"
           prompt: &audit-prompt |
       - name: Agent audit (GLM fallback)
         id: run-glm
