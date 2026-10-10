@@ -10,7 +10,7 @@
 # Runs from cron; cheap when there's nothing to do.
 set -u
 cd /home/ubuntu/projects/truss || exit 1
-LEDGER="$HOME/.local/state/truss-sessions.json"
+LEDGER="/home/ubuntu/.local/state/truss-sessions.json"
 
 # gh auth: cron envs carry no login and the interactive oauth expires —
 # the box PAT from the dsh env file is the durable credential
@@ -22,7 +22,13 @@ export GH_TOKEN
 # awk column that actually matches ACTIVE state on list-units output.
 
 declare -A STATE
-while read -r n s; do STATE[$n]=$s; done < <(gh pr list --repo roowus/truss --state all --limit 200 --json number,state --jq '.[] | "\(.number) \(.state)"' 2>/dev/null)
+if ! PRJSON=$(gh pr list --repo roowus/truss --state all --limit 200 --json number,state --jq '.[] | "\(.number) \(.state)"' 2>/dev/null); then
+  echo "$(date -Is) FATAL: gh pr list failed (auth? network?) — NOT reaping this tick. Previous ticks' silent no-ops let 10 stale previews run for days; do not let this recur unnoticed."
+  touch /var/tmp/preview-reap.FAILED
+  exit 1
+fi
+rm -f /var/tmp/preview-reap.FAILED
+while read -r n s; do STATE[$n]=$s; done < <(printf '%s\n' "$PRJSON")
 
 # retitle <pr> <bracket>: flip the worker session's title via dsh-spawn.
 retitle() {
