@@ -208,7 +208,7 @@ jobs:
           tail -c 4000 "${{ runner.temp }}/build-out/log.txt" > "${{ runner.temp }}/build-out/tail.txt"
           exit 0
 
-      - name: Run audit (DeepSeek first)
+      - name: Agent audit (DeepSeek first)
         id: run-ds
         if: always()
         uses: anthropics/claude-code-action@v1.0.35
@@ -222,7 +222,7 @@ jobs:
           github_token: ${{ github.token }}
           anthropic_api_key: ${{ secrets.DEEPSEEK_API_KEY }}
           prompt: &audit-prompt |
-      - name: Run audit (GLM)
+      - name: Agent audit (GLM fallback)
         id: run-glm
         if: steps.run-ds.outcome == 'failure'
         uses: anthropics/claude-code-action@v1.0.35
@@ -431,7 +431,7 @@ jobs:
       # Same audit, retried once on Kimi if the GLM run failed (for example the
       # Z.AI key is out of credits). Not retried when the stagnation rule
       # already picked Kimi.
-      - name: Run audit (Kimi fallback)
+      - name: Agent audit (Kimi fallback)
         id: run-fb
         if: steps.run-glm.outcome == 'failure' && steps.run-ds.outcome == 'failure' && needs.gate.outputs.provider == 'zai'
         uses: anthropics/claude-code-action@v1.0.35
