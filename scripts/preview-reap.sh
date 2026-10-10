@@ -12,6 +12,15 @@ set -u
 cd /home/ubuntu/projects/truss || exit 1
 LEDGER="$HOME/.local/state/truss-sessions.json"
 
+# gh auth: cron envs carry no login and the interactive oauth expires —
+# the box PAT from the dsh env file is the durable credential
+[ -n "${GH_TOKEN:-}" ] || GH_TOKEN=$(grep "^GH_PROJECT_PAT" /opt/dsh/.env | cut -d= -f2)
+export GH_TOKEN
+
+# gh auth: cron envs carry no login, and the interactive gh oauth expires —
+# use the box PAT (repo-read scope is all this script needs). Revert to the
+# awk column that actually matches ACTIVE state on list-units output.
+
 declare -A STATE
 while read -r n s; do STATE[$n]=$s; done < <(gh pr list --repo roowus/truss --state all --limit 200 --json number,state --jq '.[] | "\(.number) \(.state)"' 2>/dev/null)
 
