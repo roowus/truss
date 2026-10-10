@@ -211,7 +211,7 @@ jobs:
       - name: Run audit (DeepSeek first)
         id: run-ds
         if: always()
-        uses: anthropics/claude-code-action@v1
+        uses: anthropics/claude-code-action@v1.0.35
         continue-on-error: true
         env:
           ANTHROPIC_BASE_URL: ${{ env.DS_BASE_URL }}
@@ -225,7 +225,7 @@ jobs:
       - name: Run audit (GLM)
         id: run-glm
         if: steps.run-ds.outcome == 'failure'
-        uses: anthropics/claude-code-action@v1
+        uses: anthropics/claude-code-action@v1.0.35
         continue-on-error: true
         env:
           ANTHROPIC_BASE_URL: ${{ env.ZAI_BASE_URL }}
@@ -434,7 +434,7 @@ jobs:
       - name: Run audit (Kimi fallback)
         id: run-fb
         if: steps.run-glm.outcome == 'failure' && steps.run-ds.outcome == 'failure' && needs.gate.outputs.provider == 'zai'
-        uses: anthropics/claude-code-action@v1
+        uses: anthropics/claude-code-action@v1.0.35
         env:
           ANTHROPIC_BASE_URL: ${{ env.FW_BASE_URL }}
           ANTHROPIC_AUTH_TOKEN: ${{ secrets.FIREWORKS_API_KEY }}
