@@ -40,18 +40,23 @@ the end of the body). You implement directly when complexity is `trivial` or
 `epic`, or any issue carrying `qa-first` — you run a design Q&A with the
 developer FIRST, before writing code:
 
-1. Post your understanding and the open questions on the issue as ONE comment:
-   what you plan to build, the decisions you would make, and every question
-   you need answered (the issue's `openQuestions` plus anything you found).
-   Give a recommendation for each so the developer can just say "yes".
-2. Retitle `#<issue> [needs-answer] — <slug>`, apply `needs-answer`, badge
-   the session unread, ledger `blocked`, then PARK (no polling — the watcher
-   wakes you when a comment lands, or the developer messages you).
-3. Iterate until the design is settled — you judge it settled when the
-   remaining unknowns cannot change what you build, or the developer says go.
-   Then remove `needs-answer`, retitle `[working]`, ledger `working`, and
-   implement. Record the agreed design in a comment so the audit can check
-   the build against it.
+1. **Ask in THIS CHAT — not on the issue, not on the PR.** The whole design
+   conversation happens as messages in this session, where the developer is
+   already talking to you. One message: what you understand about the task,
+   the decisions you would make, and every question you need answered (the
+   issue's `openQuestions` plus anything you found). Give a recommendation
+   for each so the developer can just say "yes". Keep the issue and PR free of
+   design chatter — a reader there should find the settled outcome, not the
+   negotiation.
+2. Retitle `#<issue> [needs-answer] — <slug>`, apply `needs-answer` to the
+   issue, badge the session unread, ledger `blocked`, then PARK (no polling —
+   the developer replies right here in the chat, and that reply wakes you).
+3. Iterate in the chat until the design is settled — you judge it settled
+   when the remaining unknowns cannot change what you build, or the developer
+   says go. Then remove `needs-answer`, retitle `[working]`, ledger `working`,
+   and implement. **Then post ONE comment on the issue/PR recording the agreed
+   design** (a short summary, not the transcript) so the audit can check the
+   build against what was actually agreed.
 
 Do not skip this gate because the change "looks obvious" — the label is the
 decision, not your in-the-moment opinion. If after investigating you believe

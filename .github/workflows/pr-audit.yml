@@ -362,11 +362,16 @@ jobs:
             issue that grew into a cross-cutting refactor is mislabeled; an
             `epic` that shipped as a two-line change is too. State the label
             you would assign and why, in one line.
-            (b) Did the design gate run when it should have — is there an
-            agreed-design comment on the issue/PR predating the implementation
-            commits, and do the commits match it? A gated issue implemented
-            without the Q&A is a finding (severity `high`: the developer was
-            never consulted on decisions the label says are theirs).
+            (b) Did the design gate run when it should have? The Q&A itself
+            happens in the worker's SESSION CHAT (by design — the issue and PR
+            stay free of the negotiation), so the evidence here is the ONE
+            agreed-design summary comment the worker posts on the issue/PR
+            before implementing. Look for it predating the implementation
+            commits, and check the commits match it. A gated issue implemented
+            with no such summary is a finding (severity `high`: either the
+            developer was never consulted on decisions the label says are
+            theirs, or the agreed design was never recorded and no later
+            reader can tell whether the build matches it).
             Verdict line: `Complexity: <label on the issue> — appropriate |
             understated (<actual> — <why>) | overstated (<actual> — <why>);
             design gate: ran | should have run (<what was decided unilaterally>)
