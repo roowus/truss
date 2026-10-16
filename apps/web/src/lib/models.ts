@@ -87,6 +87,17 @@ export function modelDisplay(m: { provider: string; model: string; label: string
    labels (#169) carry the scope on their own and a note is just noise. */
 const SCOPE_NOTE_MAX_PROVIDERS = 3;
 
+/** Past this many rows the list no longer reads as sparse, so the note has
+   nothing left to explain. Richness is a ROW count, not a provider count:
+   hermes tags its whole 600+ model catalog `provider: "hermes"`
+   (apps/server/src/adapters/hermes.ts mapModels — hermes's ACP model state
+   carries no provider at all, so that value is a placeholder), and pi does
+   the same when `~/.pi/agent/models.json` holds one provider entry with many
+   models. A provider gate alone would pin "via hermes" under exactly the
+   rich list the issue's acceptance criteria say must stay quiet. Sits
+   between claude's 11 key-proxy models and the big OpenRouter/dsh catalogs. */
+const SCOPE_NOTE_MAX_ROWS = 30;
+
 /** Why a harness's model list is short (issue #170). claude's picker shows
    ~11 models while pi/hermes show 600+ — reads like a bug, but it is by
    design: different credential routes reach different model universes
@@ -97,11 +108,15 @@ const SCOPE_NOTE_MAX_PROVIDERS = 3;
    already-projected picker options (`providerLabel`), so both call sites can
    hand over what they already hold.
 
+   - a long list → null, however few providers it names (the list is rich,
+     not scoped — the #169 per-row labels carry the providers themselves);
    - one provider → names it; the local key-proxy shape also says so;
    - up to SCOPE_NOTE_MAX_PROVIDERS → lists them;
-   - a rich catalog, or nothing at all → null (the #169 per-row labels
-     already carry the provider, and an empty list has nothing to explain). */
+   - more providers, or nothing at all → null. */
 export function catalogScopeNote(models: Array<{ provider?: string; providerLabel?: string }>): string | null {
+  /* the row gate comes FIRST: a 600-row single-provider catalog is rich, and
+     naming its one provider would be a redundant note on a long list */
+  if (models.length === 0 || models.length > SCOPE_NOTE_MAX_ROWS) return null;
   const providers: string[] = [];
   for (const m of models) {
     const p = (m?.provider || m?.providerLabel || "").trim();
