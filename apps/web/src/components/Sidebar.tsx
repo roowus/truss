@@ -386,7 +386,7 @@ function SessionRow({
       /* an explicit name: without it the row announces as the concatenation
          of title + timestamp + state text (audit B2) */
       aria-label={s.title}
-      aria-selected={selected || undefined}
+      aria-pressed={selected || undefined}
       tabIndex={0}
       onKeyDown={(e) => {
         if ((e.key === "Enter" || e.key === " ") && e.target === e.currentTarget) {
@@ -394,15 +394,16 @@ function SessionRow({
           openSession(s.id);
         }
       }}
-      /* issue #225: a modified click is a SELECTION gesture, never an open —
-         plain click keeps opening the session (and collapses to one row) as
-         it always has; shift/cmd/ctrl build the set instead of navigating */
+      /* issue #225: EVERY click goes through the selection model — a plain
+         click collapses the selection to this row (anchor = it) AND opens
+         the session, which is the "plain click selects exactly one" contract;
+         shift/cmd/ctrl build the set and never navigate. Before this the
+         plain branch short-circuited to openSession, so the model's collapse
+         path was unreachable from the sidebar and a stale multi-selection
+         survived the click (audit round 1, B1). */
       onClick={(e) => {
-        if (e.shiftKey || e.metaKey || e.ctrlKey) {
-          onRowClick(s.id, e);
-          return;
-        }
-        openSession(s.id);
+        onRowClick(s.id, e);
+        if (!e.shiftKey && !e.metaKey && !e.ctrlKey) openSession(s.id);
       }}
       className={cn(
         "group relative mx-0.5 flex items-center gap-2 px-2 t-session-row rounded-md transition-colors cursor-pointer",
@@ -479,6 +480,15 @@ const CONFIRM_LABEL: Record<string, string> = {
   trash: "Click again to move to trash",
 };
 
+/* the bulk bar's armed tooltips — the set-level consequence, by action id
+   (audit round 1, B4): the single-row actions name what each kind loses, and
+   the bulk path must not be vaguer than the one it multiplies */
+const CONFIRM_HINT: Record<string, string> = {
+  delete: "Click again to confirm — chats go to trash (recoverable 30 days), shells are killed, hosts are deleted (drops their agent)",
+  archive: "Click again to archive the selected chats",
+  pin: "Click again to pin the selection",
+};
+
 
 /* ---------------- shells + remote hosts rows (issue #85) ----------------
    Actions come from src/lib/rowActions.ts (looked up by id, never by
@@ -532,13 +542,12 @@ function ShellRow({ t, selected, onRowClick }: { t: TerminalInfo; selected?: boo
         "group relative flex items-center gap-2 mx-0.5 px-2 h-7 rounded-md cursor-pointer",
         selected ? "bg-[color-mix(in_oklab,var(--t-amber)_14%,transparent)]" : "hover:bg-white/[0.03]",
       )}
-      aria-selected={selected || undefined}
+      aria-pressed={selected || undefined}
+      /* issue #225: all clicks route through the model (audit round 1, B1) —
+         plain collapses to this row and opens the panel */
       onClick={(e) => {
-        if (e.shiftKey || e.metaKey || e.ctrlKey) {
-          onRowClick(t.id, e);
-          return;
-        }
-        openPanel("terminal", { terminalId: t.id, title: t.title });
+        onRowClick(t.id, e);
+        if (!e.shiftKey && !e.metaKey && !e.ctrlKey) openPanel("terminal", { terminalId: t.id, title: t.title });
       }}
       title={t.cwd ? shortPath(t.cwd) : undefined}
     >
@@ -675,13 +684,12 @@ function HostRow({ h, alias, selected, onRowClick }: { h: HostInfo; alias?: stri
     <div
       role="button"
       tabIndex={0}
-      aria-selected={selected || undefined}
+      aria-pressed={selected || undefined}
+      /* issue #225: all clicks route through the model (audit round 1, B1) —
+         plain collapses to this row and opens the host */
       onClick={(e) => {
-        if (e.shiftKey || e.metaKey || e.ctrlKey) {
-          onRowClick(h.id, e);
-          return;
-        }
-        open();
+        onRowClick(h.id, e);
+        if (!e.shiftKey && !e.metaKey && !e.ctrlKey) open();
       }}
       onKeyDown={(e) => {
         /* the row was a real <button> before #85 — keyboard opens stay */
@@ -868,26 +876,35 @@ function BulkBar({
         </button>
       </div>
       <div className="mt-1.5 flex flex-wrap gap-1">
-        {actions.map((a) => (
-          <button
-            key={a.id}
-            disabled={!!a.disabled}
-            title={a.disabled ?? (confirm && a.confirm ? "Click again to confirm" : a.label)}
-            onClick={() => kill(a)}
-            className={cn(
-              "px-2 py-0.5 rounded text-[10.5px] font-medium border transition-colors",
-              a.disabled
-                ? "border-[var(--t-line)] text-[var(--t-dim)] cursor-not-allowed"
-                : a.confirm
-                  ? confirm
-                    ? "border-[var(--t-red)] bg-[color-mix(in_oklab,var(--t-red)_15%,transparent)] text-[var(--t-red)]"
-                    : "border-[var(--t-line2)] text-[var(--t-mute)] hover:text-[var(--t-red)] hover:border-[var(--t-red)]/50"
-                  : "border-[var(--t-line2)] text-[var(--t-mute)] hover:text-[var(--t-fg)] hover:border-[var(--t-mute)]",
-            )}
-          >
-            {confirm && a.confirm ? `Click again: ${a.label}` : a.label}
-          </button>
-        ))}
+        {actions.map((a) => {
+          /* audit round 1 (B4): the bulk path is the MORE destructive one, so
+             its second click repeats the per-kind consequence the single-row
+             actions spell out — "kills the shells", "drops the agent" — never
+             a bare "Click again to confirm" */
+          const armed = confirm && !!a.confirm;
+          const title = a.disabled ?? (armed ? (CONFIRM_HINT[a.id] ?? "Click again to confirm") : a.label);
+          return (
+            <button
+              key={a.id}
+              disabled={!!a.disabled}
+              title={title}
+              aria-label={armed ? title : a.label}
+              onClick={() => kill(a)}
+              className={cn(
+                "px-2 py-0.5 rounded text-[10.5px] font-medium border transition-colors",
+                a.disabled
+                  ? "border-[var(--t-line)] text-[var(--t-dim)] cursor-not-allowed"
+                  : a.confirm
+                    ? confirm
+                      ? "border-[var(--t-red)] bg-[color-mix(in_oklab,var(--t-red)_15%,transparent)] text-[var(--t-red)]"
+                      : "border-[var(--t-line2)] text-[var(--t-mute)] hover:text-[var(--t-red)] hover:border-[var(--t-red)]/50"
+                    : "border-[var(--t-line2)] text-[var(--t-mute)] hover:text-[var(--t-fg)] hover:border-[var(--t-mute)]",
+              )}
+            >
+              {armed ? `Click again: ${a.label}` : a.label}
+            </button>
+          );
+        })}
       </div>
     </div>
   );
