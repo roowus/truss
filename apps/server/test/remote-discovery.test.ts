@@ -89,7 +89,7 @@ async function fakeDiscoveringAgent(host: string, token: string) {
   /* Node 22's built-in WebSocket client — the api-remote-loop pattern */
   send({
     type: "hello",
-    hostname: "rewissmacbookpro",
+    hostname: "devbox-laptop",
     adapters: [{ id: "pi", capabilities: { permissions: false, subagents: false, streaming: true, queueWhileRunning: true } }],
     sessions: [],
     protocol: 2,

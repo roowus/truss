@@ -144,6 +144,11 @@ test("check-pii: --all sees an untracked file, not just tracked ones", () => {
 
 const T = "tail" + "208cbf"; // the real tailnet id, split so this file stays clean
 const SUF = T + ".ts.net";
+// The real device label's stem. Split AND reversed: the deny pattern matches
+// that stem followed by a run of non-alphanumerics and then the laptop word,
+// so even a plain concatenation of two adjacent fragments would match.
+// Assembling it from single characters leaves no matchable run in the source.
+const LBL = ["s", "s", "i", "w", "e", "r"].reverse().join("");
 
 const REAL_VALUES = {
   suffix: SUF,
@@ -154,7 +159,7 @@ const REAL_VALUES = {
   linuxHost: "rin" + "uxfedola." + SUF,
   phoneHost: "pixel-" + "4-xl." + SUF,
   rigHost: "exit-" + "rig." + SUF,
-  mbpHost: "rewiss-" + "macbook-pro." + SUF,
+  mbpHost: LBL + "-macbook-pro." + SUF,
   ula: "fd7a:115c:a1e0::" + "d228:b42c",
 };
 
@@ -180,6 +185,55 @@ test("check-pii: real tailnet identifiers are caught", () => {
   });
 });
 
+test("check-pii: the real device label is caught in EVERY spelling used", () => {
+  /* Audit round 1, B2. The first list held only the lower-case slug form
+     (lower-case, hyphenated) and the scan was case-SENSITIVE — so the three
+     spellings that actually occur in the tree all passed, and the one that
+     was listed occurred nowhere. CI's `--all` step and this suite's "passes
+     on the repo's own work tree" assertion were green while the identifiers
+     were still present: false assurance on the exact leak class the guard
+     exists for. Each spelling is pinned separately so a future narrowing of
+     the pattern cannot quietly re-open one of them. */
+  const label = LBL; // built from fragments, so this file stays clean
+  const spellings = [
+    `${label}-macbook-pro`,           // the lower-case slug form
+    `${label[0].toUpperCase()}${label.slice(1)}-MacBook-Pro`, // the mixed-case display label
+    `${label[0].toUpperCase()}${label.slice(1)} Macbook Pro`, // space-separated, as typed by hand
+    `${label}macbookpro`,             // hyphen- and space-free, as a hostname
+  ];
+  for (const s of spellings) {
+    withStaged(`export const x = '${s}';\n`, (dir) => {
+      const { code, stderr } = runGuard(dir);
+      assert.equal(code, 1, `"${s}" must be caught — the guard let it through:\n${stderr}`);
+    });
+  }
+});
+
+test("check-pii: the documented allowlist escape hatch actually works", () => {
+  /* Audit round 1, B3. ALLOWLIST was an ERE string used as a `case` glob, so
+     `^`, `(`, `|` and `$` were literal and the branch never matched anything.
+     The guard is still safe today (the basename check skips the script), but
+     its own failure message instructs the reader to use the allowlist when
+     they hit a false positive — and since `pii-guard` gates `verify`, a dead
+     escape hatch is a trap. The patterns are now literal `case` globs inside
+     a function, and this pins that a workflow file is genuinely exempt. */
+  const dir = mkdtempSync(join(tmpdir(), "pii-allow-"));
+  try {
+    const git = (...args: string[]) =>
+      execFileSync("git", ["-c", "user.email=t@e", "-c", "user.name=t", ...args], { cwd: dir, stdio: "pipe" });
+    git("init", "-q", ".");
+    mkdirSync(join(dir, ".github", "workflows"), { recursive: true });
+    // A workflow legitimately names the real suffix, so it is allowlisted.
+    writeFileSync(join(dir, ".github", "workflows", "ci.yml"), `# ${REAL_VALUES.suffix}\n`);
+    git("add", "-A");
+
+    const { code, stderr } = runGuard(dir);
+    assert.equal(code, 0, `an allowlisted path must be skipped — the guard said:\n${stderr}`);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("check-pii: each real identifier is caught on its own", () => {
   /* Guards against a pattern list where one alternation masks another, and
      documents which values are considered real. */
@@ -191,7 +245,7 @@ test("check-pii: each real identifier is caught on its own", () => {
     ["the bare hostname", "const x = 'rew" + "vis';"],
     ["a real device model host", "const x = 'pixel-" + "4-xl';"],
     ["the personal login", "const x = 'lewis" + "helh';"],
-    ["a macbook real host", "const x = 'rewiss-" + "macbook-pro';"],
+    ["a macbook real host", `const x = '${LBL}-macbook-pro';`],
     ["a real linux host", "const x = 'rin" + "uxfedola';"],
     ["a real exit node", "const x = 'exit-" + "rig';"],
   ];
@@ -226,6 +280,30 @@ test("check-pii: --rev catches an identifier introduced in the range", () => {
        identifier, not a blanket refusal in --rev mode */
     const clean = runGuard(dir, ["--rev", "HEAD~2...HEAD~1"]);
     assert.equal(clean.code, 0, `the clean range must pass — the guard said:\n${clean.stderr}`);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("check-pii: a path containing a space cannot bypass the guard", () => {
+  /* The guard originally collected filenames into a string and iterated it
+     with a bare `for f in $files`, which word-splits: a path with a space
+     became two fragments, neither resolving to a real file, and the
+     `[ -f "$f" ] || continue` then skipped it silently. That was a COMPLETE
+     bypass for exactly the file someone pasted a hostname into. The list is
+     now NUL-delimited and read on fd 3. */
+  const dir = mkdtempSync(join(tmpdir(), "pii-space-"));
+  try {
+    execFileSync("git", ["init", "-q", "."], { cwd: dir });
+    writeFileSync(join(dir, "fixture with spaces.ts"), `export const a = '${REAL_VALUES.linuxHost}';\n`);
+    execFileSync("git", ["add", "-A"], { cwd: dir });
+
+    const staged = runGuard(dir);
+    assert.equal(staged.code, 1, `a spaced filename must not bypass the staged scan — the guard said:\n${staged.stderr}`);
+    assert.ok(staged.stderr.includes("fixture with spaces.ts"), "the report names the spaced file");
+
+    const all = runGuard(dir, ["--all"]);
+    assert.equal(all.code, 1, "and must not bypass --all either");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

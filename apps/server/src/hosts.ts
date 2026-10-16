@@ -63,7 +63,7 @@ const hashToken = (t: string) => createHash("sha256").update(t).digest("hex");
 
 /**
  * Human-minted ids (issue #109): the add-host wizard always has the label at
- * mint time, so the id IS the slugified label ("Rewiss Macbook Pro" →
+ * mint time, so the id IS the slugified label ("Devbox Laptop" →
  * "devbox-laptop") — every surface that prints the id raw still reads
  * right. Collisions suffix -2, -3…; a label with no safe characters falls
  * back to the old hex shape. Immutable after mint: env files, tokens, and

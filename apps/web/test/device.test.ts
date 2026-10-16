@@ -39,10 +39,10 @@ test("hostAliases: flattens desktop prefs, trims values, skips blanks", () => {
 });
 
 test("hostDisplay: alias wins over the registry label, blank alias falls through", () => {
-  const hosts = [{ id: "525b9cd4", label: "Rewiss-MacBook-Pro" }];
+  const hosts = [{ id: "525b9cd4", label: "Devbox-Laptop" }];
   assert.equal(hostDisplay("525b9cd4", hosts, { "525b9cd4": "the macbook" }), "the macbook");
-  assert.equal(hostDisplay("525b9cd4", hosts, { "525b9cd4": "   " }), "Rewiss-MacBook-Pro", "a whitespace alias is no alias");
-  assert.equal(hostDisplay("525b9cd4", hosts), "Rewiss-MacBook-Pro");
+  assert.equal(hostDisplay("525b9cd4", hosts, { "525b9cd4": "   " }), "Devbox-Laptop", "a whitespace alias is no alias");
+  assert.equal(hostDisplay("525b9cd4", hosts), "Devbox-Laptop");
   assert.equal(hostDisplay("deadbeef", hosts), "deadbeef", "unknown host keeps the raw id");
 });
 
