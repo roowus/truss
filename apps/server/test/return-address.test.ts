@@ -40,7 +40,7 @@ interface NetLike {
 const NET_LOOPBACK: NetLike = {
   port: 4040,
   bind: "127.0.0.1",
-  tailscale: { installed: true, ip4: "100.107.125.118", dnsName: "rewvis.tail208cbf.ts.net", serveOn: false },
+  tailscale: { installed: true, ip4: "100.64.0.10", dnsName: "devbox.example.ts.net", serveOn: false },
   lan: ["192.168.1.10"],
 };
 
@@ -51,26 +51,26 @@ test("assertDialableServerUrl: the user's exact dead address rejects with remedi
     assert.equal(typeof net.assertDialableServerUrl, "function", "net.ts must export assertDialableServerUrl — see issue #100");
 
     assert.throws(
-      () => net.assertDialableServerUrl("http://rewvis.tail208cbf.ts.net:4040", NET_LOOPBACK),
+      () => net.assertDialableServerUrl("http://devbox.example.ts.net:4040", NET_LOOPBACK),
       /reach|listen|serve|TRUSS_HOST|loopback/i,
       "the tailnet name on a loopback-bound server must refuse, with the fix named",
     );
-    assert.throws(() => net.assertDialableServerUrl("http://100.107.125.118:4040", NET_LOOPBACK), /reach|listen|serve|TRUSS_HOST|loopback/i, "the tailnet ip too");
+    assert.throws(() => net.assertDialableServerUrl("http://100.64.0.10:4040", NET_LOOPBACK), /reach|listen|serve|TRUSS_HOST|loopback/i, "the tailnet ip too");
     assert.throws(() => net.assertDialableServerUrl("http://192.168.1.10:4040", NET_LOOPBACK), /reach|listen|serve/i, "even the LAN ip — loopback answers nothing off-loopback");
 
     /* what DOES pass on loopback */
     net.assertDialableServerUrl("http://127.0.0.1:4040", NET_LOOPBACK);
-    const withServe = { ...NET_LOOPBACK, tailscale: { ...NET_LOOPBACK.tailscale, serveOn: true, serveUrl: "https://rewvis.tail208cbf.ts.net" } };
-    net.assertDialableServerUrl("https://rewvis.tail208cbf.ts.net", withServe);
+    const withServe = { ...NET_LOOPBACK, tailscale: { ...NET_LOOPBACK.tailscale, serveOn: true, serveUrl: "https://devbox.example.ts.net" } };
+    net.assertDialableServerUrl("https://devbox.example.ts.net", withServe);
     /* issue #171: on a busy-443 machine the serve URL carries the alternate
        port — dialability must accept it (it is the same serveUrl compare) */
-    const withAltServe = { ...NET_LOOPBACK, tailscale: { ...NET_LOOPBACK.tailscale, serveOn: true, serveUrl: "https://rewvis.tail208cbf.ts.net:8443" } };
-    net.assertDialableServerUrl("https://rewvis.tail208cbf.ts.net:8443", withAltServe);
+    const withAltServe = { ...NET_LOOPBACK, tailscale: { ...NET_LOOPBACK.tailscale, serveOn: true, serveUrl: "https://devbox.example.ts.net:8443" } };
+    net.assertDialableServerUrl("https://devbox.example.ts.net:8443", withAltServe);
 
     /* all-interfaces bind: everything local passes */
     const wide = { ...NET_LOOPBACK, bind: "0.0.0.0" };
-    net.assertDialableServerUrl("http://rewvis.tail208cbf.ts.net:4040", wide);
-    net.assertDialableServerUrl("http://100.107.125.118:4040", wide);
+    net.assertDialableServerUrl("http://devbox.example.ts.net:4040", wide);
+    net.assertDialableServerUrl("http://100.64.0.10:4040", wide);
     net.assertDialableServerUrl("http://192.168.1.10:4040", wide);
   } finally {
     cleanup();

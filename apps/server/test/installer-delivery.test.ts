@@ -63,7 +63,7 @@ test("taildropToPeer validates inputs before invoking the tailscale CLI", async 
     writeFileSync(payload, "#!/bin/sh\n");
     try {
       await assert.rejects(() => send("", [payload]), /peer|target|device/i, "empty peer must be rejected with a useful message, not a CLI error");
-      await assert.rejects(() => send("rinuxfedola.tail208cbf.ts.net", []), /file|path|payload/i, "nothing-to-send must be rejected with a useful message, not a CLI error");
+      await assert.rejects(() => send("node2.example.ts.net", []), /file|path|payload/i, "nothing-to-send must be rejected with a useful message, not a CLI error");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -89,7 +89,7 @@ test("taildropToPeer rejects cleanly when the tailscale CLI cannot be invoked (n
     process.env.PATH = emptyBin;
     try {
       await assert.rejects(
-        () => send("rinuxfedola.tail208cbf.ts.net", [payload]),
+        () => send("node2.example.ts.net", [payload]),
         /tailscale|ENOENT|not found|spawn/i,
         "rejects with the CLI's own error so the wizard can show it",
       );
@@ -117,7 +117,7 @@ test("standaloneInstallScript embeds the token — a taildropped file runs with 
 
     await bundle.ensureAgentBundle(); // real esbuild bundle, cached in the fresh data dir
     const { host, token } = hosts.createHost("standalone payload box");
-    const serverUrl = "http://rewvis.tail208cbf.ts.net:4040";
+    const serverUrl = "http://devbox.example.ts.net:4040";
     const script = (bundle as any).standaloneInstallScript(host.id, serverUrl, token) as string;
 
     assert.ok(script.startsWith("#!/bin/sh"), "still a plain sh script");
@@ -125,7 +125,7 @@ test("standaloneInstallScript embeds the token — a taildropped file runs with 
     assert.ok(script.includes(token), "token embedded — nothing left to transcribe");
     assert.ok(script.includes(`agent-${host.id}.env`), "same per-host env file");
     assert.ok(script.includes("chmod 600"), "token file still lands chmod-600");
-    assert.ok(script.includes(`TRUSS_SERVER=ws://rewvis.tail208cbf.ts.net:4040`), "dials home over the tailnet");
+    assert.ok(script.includes(`TRUSS_SERVER=ws://devbox.example.ts.net:4040`), "dials home over the tailnet");
 
     /* regression guard: the wizard's $1-arg script must keep the token out —
        delivery must not weaken the copy-command path's secrecy */
@@ -163,8 +163,8 @@ test("src/pairing.ts mints short, unambiguous, expiring codes", async () => {
     assert.equal(typeof pairing.mintPairing, "function");
     assert.equal(typeof pairing.redeemPairing, "function");
 
-    const a = pairing.mintPairing({ hostId: "h-alice", token: "truss_agent_aaa", serverUrl: "http://rewvis.tail208cbf.ts.net:4040" });
-    const b = pairing.mintPairing({ hostId: "h-bob", token: "truss_agent_bbb", serverUrl: "http://rewvis.tail208cbf.ts.net:4040" });
+    const a = pairing.mintPairing({ hostId: "h-alice", token: "truss_agent_aaa", serverUrl: "http://devbox.example.ts.net:4040" });
+    const b = pairing.mintPairing({ hostId: "h-bob", token: "truss_agent_bbb", serverUrl: "http://devbox.example.ts.net:4040" });
     assert.match(a.code, /^[a-hjkmnp-z2-9]{4,8}$/, "short, lowercase, no ambiguous chars (0/o, 1/i/l) — it must survive manual typing");
     assert.notEqual(a.code, b.code, "codes are unique per mint");
     assert.ok(a.expiresAt > Date.now(), "carries a future expiry");
@@ -179,7 +179,7 @@ test("redeemPairing returns the exact entry exactly once (single-use)", async ()
     const pairing = await loadPairing();
     assert.ok(pairing, "src/pairing.ts must exist (see mint test)");
 
-    const entry = { hostId: "h-once", token: "truss_agent_once", serverUrl: "http://rewvis.tail208cbf.ts.net:4040" };
+    const entry = { hostId: "h-once", token: "truss_agent_once", serverUrl: "http://devbox.example.ts.net:4040" };
     const { code } = pairing.mintPairing(entry);
 
     const got = pairing.redeemPairing(code);
@@ -198,7 +198,7 @@ test("redeemPairing rejects unknown and expired codes", async () => {
 
     assert.equal(pairing.redeemPairing("nosuch"), undefined, "unknown code");
 
-    const { code, expiresAt } = pairing.mintPairing({ hostId: "h-late", token: "truss_agent_late", serverUrl: "http://rewvis.tail208cbf.ts.net:4040" });
+    const { code, expiresAt } = pairing.mintPairing({ hostId: "h-late", token: "truss_agent_late", serverUrl: "http://devbox.example.ts.net:4040" });
     assert.equal(pairing.redeemPairing(code, expiresAt + 1), undefined, "expired code is dead — the token it stands for is a bearer secret");
   } finally {
     cleanup();

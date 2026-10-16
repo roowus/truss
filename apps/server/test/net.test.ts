@@ -153,8 +153,8 @@ test("parseServingHttpsPort: only a config proxying to OUR port is attributed", 
     const net = await import("../src/net.js");
     const status = JSON.stringify({
       Web: {
-        "rewvis.tail208cbf.ts.net:443": { Handlers: { "/": { Proxy: "http://127.0.0.1:3000" } } },
-        "rewvis.tail208cbf.ts.net:8443": { Handlers: { "/": { Proxy: "http://127.0.0.1:4040" } } },
+        "devbox.example.ts.net:443": { Handlers: { "/": { Proxy: "http://127.0.0.1:3000" } } },
+        "devbox.example.ts.net:8443": { Handlers: { "/": { Proxy: "http://127.0.0.1:4040" } } },
       },
     });
     assert.equal(net.parseServingHttpsPort(status, 4040), 8443, "ours is the config proxying to our port");
@@ -162,11 +162,11 @@ test("parseServingHttpsPort: only a config proxying to OUR port is attributed", 
 
     /* audit round 3: the digit boundary — a neighbor on a PREFIX port
        (40401 vs our 4040) must not attribute to us */
-    const prefix = JSON.stringify({ Web: { "rewvis.tail208cbf.ts.net:443": { Handlers: { "/": { Proxy: "http://127.0.0.1:40401" } } } } });
+    const prefix = JSON.stringify({ Web: { "devbox.example.ts.net:443": { Handlers: { "/": { Proxy: "http://127.0.0.1:40401" } } } } });
     assert.equal(net.parseServingHttpsPort(prefix, 4040), null, "127.0.0.1:40401 is NOT our 4040 — the prefix neighbor stays unattributed");
     assert.equal(net.parseServingHttpsPort(prefix, 40401), 443, "...and attributes to its real owner");
 
-    const portlessKey = JSON.stringify({ Web: { "rewvis.tail208cbf.ts.net": { Handlers: { "/": { Proxy: "http://127.0.0.1:4040" } } } } });
+    const portlessKey = JSON.stringify({ Web: { "devbox.example.ts.net": { Handlers: { "/": { Proxy: "http://127.0.0.1:4040" } } } } });
     assert.equal(net.parseServingHttpsPort(portlessKey, 4040), 443, "a key without a port suffix is 443");
 
     for (const junk of ["", "not json", "{}", "[]", "null"]) {
@@ -183,17 +183,17 @@ test("parseServeAttribution: netInfo's serveOn/serveUrl path — key AND port, b
     const net = await import("../src/net.js");
     const status = JSON.stringify({
       Web: {
-        "rewvis.tail208cbf.ts.net:443": { Handlers: { "/": { Proxy: "http://127.0.0.1:40401" } } },
-        "rewvis.tail208cbf.ts.net:8443": { Handlers: { "/": { Proxy: "http://127.0.0.1:4040" } } },
+        "devbox.example.ts.net:443": { Handlers: { "/": { Proxy: "http://127.0.0.1:40401" } } },
+        "devbox.example.ts.net:8443": { Handlers: { "/": { Proxy: "http://127.0.0.1:4040" } } },
       },
     });
     const ours = net.parseServeAttribution(status, 4040);
-    assert.deepEqual(ours, { key: "rewvis.tail208cbf.ts.net:8443", httpsPort: 8443 }, "serveUrl is built from OUR config's key — the neighbor's :443 is not offered");
+    assert.deepEqual(ours, { key: "devbox.example.ts.net:8443", httpsPort: 8443 }, "serveUrl is built from OUR config's key — the neighbor's :443 is not offered");
     assert.equal(net.parseServeAttribution(status, 3000), null, "nothing ours → serveOn false");
 
     /* audit round 5: the Proxy field is matched exactly — a config that
        merely MENTIONS our address in some other field is not ours */
-    const mentioned = JSON.stringify({ Web: { "rewvis.tail208cbf.ts.net:443": { Handlers: { "/": { Text: "moved to http://127.0.0.1:4040" } } } } });
+    const mentioned = JSON.stringify({ Web: { "devbox.example.ts.net:443": { Handlers: { "/": { Text: "moved to http://127.0.0.1:4040" } } } } });
     assert.equal(net.parseServeAttribution(mentioned, 4040), null, "a mention in a non-Proxy field is not attribution");
   } finally {
     cleanup();
@@ -208,23 +208,23 @@ test("parseServeAttributionText: the old-CLI text format attributes by the block
   try {
     const net = await import("../src/net.js");
     const text = [
-      "https://rewvis.tail208cbf.ts.net (tailnet only)",
+      "https://devbox.example.ts.net (tailnet only)",
       "|-- / proxy http://127.0.0.1:3000",
-      "https://rewvis.tail208cbf.ts.net:8443 (tailnet only)",
+      "https://devbox.example.ts.net:8443 (tailnet only)",
       "|-- / proxy http://127.0.0.1:4040",
       "",
     ].join("\n");
 
     assert.deepEqual(
       net.parseServeAttributionText(text, 4040),
-      { key: "rewvis.tail208cbf.ts.net:8443", httpsPort: 8443 },
+      { key: "devbox.example.ts.net:8443", httpsPort: 8443 },
       "OUR block wins — not the first URL on a multi-config machine",
     );
     assert.equal(net.parseServeAttributionText(text, 3000)?.httpsPort, 443, "a port-less URL line is 443");
     assert.equal(net.parseServeAttributionText(text, 5555), null, "nothing ours → null (OFF tears nothing down)");
 
     /* the digit boundary holds in the text format too */
-    const prefix = "https://rewvis.tail208cbf.ts.net (tailnet only)\n|-- / proxy http://127.0.0.1:40401\n";
+    const prefix = "https://devbox.example.ts.net (tailnet only)\n|-- / proxy http://127.0.0.1:40401\n";
     assert.equal(net.parseServeAttributionText(prefix, 4040), null, "40401 is not 4040 in text either");
 
     for (const junk of ["", "no serve config here", "https://\n"]) {
@@ -239,20 +239,20 @@ test("parseServeAttributionText: the old-CLI text format attributes by the block
    it, so feed it a canned `tailscale status --json` and check every field */
 
 const STATUS_FIXTURE = {
-  MagicDNSSuffix: "tail208cbf.ts.net",
+  MagicDNSSuffix: "example.ts.net",
   Self: {
-    HostName: "rewvis",
-    DNSName: "rewvis.tail208cbf.ts.net.",
-    TailscaleIPs: ["100.107.125.118", "fd7a:115c:a1e0::1"],
+    HostName: "devbox",
+    DNSName: "devbox.example.ts.net.",
+    TailscaleIPs: ["100.64.0.10", "fd7a:115c:a1e0::1"],
     OS: "linux",
     Online: true,
     LastSeen: "2026-09-28T22:00:00Z",
   },
   Peer: {
     "node-key-1": {
-      HostName: "Rewis's MacBook Pro",
-      DNSName: "rewiss-macbook-pro.tail208cbf.ts.net.",
-      TailscaleIPs: ["100.78.180.43", "fd7a:115c:a1e0::d228:b42c"],
+      HostName: "Devbox Laptop",
+      DNSName: "devbox-laptop.example.ts.net.",
+      TailscaleIPs: ["100.64.0.11", "fd7a:115c:a1e0::1"],
       OS: "macOS",
       Online: true,
       LastSeen: "2026-09-28T22:50:00.1Z",
@@ -260,9 +260,9 @@ const STATUS_FIXTURE = {
       ExitNodeOption: false,
     },
     "node-key-2": {
-      HostName: "Pixel 4 XL",
-      DNSName: "pixel-4-xl.tail208cbf.ts.net.",
-      TailscaleIPs: ["100.121.74.109"],
+      HostName: "Phone A",
+      DNSName: "phone-a.example.ts.net.",
+      TailscaleIPs: ["100.64.0.12"],
       OS: "android",
       Online: false,
       LastSeen: "2026-09-08T07:13:53.1Z",
@@ -270,8 +270,8 @@ const STATUS_FIXTURE = {
       ExitNodeOption: false,
     },
     "node-key-3": {
-      HostName: "exit-rig",
-      DNSName: "exit-rig.tail208cbf.ts.net.",
+      HostName: "exit-node",
+      DNSName: "exit-node.example.ts.net.",
       TailscaleIPs: ["100.100.100.100", "fd7a::1"],
       OS: "linux",
       Online: true,
@@ -289,26 +289,26 @@ test("parseTailscaleStatus: self + peers with clean fields", async () => {
     const net = await import("../src/net.js");
     const { self, peers } = net.parseTailscaleStatus(STATUS_FIXTURE);
 
-    assert.equal(self?.hostName, "rewvis");
-    assert.equal(self?.dnsName, "rewvis.tail208cbf.ts.net", "trailing dot stripped");
-    assert.equal(self?.ip4, "100.107.125.118", "ipv4 picked out of the ip list");
+    assert.equal(self?.hostName, "devbox");
+    assert.equal(self?.dnsName, "devbox.example.ts.net", "trailing dot stripped");
+    assert.equal(self?.ip4, "100.64.0.10", "ipv4 picked out of the ip list");
     assert.equal(self?.online, true);
 
     assert.equal(peers.length, 3);
     const mac = peers.find((p) => p.os === "macOS")!;
-    assert.equal(mac.hostName, "Rewis's MacBook Pro");
-    assert.equal(mac.ip4, "100.78.180.43");
+    assert.equal(mac.hostName, "Devbox Laptop");
+    assert.equal(mac.ip4, "100.64.0.11");
     assert.equal(mac.exitNode, false);
     assert.equal(mac.tagged, false);
 
-    const rig = peers.find((p) => p.hostName === "exit-rig")!;
+    const rig = peers.find((p) => p.hostName === "exit-node")!;
     assert.equal(rig.exitNode, true);
     assert.equal(rig.exitNodeOption, true);
     assert.equal(rig.tagged, true, "tagged devices flagged (no user owner)");
 
-    const pixel = peers.find((p) => p.hostName === "Pixel 4 XL")!;
-    assert.equal(pixel.online, false);
-    assert.equal(pixel.lastSeen, "2026-09-08T07:13:53.1Z");
+    const phone = peers.find((p) => p.hostName === "Phone A")!;
+    assert.equal(phone.online, false);
+    assert.equal(phone.lastSeen, "2026-09-08T07:13:53.1Z");
   } finally {
     cleanup();
   }
@@ -323,8 +323,8 @@ test("parseTailscaleStatus: online peers sort first, then alphabetical", async (
     // online entries come before offline ones
     assert.deepEqual(onlineIdx, [...onlineIdx].sort((a, b) => Number(b) - Number(a)));
     const names = peers.map((p) => p.hostName);
-    assert.deepEqual(names.slice(0, 2), ["exit-rig", "Rewis's MacBook Pro"].sort((a, b) => a.localeCompare(b)), "alphabetical within online");
-    assert.equal(names[2], "Pixel 4 XL", "offline last");
+    assert.deepEqual(names.slice(0, 2), ["exit-node", "Devbox Laptop"].sort((a, b) => a.localeCompare(b)), "alphabetical within online");
+    assert.equal(names[2], "Phone A", "offline last");
   } finally {
     cleanup();
   }

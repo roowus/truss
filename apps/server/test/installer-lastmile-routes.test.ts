@@ -242,7 +242,7 @@ test("standaloneInstallScript itself refuses a hostile serverUrl (the choke poin
   assert.throws(() => standaloneInstallScript(host.id, HOSTILE_URL_SUB, token), /serverUrl/, "command substitution");
   assert.throws(() => standaloneInstallScript(host.id, HOSTILE_URL_NL, token), /serverUrl/, "embedded newline");
   /* and the legit forms the wizard actually sends still pass */
-  for (const ok of ["http://rewvis.tail208cbf.ts.net:4040", "https://rewvis.tail208cbf.ts.net", "http://100.64.0.1:4040", "http://192.168.1.10:4040", srv.base]) {
+  for (const ok of ["http://devbox.example.ts.net:4040", "https://devbox.example.ts.net", "http://100.64.0.1:4040", "http://192.168.1.10:4040", srv.base]) {
     assert.ok(standaloneInstallScript(host.id, ok, token).startsWith("#!/bin/sh"), `legit ${ok} still installs`);
   }
 });

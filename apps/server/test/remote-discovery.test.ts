@@ -50,7 +50,7 @@ test("the agent computes honest directory suggestions (existing dirs only, home 
   const mod = await loadAgentDiscovery();
   assert.ok(mod, "packages/node-agent/src/discovery.ts must export suggestCwds — see issue #123");
 
-  const home = "/Users/rewis";
+  const home = "/Users/you";
   const all = mod.suggestCwds({ home, existing: [home, `${home}/projects`, `${home}/code`] });
   assert.equal(all[0], home, "home always leads — the universal fallback");
   assert.ok(all.includes(`${home}/projects`) && all.includes(`${home}/code`), "the projects family follows");
@@ -89,13 +89,13 @@ async function fakeDiscoveringAgent(host: string, token: string) {
   /* Node 22's built-in WebSocket client — the api-remote-loop pattern */
   send({
     type: "hello",
-    hostname: "rewissmacbookpro",
+    hostname: "devbox-laptop",
     adapters: [{ id: "pi", capabilities: { permissions: false, subagents: false, streaming: true, queueWhileRunning: true } }],
     sessions: [],
     protocol: 2,
     /* the new discovery fields */
-    home: "/Users/rewis",
-    suggestedCwds: ["/Users/rewis", "/Users/rewis/projects"],
+    home: "/Users/you",
+    suggestedCwds: ["/Users/you", "/Users/you/projects"],
   });
   return { close: () => ws.close() };
 }
@@ -164,7 +164,7 @@ test("a connected host's models reach the picker and its suggested cwd reaches t
     const hosts = await fetch(`${srv.base}/api/hosts`).then((r) => r.json());
     const row = (hosts.hosts ?? hosts).find((h: any) => h.id === hostId);
     assert.ok(row, "the host row exists");
-    assert.equal(row.agent?.suggestedCwd, "/Users/rewis/projects", "the remote's own suggestion reaches the server (today the record carries hostname only)");
+    assert.equal(row.agent?.suggestedCwd, "/Users/you/projects", "the remote's own suggestion reaches the server (today the record carries hostname only)");
   } finally {
     agent.close();
   }

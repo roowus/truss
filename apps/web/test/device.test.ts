@@ -39,10 +39,10 @@ test("hostAliases: flattens desktop prefs, trims values, skips blanks", () => {
 });
 
 test("hostDisplay: alias wins over the registry label, blank alias falls through", () => {
-  const hosts = [{ id: "525b9cd4", label: "Rewiss-MacBook-Pro" }];
+  const hosts = [{ id: "525b9cd4", label: "Devbox-Laptop" }];
   assert.equal(hostDisplay("525b9cd4", hosts, { "525b9cd4": "the macbook" }), "the macbook");
-  assert.equal(hostDisplay("525b9cd4", hosts, { "525b9cd4": "   " }), "Rewiss-MacBook-Pro", "a whitespace alias is no alias");
-  assert.equal(hostDisplay("525b9cd4", hosts), "Rewiss-MacBook-Pro");
+  assert.equal(hostDisplay("525b9cd4", hosts, { "525b9cd4": "   " }), "Devbox-Laptop", "a whitespace alias is no alias");
+  assert.equal(hostDisplay("525b9cd4", hosts), "Devbox-Laptop");
   assert.equal(hostDisplay("deadbeef", hosts), "deadbeef", "unknown host keeps the raw id");
 });
 
@@ -145,24 +145,24 @@ const NET = {
   port: 4040,
   tailscale: {
     installed: true,
-    ip4: "100.107.125.118",
-    dnsName: "rewvis.tail208cbf.ts.net",
+    ip4: "100.64.0.10",
+    dnsName: "devbox.example.ts.net",
     serveOn: false,
   },
 };
 
 test("defaultTailscaleReturn: serve https wins when on", () => {
-  const net = { ...NET, tailscale: { ...NET.tailscale, serveOn: true, serveUrl: "https://rewvis.tail208cbf.ts.net" } };
-  assert.equal(defaultTailscaleReturn(net), "https://rewvis.tail208cbf.ts.net");
+  const net = { ...NET, tailscale: { ...NET.tailscale, serveOn: true, serveUrl: "https://devbox.example.ts.net" } };
+  assert.equal(defaultTailscaleReturn(net), "https://devbox.example.ts.net");
 });
 
 test("defaultTailscaleReturn: magic dns name next", () => {
-  assert.equal(defaultTailscaleReturn(NET), "http://rewvis.tail208cbf.ts.net:4040");
+  assert.equal(defaultTailscaleReturn(NET), "http://devbox.example.ts.net:4040");
 });
 
 test("defaultTailscaleReturn: tailnet ip when no dns", () => {
-  const net = { ...NET, tailscale: { installed: true, ip4: "100.107.125.118" } };
-  assert.equal(defaultTailscaleReturn(net), "http://100.107.125.118:4040");
+  const net = { ...NET, tailscale: { installed: true, ip4: "100.64.0.10" } };
+  assert.equal(defaultTailscaleReturn(net), "http://100.64.0.10:4040");
 });
 
 test("defaultTailscaleReturn: null without tailscale or without any address", () => {

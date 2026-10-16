@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 /* SPEC-TESTS for human harness ids — https://github.com/roowus/truss/issues/109
-   ("Why do connected sessions say pi@525b9cd4 and not pi@rewissmacbookpro").
+   ("Why do connected sessions say pi@525b9cd4 and not pi@devbox-laptop").
    These FAIL on purpose today: they pin the contract a fix must satisfy.
 
    Why it happens (investigated): most surfaces print the harness id
@@ -33,7 +33,7 @@ async function load(): Promise<DeviceModule | null> {
   return typeof mod?.harnessDisplay === "function" ? mod : null;
 }
 
-const HOSTS = [{ id: "525b9cd4", label: "Rewiss-MacBook-Pro" }];
+const HOSTS = [{ id: "525b9cd4", label: "Devbox-Laptop" }];
 
 test("device.ts exports harnessDisplay", async () => {
   const mod = await load();
@@ -47,7 +47,7 @@ test("the resolution matrix: local passthrough, known → label, alias wins, unk
   assert.equal(mod.harnessDisplay("pi", HOSTS), "pi", "local harnesses pass through");
   assert.equal(mod.harnessDisplay("hermes", HOSTS), "hermes");
 
-  assert.equal(mod.harnessDisplay("pi@525b9cd4", HOSTS), "pi@Rewiss-MacBook-Pro", "the user's exact case");
+  assert.equal(mod.harnessDisplay("pi@525b9cd4", HOSTS), "pi@Devbox-Laptop", "the user's exact case");
   assert.equal(mod.harnessDisplay("dsh@525b9cd4", HOSTS, { "525b9cd4": "the macbook" }), "dsh@the macbook", "a set alias beats the label");
   assert.equal(mod.harnessDisplay("pi@deadbeef", HOSTS), "pi@deadbeef", "unknown host → raw id (never a lie)");
 });

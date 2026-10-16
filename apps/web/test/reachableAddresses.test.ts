@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 
 /* SPEC-TESTS for the wizard offering only reachable addresses —
    https://github.com/roowus/truss/issues/33
-   (User log: the wizard's command pointed at http://rewvis.tail208cbf.ts.net:4040
+   (User log: the wizard's command pointed at http://devbox.example.ts.net:4040
    → "Failed to connect … port 4040" from the Mac; the server was bound to
    127.0.0.1 with tailscale serve off, so the tailnet address it offered was
    dead on arrival.) These FAIL on purpose today.
@@ -49,10 +49,10 @@ const NET = (bind: string, serveOn = false): NetLike => ({
   bind,
   tailscale: {
     installed: true,
-    ip4: "100.107.125.118",
-    dnsName: "rewvis.tail208cbf.ts.net",
+    ip4: "100.64.0.10",
+    dnsName: "devbox.example.ts.net",
     serveOn,
-    serveUrl: serveOn ? "https://rewvis.tail208cbf.ts.net" : undefined,
+    serveUrl: serveOn ? "https://devbox.example.ts.net" : undefined,
   },
   lan: ["192.168.1.10"],
 });
@@ -67,8 +67,8 @@ test("bound to all interfaces: every address survives", async () => {
   assert.ok(mod, "reachability module must exist (see module test)");
   const out = mod.reachableAddresses(NET("0.0.0.0"));
   const values = out.map((a) => a.value);
-  assert.ok(values.some((v) => v.includes("100.107.125.118")), "tailnet ip offered");
-  assert.ok(values.some((v) => v.includes("rewvis.tail208cbf.ts.net")), "tailnet name offered");
+  assert.ok(values.some((v) => v.includes("100.64.0.10")), "tailnet ip offered");
+  assert.ok(values.some((v) => v.includes("devbox.example.ts.net")), "tailnet name offered");
   assert.ok(values.some((v) => v.includes("192.168.1.10")), "lan offered");
 });
 
@@ -85,7 +85,7 @@ test("loopback bind + tailscale serve on → only the serve URL survives", async
   const out = mod.reachableAddresses(NET("127.0.0.1", true));
   assert.deepEqual(
     out.map((a) => a.value),
-    ["https://rewvis.tail208cbf.ts.net"],
+    ["https://devbox.example.ts.net"],
     "serve proxies to loopback — the one reachable address",
   );
 });
@@ -94,11 +94,11 @@ test("issue #171: a serve URL on the ALTERNATE port (busy-443 machine) survives 
   const mod = await load();
   assert.ok(mod, "reachability module must exist (see module test)");
   const net = NET("127.0.0.1", true);
-  net.tailscale.serveUrl = "https://rewvis.tail208cbf.ts.net:8443";
+  net.tailscale.serveUrl = "https://devbox.example.ts.net:8443";
   const out = mod.reachableAddresses(net);
   assert.deepEqual(
     out.map((a) => a.value),
-    ["https://rewvis.tail208cbf.ts.net:8443"],
+    ["https://devbox.example.ts.net:8443"],
     "the wizard offers the serve URL with the planned port, not a re-derived 443",
   );
 });
@@ -106,7 +106,7 @@ test("issue #171: a serve URL on the ALTERNATE port (busy-443 machine) survives 
 test("a specific bind ip keeps only its own entries; loopback ipv6 treated as loopback", async () => {
   const mod = await load();
   assert.ok(mod, "reachability module must exist (see module test)");
-  const onlyTail = mod.reachableAddresses(NET("100.107.125.118"));
-  assert.ok(onlyTail.length > 0 && onlyTail.every((a) => a.value.includes("100.107.125.118") || a.value.includes("rewvis.tail208cbf.ts.net")), "bound to the tailnet ip: only tailnet entries");
+  const onlyTail = mod.reachableAddresses(NET("100.64.0.10"));
+  assert.ok(onlyTail.length > 0 && onlyTail.every((a) => a.value.includes("100.64.0.10") || a.value.includes("devbox.example.ts.net")), "bound to the tailnet ip: only tailnet entries");
   assert.deepEqual(mod.reachableAddresses(NET("::1", false)), [], "::1 is loopback too");
 });

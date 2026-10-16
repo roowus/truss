@@ -58,23 +58,23 @@ test("returning to a directory restores its scroll; entering a child starts fres
   assert.equal(nav.current(), null, "starts at the roots view");
 
   /* the user's exact flow: deep in the parent, descend into a child */
-  nav.enter("/home/rewis/projects");
-  nav.rememberScroll("/home/rewis/projects", 1480); // they scrolled far down
-  nav.enter("/home/rewis/projects/truss");
-  assert.equal(nav.current(), "/home/rewis/projects/truss");
-  assert.equal(nav.scrollMemory("/home/rewis/projects/truss"), 0, "a fresh child reads from its top");
+  nav.enter("/home/you/projects");
+  nav.rememberScroll("/home/you/projects", 1480); // they scrolled far down
+  nav.enter("/home/you/projects/truss");
+  assert.equal(nav.current(), "/home/you/projects/truss");
+  assert.equal(nav.scrollMemory("/home/you/projects/truss"), 0, "a fresh child reads from its top");
 
   /* …and climbing back lands exactly where they were */
-  nav.climbTo("/home/rewis/projects");
-  assert.equal(nav.scrollMemory("/home/rewis/projects"), 1480, "the parent's scroll position is restored — no scrolling down again");
+  nav.climbTo("/home/you/projects");
+  assert.equal(nav.scrollMemory("/home/you/projects"), 1480, "the parent's scroll position is restored — no scrolling down again");
 
   /* sibling hops keep their own memory */
-  nav.enter("/home/rewis/projects/doubletake");
-  nav.rememberScroll("/home/rewis/projects/doubletake", 220);
-  nav.climbTo("/home/rewis/projects");
-  assert.equal(nav.scrollMemory("/home/rewis/projects"), 1480, "parent memory untouched by the sibling visit");
-  nav.enter("/home/rewis/projects/doubletake");
-  assert.equal(nav.scrollMemory("/home/rewis/projects/doubletake"), 220, "revisiting a child restores ITS place too");
+  nav.enter("/home/you/projects/doubletake");
+  nav.rememberScroll("/home/you/projects/doubletake", 220);
+  nav.climbTo("/home/you/projects");
+  assert.equal(nav.scrollMemory("/home/you/projects"), 1480, "parent memory untouched by the sibling visit");
+  nav.enter("/home/you/projects/doubletake");
+  assert.equal(nav.scrollMemory("/home/you/projects/doubletake"), 220, "revisiting a child restores ITS place too");
 });
 
 test("the roots view remembers too; unknown dirs read 0; garbage never throws", async () => {
@@ -83,7 +83,7 @@ test("the roots view remembers too; unknown dirs read 0; garbage never throws", 
   const nav = mod.createBrowseNav();
 
   nav.rememberScroll(null, 640); // scrolled the roots list
-  nav.enter("/home/rewis");
+  nav.enter("/home/you");
   nav.climbTo(null);
   assert.equal(nav.current(), null);
   assert.equal(nav.scrollMemory(null), 640, "the roots view keeps its place");
