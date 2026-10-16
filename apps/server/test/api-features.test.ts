@@ -766,8 +766,8 @@ test("metrics/net/catalog smoke: shapes hold against the loopback box", async ()
   assert.equal(cat.status, 200);
   assert.deepEqual(
     cat.body.providers.map((p: Ev) => p.id),
-    ["fireworks", "zai", "openrouter", "huggingface"],
-    "the four key-proxy routes");
+    ["fireworks", "zai", "openrouter", "huggingface", "deepinfra", "deepseek"],
+    "the key-proxy routes the catalog probes, in table order");
   for (const p of cat.body.providers) {
     assert.equal(typeof p.name, "string");
     assert.equal(typeof p.port, "number");
