@@ -12,7 +12,7 @@ import assert from "node:assert/strict";
    the dynamic imports. Same shim store.test.ts needs. */
 (globalThis as any).window ??= {};
 
-const { registerFindProvider, findProviderFor, terminalMatchCount, scopeEntries, stepEntries } = await import("../src/lib/findRuntime");
+const { registerFindProvider, findProviderFor, terminalMatchCount, scopeEntries, stepEntries, leadingReveal } = await import("../src/lib/findRuntime");
 type FindProvider = import("../src/lib/findRuntime").FindProvider;
 type Terminal = import("@xterm/xterm").Terminal;
 
@@ -146,4 +146,17 @@ test("stepEntries: within an entry, across entries, wrapping the whole scope", (
   assert.deepEqual(stepEntries([E(0, -1), E(0, -1)], -1, 1), { entry: -1, index: -1, crossed: false }, "no matches anywhere");
   assert.deepEqual(stepEntries([E(2, -1), E(3, -1)], -1, 1), { entry: 0, index: 0, crossed: true }, "first step enters the first match-bearing entry");
   assert.deepEqual(stepEntries([E(2, -1), E(3, -1)], -1, -1), { entry: 1, index: 2, crossed: true }, "first Shift+Enter enters the LAST match-bearing entry at its last match");
+});
+
+test("leadingReveal: the anchor leads; typing reveals only what's on screen (round-3 B3's pin)", () => {
+  const E = (count: number, visible: boolean) => ({ count, visible });
+  /* anchor with matches leads, visible or not */
+  assert.deepEqual(leadingReveal([E(2, true), E(3, true)], 0), { entry: 0, reveal: true });
+  assert.deepEqual(leadingReveal([E(2, false), E(3, true)], 0), { entry: 0, reveal: false }, "the anchor leads but is hidden: count only, Enter crosses (audit round 2, B2)");
+  /* anchor without matches: the first match-bearing entry leads */
+  assert.deepEqual(leadingReveal([E(0, true), E(3, true)], 0), { entry: 1, reveal: true });
+  assert.deepEqual(leadingReveal([E(0, true), E(3, false), E(5, false)], 0), { entry: 1, reveal: false }, "empties are skipped");
+  /* no matches anywhere */
+  assert.equal(leadingReveal([E(0, true)], 0), null);
+  assert.equal(leadingReveal([], -1), null);
 });

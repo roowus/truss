@@ -141,6 +141,22 @@ export interface FindEntryPos {
 }
 
 /**
+ * Where a fresh query lands, and whether typing may scroll to it (audit
+ * round 2's B2 gate, extracted pure for the pins — round 3's B3). The
+ * ANCHOR's entry leads when it has matches (you searched from there), else
+ * the first match-bearing entry. Typing reveals only what's already on
+ * screen; a leading match in a hidden tab or another workspace just counts
+ * ("N found") and waits for Enter — Chrome/VS Code navigate on the crossing
+ * gesture, never on keystrokes.
+ */
+export function leadingReveal(entries: { count: number; visible: boolean }[], anchorIndex: number): { entry: number; reveal: boolean } | null {
+  const anchor = anchorIndex >= 0 ? entries[anchorIndex] : undefined;
+  const entry = anchor && anchor.count > 0 ? anchorIndex : entries.findIndex((e) => e.count > 0);
+  if (entry < 0) return null;
+  return { entry, reveal: entries[entry].visible };
+}
+
+/**
  * One Enter/Shift+Enter step across a scope's entries. Within the active
  * entry it moves one match; at an entry's end it CROSSES to the next
  * match-bearing entry (wrapping around the scope); with a single
@@ -325,19 +341,13 @@ function applyQuery(): void {
   }
   activeEntry = -1;
   if (q.trim()) {
-    /* the anchor panel leads when it has matches — you searched FROM there */
-    let ai = entries.findIndex((e) => e.count > 0 && snap.anchor && e.api === snap.anchor.api && e.panel === snap.anchor.panel);
-    if (ai < 0) ai = entries.findIndex((e) => e.count > 0);
-    if (ai >= 0) {
-      activeEntry = ai;
-      const e = entries[ai];
-      /* typing marks and counts; it NAVIGATES only within what's already on
-         screen (audit round 2, B2 — Chrome/VS Code reveal on Enter, not on
-         keystrokes). A leading match in a hidden tab or another workspace
-         waits for Enter/Shift+Enter, which crosses via findStep. */
-      if (e.provider.isVisible()) {
-        e.current = e.provider.reveal(0);
-      }
+    const lead = leadingReveal(
+      entries.map((e) => ({ count: e.count, visible: e.provider.isVisible() })),
+      entries.findIndex((e) => snap.anchor && e.api === snap.anchor.api && e.panel === snap.anchor.panel),
+    );
+    if (lead) {
+      activeEntry = lead.entry;
+      if (lead.reveal) entries[lead.entry].current = entries[lead.entry].provider.reveal(0);
     }
   }
   refreshTotals();
@@ -552,6 +562,12 @@ export function domFindProvider(root: () => HTMLElement | null): FindProvider {
   const self: FindProvider = {
     setQuery(q) {
       query = q;
+      /* a new query owns no current match (audit round 3, B1) — the
+         controller reveals; without this reset a kept index repaints as a
+         solid "current" that no longer matches the bar's n / N. The
+         observer's repaint path (scheduleRepaint) still preserves current,
+         which is what live content wants */
+      current = -1;
       const count = paint();
       if (!q.trim()) {
         /* a blanked query stops watching too — the observer would repaint
