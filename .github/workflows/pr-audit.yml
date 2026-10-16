@@ -562,7 +562,23 @@ jobs:
           python3 - "$REVIEW" <<'EOF' > "$RUNNER_TEMP/parsed.txt"
           import json, re, sys, os, hashlib
           text = open(sys.argv[1]).read() if os.path.exists(sys.argv[1]) else ""
+          # Prefer a properly closed block, but accept an un-closed one: the
+          # prompt asks for the closing fence and models still omit it
+          # sometimes, and a report that reads as zero findings blinds both the
+          # stagnation detector and the merge gate. Recovery here means a
+          # missing closer degrades the RENDERING, never the data.
           blocks = re.findall(r"```json\s*\n(.*?)```", text, re.S)
+          if not blocks:
+              m = re.search(r"```json\s*\n(.*)", text, re.S)
+              if m:
+                  # An un-closed block runs to EOF, so take only the first
+                  # balanced JSON object and ignore any footer after it.
+                  raw = m.group(1).lstrip()
+                  try:
+                      _, end = json.JSONDecoder().raw_decode(raw)
+                      blocks = [raw[:end]]
+                  except Exception:
+                      blocks = []
           signal, verdict = "error", ""
           majors = []
           if blocks:
