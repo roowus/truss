@@ -83,3 +83,33 @@ test("a long list stays quiet even when every row shares one provider", async ()
   /* an unknown single provider still gets the bare name */
   assert.equal(mod.catalogScopeNote([{ provider: "acme" }]), "via acme", "unknown providers fall back to the plain note");
 });
+
+/* The shape production actually passes (audit round 2, B1): both call sites
+   hand over `buildModelOptions` output, whose rows carry `providerLabel` and
+   NO `provider` field — so the `providerLabel` fallback is the branch both
+   pickers take, while every case above feeds raw `{ provider }` rows. A
+   regression dropping that fallback would ship green with both pickers
+   silently losing the note. Pin the real path end to end. */
+test("the production option shape (providerLabel, no provider) still explains itself", async () => {
+  const models: any = await import("../src/lib/models.js");
+  assert.equal(typeof models.buildModelOptions, "function", "the shared builder exists (#169)");
+
+  /* claude's catalog exactly as the server emits it (provider: "zai-local") */
+  const catalog = Array.from({ length: 11 }, (_, i) => ({
+    harness: "claude-code",
+    provider: "zai-local",
+    model: `glm-4.${i}`,
+    label: `glm-4.${i} (z.ai via key-proxy)`,
+  }));
+  const opts = models.buildModelOptions(catalog, "claude-code");
+  assert.equal(opts.length, 11, "the builder yields the session's catalog rows");
+  assert.ok(!("provider" in opts[0]), "sanity: the projected row really has no `provider` field");
+
+  const note = models.catalogScopeNote(opts);
+  assert.ok(note, `the picker's real input still produces a note (got ${JSON.stringify(note)})`);
+  assert.ok(/proxy|local/i.test(note), `and it still explains the scope (got ${JSON.stringify(note)})`);
+
+  /* and a rich projected catalog stays quiet through the same path */
+  const rich = Array.from({ length: 600 }, (_, i) => ({ harness: "hermes", provider: "hermes", model: `m${i}`, label: `M${i}` }));
+  assert.equal(models.catalogScopeNote(models.buildModelOptions(rich, "hermes")), null, "the rich path is quiet end to end too");
+});
