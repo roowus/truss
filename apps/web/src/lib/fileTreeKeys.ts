@@ -1,11 +1,5 @@
 import { nextIndex } from "./listKeys";
 
-/* The tree drives the shared roving-focus model (issue #227): re-exported
-   so callers can reach it through the tree's own module, and the panel
-   imports it from @/lib/listKeys directly. There is exactly one
-   implementation of the index math. */
-export { nextIndex };
-
 /**
  * The Files tree's keyboard behavior, as pure functions (issue #227).
  *
@@ -30,15 +24,6 @@ export type TreeAction =
   | { type: "none" };
 
 /**
- * The index a key moves the cursor to. Up/Down clamp (a tree is a list,
- * not a menu); Home/End jump to the ends; nothing-focused enters at the
- * top when arrowing down and at the bottom when arrowing up.
- */
-export function treeMoveIndex(cursor: number, count: number, key: string): number {
-  return nextIndex(cursor, count, key);
-}
-
-/**
  * Resolve a key against the visible rows. `cursor` may be -1 (nothing
  * focused). Left/Right act on a focused *folder* only: Right expands an
  * unexpanded folder, Left collapses an expanded one, and both are no-ops
@@ -50,7 +35,9 @@ export function treeKey(cursor: number, rows: TreeRow[], expanded: Record<string
   const at = cursor >= 0 && cursor < rows.length ? rows[cursor] : undefined;
 
   if (key === "ArrowDown" || key === "ArrowUp" || key === "Home" || key === "End") {
-    return { type: "move", index: treeMoveIndex(cursor, rows.length, key) };
+    /* Up/Down clamp (a tree is a list, not a menu); Home/End jump to the
+       ends; nothing-focused enters at the top going down, the bottom up */
+    return { type: "move", index: nextIndex(cursor, rows.length, key) };
   }
 
   if (key === "Enter") {
@@ -80,4 +67,30 @@ export function clampCursor(cursor: number, count: number): number {
   if (count <= 0) return -1;
   if (cursor < 0) return -1;
   return Math.min(cursor, count - 1);
+}
+
+/**
+ * May the Files tree take focus right now? (issue #227)
+ *
+ * The tree focuses itself when the panel mounts, because a dockview panel
+ * has no focusable parent and the arrows must work without a preliminary
+ * click. It must never steal focus, though: a dialog, the tab picker's
+ * search box, or an inline rename all legitimately own the caret, and
+ * yanking it mid-typing is worse than making the user click once.
+ *
+ * The rule: take focus only when the caret is parked on nothing in
+ * particular (the body or the document element). Anything else wins.
+ * Pure, so the decision is testable without a DOM.
+ */
+export function shouldTakeTreeFocus(opts: {
+  connected: boolean;
+  /** the active element is the tree itself or a descendant of it */
+  containsActive: boolean;
+  /** the active element's tag name, or null when there is none */
+  activeTag: string | null;
+}): boolean {
+  if (!opts.connected) return false;
+  if (opts.containsActive) return false;
+  const tag = (opts.activeTag ?? "").toUpperCase();
+  return tag === "" || tag === "BODY" || tag === "HTML";
 }

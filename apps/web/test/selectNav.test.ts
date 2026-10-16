@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { isNavKey, isOpenKey, nextIndex } from "../src/lib/listKeys";
+import { isArrowKey, isNavKey, isOpenKey, nextIndex } from "../src/lib/listKeys";
 
 /* Select must not regress when its arrow handling moves onto the shared
    model (issue #227). Select is the app's dropdown for long lists (the
@@ -33,6 +33,18 @@ test("Select keeps filter-by-typing: printable characters are not navigation", (
   assert.equal(nextIndex(2, 5, "c"), 2, "a printable key leaves the highlight alone");
   assert.ok(ui.includes("setFilter((f) => f + e.key)"), "the type-to-filter path is still present");
   assert.ok(ui.includes("filterRef"), "and so is the filter box");
+});
+
+test("Select's filter box claims only the arrows — Home/End stay the caret's", () => {
+  /* the filter is a real text input: hijacking Home/End would break editing
+     the query, so that handler uses the narrower arrow-only set */
+  assert.equal(isArrowKey("ArrowDown"), true);
+  assert.equal(isArrowKey("ArrowUp"), true);
+  assert.equal(isArrowKey("Home"), false, "Home belongs to the text caret here");
+  assert.equal(isArrowKey("End"), false, "and so does End");
+  assert.equal(isNavKey("Home"), true, "the model still supports them for true lists");
+  assert.ok(ui.includes("isArrowKey(e.key)"), "the filter handler uses the arrow-only set");
+  assert.ok(!/onFilterKeyDown[\s\S]{0,200}isNavKey\(/.test(ui), "it no longer claims Home/End");
 });
 
 test("Select keeps Esc-returns-focus-to-the-trigger and arrow/Enter opening", () => {

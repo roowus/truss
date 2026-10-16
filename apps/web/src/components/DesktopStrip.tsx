@@ -189,6 +189,8 @@ export function DesktopStrip() {
           <div
             role="menu"
             aria-label="Workspace options"
+            /* the container owns focus, so it names the active row */
+            aria-activedescendant={cursor.index >= 0 && menuItems[cursor.index] ? `ws-menu-${cursor.index}` : undefined}
             ref={menuFocusRef}
             tabIndex={-1}
             onKeyDown={(e) => cursor.onMenuKeyDown(e, activateRow)}
@@ -201,6 +203,7 @@ export function DesktopStrip() {
                     for it — a group divider must not swallow its own item */}
                 {item.separatorBefore && <div className="my-1 border-t border-[var(--t-line)]" />}
                 <MenuItem
+                  id={`ws-menu-${i}`}
                   icon={item.icon}
                   dangerous={item.dangerous}
                   disabled={item.disabled}
@@ -266,9 +269,10 @@ function menuSpec(opts: {
   ];
 }
 
-function MenuItem({ icon, children, onClick, disabled, dangerous, highlighted, onPointerEnter }: { icon: string; children: string; onClick: () => void; disabled?: boolean; dangerous?: boolean; highlighted?: boolean; onPointerEnter?: () => void }) {
+function MenuItem({ id, icon, children, onClick, disabled, dangerous, highlighted, onPointerEnter }: { id?: string; icon: string; children: string; onClick: () => void; disabled?: boolean; dangerous?: boolean; highlighted?: boolean; onPointerEnter?: () => void }) {
   return (
     <button
+      id={id}
       type="button"
       role="menuitem"
       aria-disabled={disabled || undefined}

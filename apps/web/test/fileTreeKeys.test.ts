@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { clampCursor, treeKey, type TreeRow } from "../src/lib/fileTreeKeys";
+import { readFileSync } from "node:fs";
+import { clampCursor, shouldTakeTreeFocus, treeKey, type TreeRow } from "../src/lib/fileTreeKeys";
 
 /* Files-tree keyboard navigation (issue #227).
    The tree's rows are a flat array in VISIBLE order: expanded folders are
@@ -67,4 +68,46 @@ test("clampCursor keeps the cursor valid when rows vanish", () => {
   assert.equal(clampCursor(0, 0), -1, "empty tree has no cursor");
   assert.equal(clampCursor(-1, 5), -1, "nothing focused stays nothing focused");
   assert.equal(clampCursor(2, 5), 2, "a valid cursor is left alone");
+});
+
+/* ---- the tree's focus decision (issue #227) ----------------------------
+
+   The tree focuses itself when the Files panel mounts, because a dockview
+   panel has no focusable parent: without it the arrows do nothing until
+   the user clicks a row, which is the acceptance criterion the issue sets.
+   It must never STEAL focus, so the decision is a pure function and is
+   tested here rather than only in a browser. */
+
+test("the tree takes focus when the caret is parked on nothing", () => {
+  assert.equal(shouldTakeTreeFocus({ connected: true, containsActive: false, activeTag: "BODY" }), true);
+  assert.equal(shouldTakeTreeFocus({ connected: true, containsActive: false, activeTag: "HTML" }), true);
+  assert.equal(shouldTakeTreeFocus({ connected: true, containsActive: false, activeTag: null }), true);
+  assert.equal(shouldTakeTreeFocus({ connected: true, containsActive: false, activeTag: "body" }), true, "tag case is irrelevant");
+});
+
+test("the tree never steals focus from a real control", () => {
+  for (const tag of ["INPUT", "TEXTAREA", "BUTTON", "SELECT", "A"]) {
+    assert.equal(
+      shouldTakeTreeFocus({ connected: true, containsActive: false, activeTag: tag }),
+      false,
+      `${tag} owns the caret and must keep it`,
+    );
+  }
+});
+
+test("an unmounted or already-focused tree does nothing", () => {
+  assert.equal(shouldTakeTreeFocus({ connected: false, containsActive: false, activeTag: "BODY" }), false, "detached container");
+  assert.equal(shouldTakeTreeFocus({ connected: true, containsActive: true, activeTag: "DIV" }), false, "already inside the tree");
+});
+
+test("read-through: FilesPanel uses the tested helper and ships no ref cleanup", () => {
+  const panel = readFileSync(new URL("../src/panels/FilesPanel.tsx", import.meta.url), "utf8");
+  assert.match(panel, /shouldTakeTreeFocus\(/, "the shipped decision is the tested one");
+  /* React 19 runs a function returned from a ref callback as a ref cleanup
+     on EVERY re-render, which cancelled the focus retries and left focus on
+     <body>. That regression must not come back. */
+  const refBody = panel.slice(panel.indexOf("const treeRefCb"), panel.indexOf("const onTreeKeyDown"));
+  assert.doesNotMatch(refBody, /return \(\) => \{ cancelAnimationFrame/, "no cleanup return in the focus ref");
+  assert.match(refBody, /window\.setTimeout\(grab, 400\)/, "the retries are still scheduled");
+  assert.match(panel, /ref=\{treeRefCb\}/, "the callback ref is wired to the container");
 });

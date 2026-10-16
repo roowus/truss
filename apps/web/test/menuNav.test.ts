@@ -105,3 +105,19 @@ test("regression: the focus/reset ref runs on MOUNT, never on every render", () 
     assert.match(src, /cursorRef\.current\?\.reset\(\)/, `${name} resets through the latest cursor`);
   }
 });
+
+test("the focused menu container names its active row (aria-activedescendant)", () => {
+  /* the container owns focus, so screen readers learn which row is current
+     from aria-activedescendant rather than from a focused child */
+  assert.match(strip, /aria-activedescendant=\{cursor\.index >= 0/, "the ⋯ menu reports the active row");
+  assert.match(strip, /id=\{`ws-menu-\$\{i\}`\}/, "its rows carry matching ids");
+  assert.match(chrome, /aria-activedescendant=\{cursor\.index >= 0/, "the agents menu reports the active row");
+  assert.match(chrome, /id=\{`agents-menu-\$\{i\}`\}/, "its rows carry matching ids");
+});
+
+test("the typeahead jump and the wrap order agree with the rendered labels", () => {
+  /* the same list feeds the rendered rows and the typeahead, so a jump can
+     never land on a label the user cannot see */
+  assert.match(strip, /const menuLabels = useMemo\(\(\) => menuItems\.map/, "labels come from the rows");
+  assert.equal(typeaheadIndex(MENU, "a", -1), 2, "and the jump lands on Archive workspace, row 2");
+});

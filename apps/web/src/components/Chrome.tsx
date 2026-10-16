@@ -111,6 +111,8 @@ export function StatusBar({ onToggleSidebar }: { onToggleSidebar: () => void }) 
           <div
             role="menu"
             aria-label="Running agents"
+            /* the container owns focus, so it names the active row */
+            aria-activedescendant={cursor.index >= 0 && running[cursor.index] ? `agents-menu-${cursor.index}` : undefined}
             ref={menuFocusRef}
             tabIndex={-1}
             onKeyDown={(e) => cursor.onMenuKeyDown(e, openSession)}
@@ -121,6 +123,7 @@ export function StatusBar({ onToggleSidebar }: { onToggleSidebar: () => void }) 
               return (
                 <button
                   key={id}
+                  id={`agents-menu-${i}`}
                   role="menuitem"
                   onPointerEnter={() => cursor.setIndex(i)}
                   onClick={() => openSession(i)}

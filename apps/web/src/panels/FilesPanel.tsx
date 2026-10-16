@@ -5,7 +5,7 @@ import { fmtSize, shortPath } from "@/lib/format";
 import { Btn, Empty, Icon, Spinner } from "@/components/ui";
 import { Markdown } from "./Markdown";
 import { isNavKey, nextIndex } from "@/lib/listKeys";
-import { clampCursor, treeKey, type TreeRow } from "@/lib/fileTreeKeys";
+import { clampCursor, shouldTakeTreeFocus, treeKey, type TreeRow } from "@/lib/fileTreeKeys";
 import type { FileEntry, FileRead } from "@/lib/proto";
 import { cn } from "@/utils/cn";
 
@@ -194,10 +194,14 @@ export function FilesPanel({ params }: IDockviewPanelProps<P>) {
        container mounts before dockview finishes attaching the panel, and
        dockview focuses the panel after that. */
     const grab = () => {
-      if (!el.isConnected || el.contains(document.activeElement)) return;
-      const a = document.activeElement;
-      if (a && a !== document.body && a !== document.documentElement) return;
-      el.focus({ preventScroll: true });
+      /* the decision lives in fileTreeKeys.shouldTakeTreeFocus so it is
+         covered by a real test rather than only by a browser run */
+      const ok = shouldTakeTreeFocus({
+        connected: el.isConnected,
+        containsActive: el.contains(document.activeElement),
+        activeTag: document.activeElement?.tagName ?? null,
+      });
+      if (ok) el.focus({ preventScroll: true });
     };
     /* NOTE: deliberately no cleanup return — React 19 treats a function
        returned from a ref callback as a ref cleanup and runs it on EVERY

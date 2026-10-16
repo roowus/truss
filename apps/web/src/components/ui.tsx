@@ -7,7 +7,7 @@ import { useApp } from "@/lib/store";
 import { useDesktops } from "@/lib/desktops";
 import { clampPopoverPos } from "@/lib/popover";
 import { selectTriggerHeight } from "@/lib/controls";
-import { isNavKey, isOpenKey, nextIndex } from "@/lib/listKeys";
+import { isArrowKey, isNavKey, isOpenKey, nextIndex } from "@/lib/listKeys";
 import { HarnessLogo } from "./harnessLogos";
 import { ICON_PATHS } from "@/lib/icons";
 import type { SessionState } from "@/lib/proto";
@@ -265,7 +265,10 @@ export function Select({
   };
 
   const onFilterKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (isNavKey(e.key)) { e.preventDefault(); move(e.key); }
+    /* arrows move the highlight, but Home/End must stay the text caret's
+       keys — the filter is a real input and hijacking them breaks editing
+       (issue #227 follow-up) */
+    if (isArrowKey(e.key)) { e.preventDefault(); move(e.key); }
     else if (e.key === "Enter") { e.preventDefault(); const o = visible[highlight]; if (o) pick(o.value); }
     else if (e.key === "Escape") { e.preventDefault(); setOpen(false); btnRef.current?.focus(); }
   };

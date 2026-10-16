@@ -92,3 +92,10 @@ export function typeaheadIndex(items: string[], query: string, from = NO_FOCUS):
   }
   return NO_FOCUS;
 }
+
+/** Just the two arrows — the highlight keys a text input may safely claim.
+ *  Home/End belong to the caret while the user is typing in a filter box,
+ *  so a surface with a real input uses this narrower set. */
+export function isArrowKey(key: string): boolean {
+  return key === "ArrowDown" || key === "ArrowUp";
+}
