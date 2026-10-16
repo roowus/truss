@@ -229,12 +229,22 @@ test("no em dashes in this feature's user-facing copy (TRUSS.md)", () => {
     { file: "../src/components/Chrome.tsx", allow: /Server health|No snapshot yet/ },
   ];
   for (const { file, allow } of FEATURE_STRINGS) {
-    const src = readFileSync(new URL(file, import.meta.url), "utf8");
+    const raw = readFileSync(new URL(file, import.meta.url), "utf8");
+    /* Strip comments across the WHOLE file first: block comments span lines,
+       so a per-line check lets a multi-line comment's interior through (and
+       the first cut of this guard did exactly that). */
+    const src = raw
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/^[ \t]*\/\/.*$/gm, "");
     for (const line of src.split("\n")) {
       const trimmed = line.trim();
-      // skip comment lines — the rule is about copy the user reads
-      if (trimmed.startsWith("*") || trimmed.startsWith("/*") || trimmed.startsWith("//")) continue;
-      const segments = line.match(/"([^"]*)"|`([^`]*)`|>([^<>{]*)</g) ?? [];
+      if (!trimmed) continue;
+      /* Scan the whole line rather than matching quoted segments: a NESTED
+         template literal is invisible to a backtick-pair regex — for
+         `  ${s.name}${s.detail ? ` — ${s.detail}` : ""}` the first match
+         stops at the inner opening backtick and the em dash falls in the gap
+         (audit round 10, B1). Whole-line scanning cannot drop that case. */
+      const segments = [trimmed];
       for (const seg of segments) {
         if (!allow.test(seg)) continue;
         assert.ok(

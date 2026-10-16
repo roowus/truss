@@ -199,7 +199,10 @@ export function buildHealthSnapshot(env: NodeJS.ProcessEnv = process.env): Healt
     line (issue #219 keeps stdout parseable and stderr verbose) */
 export function healthDiagnostics(snap: HealthSnapshot): string {
   const lines = snap.subsystems.map(
-    (s) => `  ${s.state.padEnd(8)} ${s.name}${s.detail ? ` — ${s.detail}` : ""}`,
+    /* a colon separator, not an em dash: humans read this in a terminal, and
+       TRUSS.md bans em dashes in copy people read. Keeping it plain also means
+       the guard pinning that rule needs no exemption for this file. */
+    (s) => `  ${s.state.padEnd(8)} ${s.name}${s.detail ? `: ${s.detail}` : ""}`,
   );
   return [`truss: health detail (state=${snap.state})`, ...lines].join("\n");
 }
