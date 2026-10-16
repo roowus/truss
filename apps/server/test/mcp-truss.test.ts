@@ -146,11 +146,11 @@ test("tools/list: every documented tool is present, each with an object inputSch
     "list_harnesses", "list_agents", "get_costs",
     "get_settings", "update_settings", "list_workspaces", "get_layout", "put_layout",
     "run_import_dsh",
-    "list_tasks", "create_task", "update_task", "run_task",
+    "list_tasks", "create_task", "update_task", "run_task", "schedule_task",
     "file_todo", "list_todos", "update_todo", "complete_todo",
     "post_feed", "list_feed",
   ].sort();
-  assert.deepEqual(tools.map((t) => t.name).sort(), expected, "33 tools, exact set");
+  assert.deepEqual(tools.map((t) => t.name).sort(), expected, "34 tools, exact set");
   for (const t of tools) {
     assert.ok(t.description.length > 0, `${t.name} has a description`);
     assert.equal(t.inputSchema?.type, "object", `${t.name} inputSchema is an object schema`);
@@ -161,6 +161,7 @@ test("tools/list: every documented tool is present, each with an object inputSch
   assert.deepEqual(byName.complete_todo.inputSchema.required, ["id"]);
   assert.deepEqual(byName.run_task.inputSchema.required, ["id"]);
   assert.deepEqual(byName.create_task.inputSchema.required, ["title", "cwd", "harness"]);
+  assert.deepEqual(byName.schedule_task.inputSchema.required, ["schedule"]);
   assert.deepEqual(byName.send_prompt.inputSchema.required, ["id", "text"]);
 });
 
@@ -421,6 +422,63 @@ test("task board: create_task → run_task spawns a real session that completes;
   const noTitle = await call("create_task", { cwd: "/tmp", harness: "pi" });
   assert.equal(noTitle.isError, true);
   assert.ok(noTitle.text.includes("title required"));
+});
+
+test("schedule_task: files recurring cards, validates cron, clears; posts a feed note (issue #16)", async () => {
+  assert.ok(agentA, "agent A exists (scoped MCP caller)");
+
+  /* create path: one call files a scheduled card */
+  const made = await call("schedule_task", {
+    title: "nightly gpu tests",
+    prompt: "run the suite on the gpu rig",
+    cwd: "/tmp",
+    harness: "pi",
+    schedule: "0 3 * * *",
+  }, agentA);
+  assert.equal(made.isError, false, made.text);
+  assert.equal(made.data.schedule, "0 3 * * *");
+  assert.ok(made.data.nextRunAt > Date.now(), "next run is in the future");
+
+  /* the visibility policy: the feed got a note naming the schedule */
+  await waitFor(async () => {
+    const feed = await api("/api/feed");
+    const note = feed.body.items.find((i: Ev) => i.type === "note" && i.data?.taskId === made.data.id);
+    return note?.title.includes("Recurring task scheduled") ? note : null;
+  }, "schedule feed note");
+
+  /* invalid cron is rejected with the parse reason, and nothing is stored */
+  const bad = await call("schedule_task", { title: "x", cwd: "/tmp", harness: "pi", schedule: "61 * * * *" }, agentA);
+  assert.equal(bad.isError, true);
+  assert.ok(bad.text.includes("bad schedule"), bad.text);
+  assert.ok(bad.text.includes("minute"), bad.text);
+
+  /* update path: replace the schedule on an existing card */
+  const resched = await call("schedule_task", { id: made.data.id, schedule: "*/30 * * * *" }, agentA);
+  assert.equal(resched.isError, false, resched.text);
+  assert.equal(resched.data.schedule, "*/30 * * * *");
+
+  /* audit B3: omitting the schedule key on the update path must NOT silently
+     clear the card — only an explicit null/"" clears */
+  const omitted = await call("schedule_task", { id: made.data.id }, agentA);
+  assert.equal(omitted.isError, true);
+  assert.ok(omitted.text.includes("schedule is required"), omitted.text);
+  const stillThere = await call("list_tasks");
+  assert.equal(stillThere.data.find((t: Ev) => t.id === made.data.id)?.schedule, "*/30 * * * *", "schedule survives the omitted-key call");
+
+  /* clearing with null drops schedule + next slot */
+  const cleared = await call("schedule_task", { id: made.data.id, schedule: null }, agentA);
+  assert.equal(cleared.data.schedule, undefined);
+  assert.equal(cleared.data.nextRunAt, undefined);
+
+  /* unscoped connections can't schedule (the feed note names the caller) */
+  const anon = await call("schedule_task", { title: "x", cwd: "/tmp", harness: "pi", schedule: "0 0 * * *" });
+  assert.equal(anon.isError, true);
+  assert.ok(anon.text.includes("unscoped MCP connection"));
+
+  /* create path requires an actual schedule */
+  const noSched = await call("schedule_task", { title: "x", cwd: "/tmp", harness: "pi", schedule: null }, agentA);
+  assert.equal(noSched.isError, true);
+  assert.ok(noSched.text.includes("schedule is required"));
 });
 
 test("error paths: isError tool results vs true JSON-RPC errors vs 202 notifications", async () => {

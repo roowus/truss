@@ -46,6 +46,7 @@ import { createTask, deleteTask, listTasks, runTask, updateTask, type TaskStatus
 import { createTodo, listTodos, resolveTodoAccess, setTodoBroadcaster, userUpdateTodo } from "./todos.js";
 import { listFeed, setFeedBroadcaster, setFeedState, shareFeedItem } from "./feed.js";
 import { startFeedAutopost } from "./feed-autopost.js";
+import { startScheduler } from "./scheduler.js";
 import { startDoubletakePoll } from "./integrations/doubletake.js";
 import { composePractices, getGlobalPractices, saveGlobalPractices } from "./practices.js";
 import { createHost, deleteHost, getHost, isHostTombstoned, listHosts, renameHost, rotateHostToken, setHostPinned, setHostRevoked, verifyAgentToken } from "./hosts.js";
@@ -106,6 +107,9 @@ setTodoBroadcaster((todo) => broadcastRaw({ type: "todo.upsert", sessionId: todo
 /* a device asking to pair must surface in the UI the moment it asks */
 setPairBroadcaster((event, request) => broadcastRaw({ type: "pair.changed", sessionId: "", event, request }));
 startFeedAutopost();
+/* cron scheduler (issue #16): fires due task cards through runTask;
+   minute-granularity, boot catch-up from the per-card waterlines */
+startScheduler();
 /* doubletake research cards — a no-op until enabled in Settings */
 startDoubletakePoll();
 
@@ -1084,17 +1088,17 @@ app.get("/api/practices/compose", async (req) => {
 /* ── task board (kanban; run spawns a real session with the task prompt) ── */
 app.get("/api/tasks", async () => ({ tasks: listTasks() }));
 app.post("/api/tasks", async (req, reply) => {
-  const b = (req.body ?? {}) as { title?: string; prompt?: string; cwd?: string; harness?: string };
+  const b = (req.body ?? {}) as { title?: string; prompt?: string; cwd?: string; harness?: string; schedule?: string | null };
   try {
     if (!b.title || !b.cwd || !b.harness) throw new Error("missing title/cwd/harness");
-    return { task: createTask({ title: b.title, prompt: b.prompt ?? "", cwd: b.cwd, harness: b.harness }) };
+    return { task: createTask({ title: b.title, prompt: b.prompt ?? "", cwd: b.cwd, harness: b.harness, schedule: b.schedule }) };
   } catch (e: any) {
     return reply.code(400).send({ error: e.message ?? String(e) });
   }
 });
 app.patch("/api/tasks/:id", async (req, reply) => {
   const { id } = req.params as { id: string };
-  const b = (req.body ?? {}) as { title?: string; prompt?: string; status?: TaskStatus };
+  const b = (req.body ?? {}) as { title?: string; prompt?: string; status?: TaskStatus; schedule?: string | null };
   try {
     return { task: updateTask(id, b) };
   } catch (e: any) {

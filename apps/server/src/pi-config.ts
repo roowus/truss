@@ -34,7 +34,18 @@ export function syncPiExtension(): { path: string; wrote: boolean } {
   return { path: PI_EXTENSION, wrote: true };
 }
 
-const PROVIDER_IDS = { fireworks: "truss-fw", zai: "truss-zai", openrouter: "truss-or", huggingface: "truss-hf" } as const;
+const PROVIDER_IDS = {
+  fireworks: "truss-fw",
+  zai: "truss-zai",
+  openrouter: "truss-or",
+  huggingface: "truss-hf",
+  deepinfra: "truss-deepinfra",
+  deepseek: "truss-deepseek",
+} as const;
+
+/* Test seam: a provider missing here is silently absent from pi's
+   models.json even when its key-proxy route is enabled and keyed. */
+export const PROVIDER_ID_MAP: Readonly<Record<string, string>> = PROVIDER_IDS;
 
 export async function syncPiModelsJson(): Promise<{ providers: number; models: number }> {
   const catalog = await modelCatalog();

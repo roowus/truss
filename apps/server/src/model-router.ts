@@ -49,6 +49,8 @@ export const MODEL_ROUTER_PROVIDERS: ProviderRoute[] = [
   { id: "fireworks", label: "Fireworks", protocol: "openai", openaiChatUrl: "http://127.0.0.1:45820/inference/v1/chat/completions" },
   { id: "openrouter", label: "OpenRouter", protocol: "openai", openaiChatUrl: "http://127.0.0.1:45823/api/v1/chat/completions" },
   { id: "huggingface", label: "HuggingFace", protocol: "openai", openaiChatUrl: "http://127.0.0.1:45824/v1/chat/completions" },
+  { id: "deepinfra", label: "DeepInfra", protocol: "openai", openaiChatUrl: "http://127.0.0.1:45826/v1/chat/completions" },
+  { id: "deepseek", label: "DeepSeek", protocol: "openai", openaiChatUrl: "http://127.0.0.1:45827/v1/chat/completions" },
   { id: "router", label: "9router", protocol: "openai", openaiChatUrl: "http://127.0.0.1:45822/v1/chat/completions" },
 ];
 

@@ -57,6 +57,17 @@ export function until(t: number, now = Date.now()) {
   if (s < 86400) return `${Math.floor(s / 3600)}h`;
   return `${Math.floor(s / 86400)}d`;
 }
+const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+/** task-board cron hint (issue #16): "Mon 09:00" within the week the user is
+    looking at, "Feb 29, 00:00" beyond it. The slot itself was computed
+    server-local; rendering is the viewer's clock (same instant either way). */
+export function nextRunHint(t: number, now = Date.now()) {
+  const d = new Date(t);
+  const hm = `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+  if (t - now < 7 * 86_400_000) return `${WEEKDAYS[d.getDay()]} ${hm}`;
+  return `${MONTHS[d.getMonth()]} ${d.getDate()}, ${hm}`;
+}
 /* Host/process uptime, read as "Xd Xh" / "Xh Xm" / "Xm". Takes an optional
    number because a procs row can come from a node-agent still on an older
    bundle that does not send ageSec. */

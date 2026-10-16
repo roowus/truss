@@ -164,6 +164,8 @@ jobs:
       # Provider endpoints (Anthropic-compatible).
       ZAI_BASE_URL: https://api.z.ai/api/anthropic
       FW_BASE_URL: https://api.fireworks.ai/inference
+      DS_BASE_URL: https://api.deepseek.com/anthropic
+      DS_MODEL: deepseek-flash
       # Model IDs. If the GLM id 404s, check the id on the Z.AI plan.
       GLM_MODEL: glm-5.3-flash
       KIMI_MODEL: accounts/fireworks/models/kimi-k3
@@ -207,9 +209,30 @@ jobs:
           tail -c 4000 "${{ runner.temp }}/build-out/log.txt" > "${{ runner.temp }}/build-out/tail.txt"
           exit 0
 
-      - name: Run audit (GLM)
-        id: run
-        uses: anthropics/claude-code-action@v1
+      - name: Agent audit (DeepSeek first)
+        id: run-ds
+        if: always()
+        uses: anthropics/claude-code-action@v1.0.35
+        continue-on-error: true
+        env:
+          ANTHROPIC_BASE_URL: ${{ env.DS_BASE_URL }}
+          ANTHROPIC_AUTH_TOKEN: ${{ secrets.DEEPSEEK_API_KEY }}
+        with:
+          # Labeled/pushed runs can be initiated by bots.
+          allowed_bots: github-actions
+          github_token: ${{ github.token }}
+          anthropic_api_key: ${{ secrets.DEEPSEEK_API_KEY }}
+          claude_args: |
+            --model ${{ env.DS_MODEL }}
+            --max-turns 80
+            --add-dir ${{ runner.temp }}/review-out
+            --add-dir ${{ runner.temp }}/build-out
+            --allowed-tools "Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh issue view:*),Bash(curl:*),Read,Write,Glob,Grep"
+          prompt: &audit-prompt |
+      - name: Agent audit (GLM fallback)
+        id: run-glm
+        if: steps.run-ds.outcome == 'failure'
+        uses: anthropics/claude-code-action@v1.0.35
         continue-on-error: true
         env:
           ANTHROPIC_BASE_URL: ${{ env.ZAI_BASE_URL }}
@@ -331,6 +354,43 @@ jobs:
             serve> — <cheaper form>)`, appending `(no linked issue — judged from
             commits)` or `(linked issue off-topic)` where applicable.
 
+            COMPLEXITY — the issue carries a `complexity: trivial|low|medium|
+            high|epic` label, and `medium`+ (or any `qa-first` issue) must have
+            run a design Q&A before implementation. Judge two things in the
+            diff you are auditing:
+            (a) Is the label RIGHT for the change actually shipped? A `low`
+            issue that grew into a cross-cutting refactor is mislabeled; an
+            `epic` that shipped as a two-line change is too. State the label
+            you would assign and why, in one line.
+            (b) Did the design gate run when it should have? The Q&A itself
+            happens in the worker's SESSION CHAT (by design — the issue and PR
+            stay free of the negotiation), so the evidence here is the ONE
+            agreed-design summary comment the worker posts on the issue/PR
+            before implementing. Look for it predating the implementation
+            commits, and check the commits match it. A gated issue implemented
+            with no such summary is a finding (severity `high`: either the
+            developer was never consulted on decisions the label says are
+            theirs, or the agreed design was never recorded and no later
+            reader can tell whether the build matches it).
+            Verdict line: `Complexity: <label on the issue> — appropriate |
+            understated (<actual> — <why>) | overstated (<actual> — <why>);
+            design gate: ran | should have run (<what was decided unilaterally>)
+            | not required`.
+
+            PRIORITY — the issue also carries a `priority: critical|high|
+            medium|low` label. The work is often where the true severity shows
+            up, so check it against what the diff actually does: a "low"
+            polish item that turns out to touch stored data is understated; a
+            "critical" whose blast radius is an unreachable path is
+            overstated. Judge the ACTUAL consequence for someone using truss
+            today — data loss, security, a broken daily flow outrank a rough
+            edge. Only recommend a change you can point at in the diff.
+            Verdict line: `Priority: <label on the issue> — appropriate |
+            understated (<actual> — <consequence in this diff>) | overstated
+            (<actual> — <why the consequence does not land>)`. State
+            `(no linked issue — judged from commits)` when the issue's priority
+            was not visible to you.
+
             TEST COVERAGE — three checks against the diff and its tests:
             (a) Path coverage — are the changed code paths covered by tests in
             this PR or existing ones? Name the specific uncovered paths.
@@ -415,10 +475,10 @@ jobs:
       # Same audit, retried once on Kimi if the GLM run failed (for example the
       # Z.AI key is out of credits). Not retried when the stagnation rule
       # already picked Kimi.
-      - name: Run audit (Kimi fallback)
+      - name: Agent audit (Kimi fallback)
         id: run-fb
-        if: steps.run.outcome == 'failure' && needs.gate.outputs.provider == 'zai'
-        uses: anthropics/claude-code-action@v1
+        if: steps.run-glm.outcome == 'failure' && steps.run-ds.outcome == 'failure' && needs.gate.outputs.provider == 'zai'
+        uses: anthropics/claude-code-action@v1.0.35
         env:
           ANTHROPIC_BASE_URL: ${{ env.FW_BASE_URL }}
           ANTHROPIC_AUTH_TOKEN: ${{ secrets.FIREWORKS_API_KEY }}
@@ -439,13 +499,14 @@ jobs:
         if: always()
         env:
           REVIEW: ${{ runner.temp }}/review-out/review.md
-          EXEC_GLM: ${{ steps.run.outputs.execution_file }}
+          EXEC_GLM: ${{ steps.run-glm.outputs.execution_file }}
+          EXEC_DS: ${{ steps.run-ds.outputs.execution_file }}
           EXEC_KIMI: ${{ steps.run-fb.outputs.execution_file }}
         run: |
           # If the agent answered without writing the file, recover the review
           # from its final message in the execution log.
           if [ ! -s "$REVIEW" ]; then
-            for EF in "$EXEC_KIMI" "$EXEC_GLM"; do
+            for EF in "$EXEC_KIMI" "$EXEC_DS" "$EXEC_GLM"; do
               [ -n "$EF" ] && [ -f "$EF" ] || continue
               python3 - "$EF" "$REVIEW" <<'EOF' && break
           import json, sys
@@ -496,7 +557,7 @@ jobs:
           path: |
             ${{ runner.temp }}/review-out/review.md
             ${{ runner.temp }}/build-out/
-            ${{ steps.run.outputs.execution_file }}
+            ${{ steps.run-glm.outputs.execution_file }}
             ${{ steps.run-fb.outputs.execution_file }}
           if-no-files-found: ignore
           retention-days: 7
@@ -510,7 +571,7 @@ jobs:
           SHORT="$(echo '${{ needs.gate.outputs.head_sha }}' | cut -c1-7)"
           MODEL_NOTE="GLM"
           [ "$PROVIDER" = "fireworks" ] && MODEL_NOTE="Kimi (3 stagnant rounds on GLM)"
-          [ "${{ steps.run.outcome }}" = "failure" ] && [ "$PROVIDER" = "zai" ] && MODEL_NOTE="Kimi (GLM run failed)"
+          [ "${{ steps.run-glm.outcome }}" = "failure" ] && [ "$PROVIDER" = "zai" ] && MODEL_NOTE="Kimi (GLM run failed)"
           MAJORS_HASH="$(cat "$RUNNER_TEMP/majors-hash.txt" 2>/dev/null)"
           if [ -s "$REVIEW" ]; then
             {
