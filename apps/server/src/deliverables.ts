@@ -21,8 +21,14 @@
  * surface at all — see piExtension.ts). So the rule splits: every harness
  * carries the PROHIBITION (that is the issue's actual ask, and it is true
  * everywhere), while only the MCP-attached harnesses are told the tool name.
- * Use `deliverablesGuidanceFor(harness)` to pick; the two named functions
- * exist for the call sites that already know which harness they serve.
+ * Each call site knows which harness it serves, so it picks its variant
+ * directly: the MCP adapters (claude/dsh/hermes) call
+ * `deliverablesGuidance()`, and pi's two bootstrap surfaces (`adapters/pi.ts`
+ * and `POSTING_GUIDE_PI`) call `deliverablesGuidanceNoMcp()`. There is
+ * deliberately no harness→variant selector here: the source of truth for
+ * "which harnesses attach the MCP" is `sessions.ts`'s `MCP_ATTACHED`, and a
+ * second copy in this module could drift out of step with it while a test
+ * pinning the copy stayed green (audit round 2, B1).
  */
 const AUTOMATION_PROHIBITION =
   `Automation belongs in truss too. Never reach for OS-level scheduling ` +
@@ -70,19 +76,3 @@ export function deliverablesGuidanceNoMcp(): string {
     `yourself: say so and describe the recurring task for the user to schedule in truss.`
   );
 }
-
-/**
- * Pick the honest paragraph for a harness. Anything that attaches the truss
- * MCP gets the tool name; everything else (pi) gets the no-MCP variant.
- * Harness ids may carry a node suffix ("pi@host"), so compare the base.
- */
-export function deliverablesGuidanceFor(harness: string): string {
-  const base = harness.split("@")[0];
-  return MCP_ATTACHED_HARNESSES.has(base) ? deliverablesGuidance() : deliverablesGuidanceNoMcp();
-}
-
-/* Mirror of sessions.ts's MCP_ATTACHED — the harnesses whose adapters attach
-   the per-session truss MCP server (and therefore expose schedule_task).
-   Duplicated rather than imported because sessions.ts imports this module. */
-const MCP_ATTACHED_HARNESSES = new Set(["claude-code", "dsh", "hermes"]);
-

@@ -101,72 +101,85 @@ test("the guidance forbids OS-level schedulers and names schedule_task", async (
    the tool exists, while the PROHIBITION stays everywhere (that is #222's
    actual ask, and it is true on every harness).
 
-   The pin reads the adapters' real wiring rather than a helper's existence:
-   the MCP-attached adapters must carry a paragraph that names schedule_task,
-   and pi's bootstrap (adapter + POSTING_GUIDE_PI) must carry one that does
-   not — while both keep the OS prohibition. */
+   The pin derives its expectations from sessions.ts's real MCP_ATTACHED set —
+   the source of truth for "this harness has the truss tools" — rather than a
+   second copy in deliverables.ts (audit round 2, B1: a mirrored set would let
+   the test stay green while the two drifted apart). */
 test("the guidance names only tools the addressed harness actually exposes", async () => {
   const { cleanup } = await freshServer("guide-harness");
   try {
     const spec = "../src/deliverables.js";
     const mod: any = await import(spec).catch(() => null);
     assert.ok(mod, "deliverables.ts must exist (see the #203 tests)");
-    assert.equal(
-      typeof mod.deliverablesGuidanceFor,
-      "function",
-      "deliverables.ts must expose the per-harness selector so a caller cannot send pi the MCP wording",
+
+    const { MCP_ATTACHED } = await import("../src/sessions.js");
+    assert.ok(MCP_ATTACHED instanceof Set, "sessions.ts must export MCP_ATTACHED as the source of truth");
+
+    /* Harness → the adapter file whose bootstrap serves it, and the variant
+       that adapter must therefore carry. Only pi lacks the truss MCP. */
+    const adapterOf: Record<string, string> = {
+      "claude-code": "claude",
+      dsh: "dsh",
+      hermes: "hermes",
+      pi: "pi",
+    };
+
+    /* the two paragraphs themselves: the MCP variant names the tool and
+       carries the prohibition; the no-MCP variant carries the prohibition
+       and explicitly does NOT name the un-callable tool */
+    const mcpText = mod.deliverablesGuidance();
+    assert.match(mcpText, /schedule_task/, "the MCP variant names the tool those harnesses can call");
+    assert.match(mcpText, /crontab/i, "the MCP variant carries the prohibition too");
+
+    const noMcpText = mod.deliverablesGuidanceNoMcp();
+    assert.doesNotMatch(
+      noMcpText,
+      /schedule_task/,
+      "the no-MCP variant must not name schedule_task — pi has no truss MCP (its extension registers only post_feed/list_feed), so the call could only fail",
     );
+    assert.match(noMcpText, /crontab/i, "the no-MCP variant still carries the prohibition — #222 asks for it on EVERY harness");
+    assert.match(noMcpText, /no scheduling tool|user to schedule/i, "and points at a surface pi actually has");
 
-    /* harnesses that attach the truss MCP get the tool name */
-    for (const ok of ["claude-code", "dsh", "hermes"]) {
-      const g = mod.deliverablesGuidanceFor(ok);
-      assert.match(g, /schedule_task/, `${ok} attaches the truss MCP, so it can call schedule_task — name it`);
-      assert.match(g, /crontab/i, `${ok} also carries the prohibition`);
-    }
+    /* every harness the repo knows about is classified, and the classification
+       is driven by MCP_ATTACHED rather than restated here */
+    for (const [harness, adapter] of Object.entries(adapterOf)) {
+      const attaches = MCP_ATTACHED.has(harness);
 
-    /* pi cannot: it must get the prohibition WITHOUT the un-callable name,
-       and must be pointed at the surface it does have */
-    for (const no of ["pi", "pi@node1"]) {
-      const g = mod.deliverablesGuidanceFor(no);
-      assert.doesNotMatch(
-        g,
-        /schedule_task/,
-        `${no} has no truss MCP (and its extension registers only post_feed/list_feed) — naming schedule_task would instruct it to call a tool that is not registered`,
-      );
-      assert.match(
-        g,
-        /crontab/i,
-        `${no} still carries the prohibition — #222 asks for it on EVERY harness`,
-      );
-      assert.match(g, /no scheduling tool|user to schedule/i, `${no} is pointed at a surface it actually has`);
-    }
+      /* the variant function for this harness must be the honest one */
+      const g = attaches ? mcpText : noMcpText;
+      if (attaches) {
+        assert.match(g, /schedule_task/, `${harness} attaches the truss MCP, so it can call schedule_task — name it`);
+      } else {
+        assert.doesNotMatch(g, /schedule_task/, `${harness} has no truss MCP — naming schedule_task would be a lie`);
+      }
 
-    /* and the wiring actually uses them: each pi surface must carry the
-       no-MCP variant, and the MCP adapters must not carry the pi wording.
-       Checked per file — concatenating them would let one file's correct
-       import mask another file's regression. */
-    for (const piFile of ["../src/adapters/pi.ts", "../src/practices.ts"]) {
-      const src = readFileSync(new URL(piFile, import.meta.url), "utf8");
-      assert.match(
-        src,
-        /deliverablesGuidanceNoMcp/,
-        `${piFile} is a pi bootstrap surface (pi has no schedule_task) — it must use the no-MCP variant`,
-      );
-      assert.doesNotMatch(
-        src,
-        /deliverablesGuidance\(\)/,
-        `${piFile} must not interpolate the MCP variant: it names schedule_task, which pi cannot call`,
-      );
-    }
-    for (const adapter of ["dsh", "hermes", "claude"]) {
+      /* and the adapter that serves it must actually use that variant.
+         Checked per file: concatenating sources would let one file's correct
+         import mask another file's regression. */
       const src = readFileSync(new URL(`../src/adapters/${adapter}.ts`, import.meta.url), "utf8");
+      const want = attaches ? /deliverablesGuidance\(\)/ : /deliverablesGuidanceNoMcp/;
+      const avoid = attaches ? /deliverablesGuidanceNoMcp/ : /deliverablesGuidance\(\)/;
       assert.match(
         src,
-        /deliverablesGuidance\(\)/,
-        `${adapter} attaches the truss MCP — it must keep the variant that names schedule_task`,
+        want,
+        `adapters/${adapter}.ts serves ${harness} (MCP attached: ${attaches}) — it must use the ${attaches ? "MCP" : "no-MCP"} variant`,
       );
-      assert.doesNotMatch(src, /deliverablesGuidanceNoMcp/, `${adapter} CAN call schedule_task; don't send it the pi wording`);
+      assert.doesNotMatch(
+        src,
+        avoid,
+        `adapters/${adapter}.ts must not use the other variant: ${harness} ${attaches ? "CAN" : "cannot"} call schedule_task`,
+      );
     }
+
+    /* pi's OTHER bootstrap surface: POSTING_GUIDE_PI is what sessions.ts wraps
+       around pi's first prompt, so it must carry the pi variant too */
+    const piGuide = readFileSync(new URL("../src/practices.ts", import.meta.url), "utf8");
+    assert.match(piGuide, /deliverablesGuidanceNoMcp/, "POSTING_GUIDE_PI is a pi surface — it must use the no-MCP variant");
+    assert.doesNotMatch(
+      piGuide,
+      /deliverablesGuidance\(\)/,
+      "POSTING_GUIDE_PI must not interpolate the MCP variant: it names schedule_task, which pi cannot call",
+    );
   } finally {
     cleanup();
   }

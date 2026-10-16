@@ -447,12 +447,17 @@ export async function sendPrompt(
 }
 
 /* harnesses whose adapters attach the per-session truss MCP server (they get
-   practices via the server's instructions field instead) */
-const MCP_ATTACHED = new Set(["claude-code", "dsh", "hermes"]);
+   practices via the server's instructions field instead). Exported as the
+   single source of truth for "this harness has the truss tools" — the
+   guidance split keys off it (a harness here can call schedule_task; one
+   that is not cannot), and tests derive their expectations from THIS set
+   rather than a second copy that could drift (audit round 2, B1). */
+export const MCP_ATTACHED = new Set(["claude-code", "dsh", "hermes"]);
 const firstPromptDone = new Set<string>();
 const baseOf = (harness: string) => harness.split("@")[0];
-/* POSTING_GUIDE_PI lives in practices.ts next to POSTING_GUIDE (and is
-   pinned there) — it interpolates the canonical deliverablesGuidance() */
+/* POSTING_GUIDE_PI lives in practices.ts next to POSTING_GUIDE (and is pinned
+   there) — it interpolates deliverablesGuidanceNoMcp(), the pi variant: pi
+   attaches no truss MCP, so it must not be told to call schedule_task. */
 
 
 export function interrupt(sessionId: string) {
