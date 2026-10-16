@@ -60,7 +60,7 @@ import { importDshSessions } from "./import-dsh.js";
 import { registerMcpTruss } from "./mcp-truss.js";
 import { controlService, deleteRoute, listCredentials, upsertRoute } from "./credentials.js";
 import { controlRouter, harnessRouting, routerStatus } from "./router.js";
-import { modelCatalog } from "./modelcat.js";
+import { modelCatalog, CATALOG_ROUTES_DERIVED, CATALOG_ROUTE_IDS } from "./modelcat.js";
 import { modelRouterBaseUrl, modelRouterEnabled, modelRouterPort } from "./router-resolve.js";
 import { routerPickerModels, startModelRouter } from "./model-router.js";
 import { COMMIT } from "./version.js";
@@ -121,6 +121,16 @@ reconcileOnBoot();
 void ensureAgentBundle()
   .then(() => app.log.info("node-agent bundle ready"))
   .catch(() => app.log.warn(`node-agent bundle build failed: ${agentBundleError()}`));
+
+/* which routes every picker can see, and where that list came from (issue
+   #229): derived from the live key-proxy config means a newly added route is
+   picked up with no code change; the static fallback means the config was
+   unreadable and a new route would be invisible again. */
+app.log.info(
+  CATALOG_ROUTES_DERIVED
+    ? `model catalog: provider routes derived from the key-proxy config (${CATALOG_ROUTE_IDS.join(", ")})`
+    : `model catalog: key-proxy config unreadable, using the static provider table (${CATALOG_ROUTE_IDS.join(", ")}) — a newly added proxy route will NOT appear in pickers`,
+);
 
 /* pi's model picker is a static file read at spawn — sync it from the live
    key-proxy catalog so the dialog offers everything the credentials cover */
