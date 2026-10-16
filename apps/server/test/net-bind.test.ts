@@ -25,9 +25,12 @@ test("netInfo reports the server's bind address (loopback vs all-interfaces)", a
     );
     const all = (await netInfo(4040, "0.0.0.0")) as { bind?: string };
     assert.equal(all.bind, "0.0.0.0");
-    /* omitted → the server's own default (TRUSS_HOST ?? 0.0.0.0) */
+    /* omitted → the server's own default, which is loopback since issue
+       #214 (was 0.0.0.0). Asserted exactly in exposure.test.ts; here we
+       only need it to be present and match the shared default */
     const dflt = (await netInfo(4040)) as { bind?: string };
     assert.equal(typeof dflt.bind, "string", "bind present even when the arg is omitted");
+    assert.equal(dflt.bind, "127.0.0.1", "the omitted-bind fallback is loopback (issue #214)");
   } finally {
     cleanup();
   }

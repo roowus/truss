@@ -3,6 +3,12 @@ import { connect } from "node:net";
 import { networkInterfaces, userInfo } from "node:os";
 import { assertSafeServerUrl } from "./agentbundle.js";
 
+/** The bind when TRUSS_HOST is unset: loopback, matching the README's
+ *  "bind to loopback or your private network only" (issue #214). Lives here
+ *  rather than in exposure.ts so net.ts can use it without a circular import
+ *  — exposure.ts imports this module, not the other way round. */
+export const DEFAULT_BIND_HOST = "127.0.0.1";
+
 /**
  * Network reachability helper for the add-host wizard: what addresses can a
  * remote agent use to reach this Truss server? Detects tailscale (if the CLI
@@ -115,7 +121,15 @@ export async function tailscalePeers(): Promise<{ self?: TailscalePeer; peers: T
 }
 
 export async function netInfo(port: number, bindHost?: string): Promise<NetInfo> {
-  const out: NetInfo = { port, bind: bindHost ?? process.env.TRUSS_HOST ?? "0.0.0.0", tailscale: { installed: false }, lan: [] };
+  /* the bind falls back to the same loopback default the server binds to
+     (issue #214) — reporting 0.0.0.0 here while listening on loopback is
+     what made the wizard offer dead addresses (#33) */
+  const out: NetInfo = {
+    port,
+    bind: bindHost?.trim() || process.env.TRUSS_HOST?.trim() || DEFAULT_BIND_HOST,
+    tailscale: { installed: false },
+    lan: [],
+  };
   const pub = (process.env.TRUSS_PUBLIC_URL ?? "").trim().replace(/\/+$/, "");
   if (pub) out.publicUrl = pub;
   for (const [name, addrs] of Object.entries(networkInterfaces())) {

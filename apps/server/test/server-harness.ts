@@ -28,6 +28,11 @@ export async function bootServer(tag: string): Promise<TestServer> {
   process.env.HOME = join(dir, "home");
   mkdirSync(process.env.HOME, { recursive: true });
   process.env.TRUSS_PORT = "0"; // ephemeral
+  /* declare the bind explicitly rather than inheriting the server's fallback
+     (issue #214): the harness fetches over 127.0.0.1, so it wants loopback,
+     and a test suite should state the interface it binds instead of
+     depending on whatever the production default happens to be today */
+  process.env.TRUSS_HOST = "127.0.0.1";
   process.env.TRUSS_TEST = "1";
   process.env.TRUSS_AGENT_TOKEN = "test-shared-token";
 

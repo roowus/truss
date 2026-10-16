@@ -26,7 +26,10 @@ local_resource(
 
 local_resource(
     'server',
-    serve_cmd='cd %s/apps/server && TRUSS_PORT=%d TRUSS_DATA_DIR=%s/apps/server/data-pr%s ./node_modules/.bin/tsx watch src/index.ts' % (wt, port_srv, wt, pr),
+    # TRUSS_HOST is explicit (issue #214): the PR router and the vite dev
+    # proxy both dial 127.0.0.1, so the preview does not need — or want — a
+    # wide bind, and it should not inherit whatever the server's default is.
+    serve_cmd='cd %s/apps/server && TRUSS_HOST=127.0.0.1 TRUSS_PORT=%d TRUSS_DATA_DIR=%s/apps/server/data-pr%s ./node_modules/.bin/tsx watch src/index.ts' % (wt, port_srv, wt, pr),
     # the node-agent bundle is built from the agent's sources at server
     # boot, but tsx watch only follows the server's own imports — agent
     # edits (e.g. issue #123's discovery + data-dir fix) would serve a
