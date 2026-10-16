@@ -225,17 +225,40 @@ test("the Store class body is not collapsed onto its declaration line", () => {
 });
 
 test("no em dashes in this feature's user-facing copy (TRUSS.md)", () => {
-  /* TRUSS.md: "No em dashes in user-facing copy." The health labels, hints
-     and popover strings render verbatim, so they are copy, not comments.
-     (Comments are exempt; only the strings the user reads are checked.) */
-  const src = readFileSync(new URL("../src/lib/health.ts", import.meta.url), "utf8");
-  for (const line of src.split("\n")) {
-    const trimmed = line.trim();
-    // skip comment lines — the rule is about copy the user reads
-    if (trimmed.startsWith("*") || trimmed.startsWith("/*") || trimmed.startsWith("//")) continue;
-    const strings = line.match(/"([^"]*)"|`([^`]*)`/g) ?? [];
-    for (const s of strings) {
-      assert.ok(!s.includes("—"), `em dash in user-facing copy: ${s} (TRUSS.md bans it)`);
+  /* TRUSS.md: "No em dashes in user-facing copy." Comments are exempt; the
+     strings the user reads are not.
+
+     Audit round 8, B1: the first cut scanned only lib/health.ts, yet the
+     em-dash fixes themselves landed in Chrome.tsx and health-snapshot.ts,
+     and the popover renders SERVER-authored `detail` strings verbatim — so a
+     server string with an em dash reaches the user without being inspected.
+
+     Scope: every file this feature contributes user-visible copy to, but
+     only for strings that plausibly belong to THIS feature. Chrome.tsx and
+     the server health module predate the PR and contain unrelated copy with
+     em dashes (e.g. the pre-existing "Event bus connected — ..." tooltip);
+     failing on those would be a drive-by change outside this issue's scope.
+     A dedicated list keeps the guard honest about what it pins. */
+  const FEATURE_STRINGS: { file: string; allow: RegExp }[] = [
+    { file: "../src/lib/health.ts", allow: /./ },
+    { file: "../../server/src/health-snapshot.ts", allow: /./ },
+    { file: "../../server/src/health.ts", allow: /./ },
+    { file: "../src/components/Chrome.tsx", allow: /Server health|No snapshot yet/ },
+  ];
+  for (const { file, allow } of FEATURE_STRINGS) {
+    const src = readFileSync(new URL(file, import.meta.url), "utf8");
+    for (const line of src.split("\n")) {
+      const trimmed = line.trim();
+      // skip comment lines — the rule is about copy the user reads
+      if (trimmed.startsWith("*") || trimmed.startsWith("/*") || trimmed.startsWith("//")) continue;
+      const segments = line.match(/"([^"]*)"|`([^`]*)`|>([^<>{]*)</g) ?? [];
+      for (const seg of segments) {
+        if (!allow.test(seg)) continue;
+        assert.ok(
+          !seg.includes("—"),
+          `${file}: em dash in user-facing copy: ${seg.trim()} (TRUSS.md bans it)`,
+        );
+      }
     }
   }
 });
