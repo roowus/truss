@@ -189,12 +189,21 @@ export function FilesPanel({ params }: IDockviewPanelProps<P>) {
   const treeRefCb = useCallback((el: HTMLDivElement | null) => {
     treeRef.current = el;
     if (!el) return;
-    /* only steal focus when nothing inside the panel already has it */
-    window.setTimeout(() => {
+    /* take focus only when nothing else holds it, so a dialog or an inline
+       edit is never robbed mid-typing. Two frames of retries because the
+       container mounts before dockview finishes attaching the panel, and
+       dockview focuses the panel after that. */
+    const grab = () => {
       if (!el.isConnected || el.contains(document.activeElement)) return;
-      if (document.activeElement && document.activeElement !== document.body) return;
+      const a = document.activeElement;
+      if (a && a !== document.body && a !== document.documentElement) return;
       el.focus({ preventScroll: true });
-    }, 0);
+    };
+    grab();
+    const r1 = requestAnimationFrame(() => { grab(); requestAnimationFrame(grab); });
+    const t1 = window.setTimeout(grab, 120);
+    const t2 = window.setTimeout(grab, 400);
+    return () => { cancelAnimationFrame(r1); window.clearTimeout(t1); window.clearTimeout(t2); };
   }, []);
 
   const onTreeKeyDown = (ev: React.KeyboardEvent) => {
