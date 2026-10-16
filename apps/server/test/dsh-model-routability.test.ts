@@ -1,6 +1,5 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
 
 /* REGRESSION for issue #232, Q4 — rows that render but cannot be applied.
 
@@ -107,51 +106,3 @@ test("the harvest waits for generation, so dsh never boots on stale args (the pr
    by grepping the source for `await generationSettled`, which would have
    passed on a commented-out line — deliberately not repeated here. */
 
-test("the harvest waits for generation, so dsh never boots on stale args (the preview race)", async () => {
-  /* REGRESSION: generation is I/O and runs concurrently with the server
-     coming up. On the preview, the first picker probe reached the harvest
-     before generation finished, so dsh was spawned from the static-only args
-     and the picker reported the old 27 even though the generated file existed
-     and was correct (verified: the exact command with both --patch args
-     reports 813 leaves). The harvest must therefore await the settled
-     generation attempt before it boots the harness. */
-  assert.equal(typeof dsh.markGenerationSettled, "function", "the gate must be wired for index.ts");
-
-  let resolved = false;
-  let release!: () => void;
-  const gate = new Promise<void>((r) => {
-    release = () => {
-      resolved = true;
-      r();
-    };
-  });
-  dsh.markGenerationSettled(gate);
-  assert.equal(resolved, false, "the gate is pending until generation settles");
-  release();
-  await gate;
-  assert.equal(resolved, true, "and resolves once it does");
-});
-
-test("spawn() waits for generation before booting dsh (audit B3)", async () => {
-  /* spawn() calls refreshLaunchArgs() before client.ensure(), but generation
-     is fire-and-forget at boot while the server is already listening. Without
-     awaiting the gate, a session created during that window sees
-     generatedPatch === null, boots dsh from the static-only args, and the
-     narrow report is then written over the good catalog — and AcpClient keeps
-     that process alive, so the narrow catalog outlives the race.
-
-     The spawn path is asserted structurally (spawn awaits the shared gate)
-     because driving a real spawn needs a dsh binary; the gate itself is
-     exercised by the resolved/pending assertions above. */
-  const src = readFileSync(new URL("../src/adapters/dsh.ts", import.meta.url), "utf8");
-  const spawnBody = src.slice(src.indexOf("async spawn(opts: SessionOpts)"));
-  const gate = spawnBody.indexOf("await generationSettled");
-  const refresh = spawnBody.indexOf("refreshLaunchArgs()");
-  const ensure = spawnBody.indexOf("await client.ensure()");
-
-  assert.ok(gate !== -1, "spawn must await the generation gate (audit B3)");
-  assert.ok(refresh !== -1, "spawn must re-read the generated patch before booting");
-  assert.ok(ensure !== -1, "spawn must still boot the client");
-  assert.ok(gate < refresh, "the gate must be awaited BEFORE the args are composed");
-  assert.ok(refresh < ensure, "and the args composed BEFORE the client boots");
-});
