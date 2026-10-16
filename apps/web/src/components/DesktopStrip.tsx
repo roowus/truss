@@ -278,7 +278,10 @@ function MenuItem({ icon, children, onClick, disabled, dangerous, highlighted, o
       className={cn(
         "w-full flex items-center gap-2 px-3 h-8 text-left text-[12px] disabled:opacity-35",
         !disabled && "hover:bg-white/[0.05]",
-        highlighted && !disabled && "bg-white/[0.07]",
+        /* a disabled row is still reachable by the arrows (so the menu can
+           explain itself), which means it must still SHOW the cursor —
+           otherwise the highlight silently vanishes on the last row */
+        highlighted && (disabled ? "bg-white/[0.04] ring-1 ring-inset ring-[var(--t-line2)]" : "bg-white/[0.07]"),
         dangerous ? "text-[var(--t-red)]" : "text-[var(--t-fg2)]",
       )}
     >

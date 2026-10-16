@@ -180,10 +180,19 @@ export function FilesPanel({ params }: IDockviewPanelProps<P>) {
   );
 
   /* the panel is a dockview tab, not a DOM child of anything focusable, so
-     we focus the tree container when this panel is shown — arrows then work
-     without a preliminary click */
+     the tree takes focus when this panel is shown — arrows then work
+     without a preliminary click. dockview finishes attaching (and focuses)
+     the panel AFTER our effects run, so the initial focus is re-asserted on
+     the next frame; without that the first arrow key went nowhere. */
   useEffect(() => {
-    treeRef.current?.focus({ preventScroll: true });
+    const grab = () => {
+      const el = treeRef.current;
+      if (el && !el.contains(document.activeElement)) el.focus({ preventScroll: true });
+    };
+    grab();
+    const raf = requestAnimationFrame(grab);
+    const t = window.setTimeout(grab, 60);
+    return () => { cancelAnimationFrame(raf); window.clearTimeout(t); };
   }, []);
 
   const onTreeKeyDown = (ev: React.KeyboardEvent) => {
