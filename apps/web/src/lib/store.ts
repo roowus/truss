@@ -51,6 +51,9 @@ export interface SessionView {
   ctx?: { used: number; total: number; by?: Record<string, number> };
   ctxHistory: { t: number; used: number; total: number }[];
   stateDetail?: string;
+  /* the live tunnel link is degraded for this session (issue #218): non-null
+     while the queue is dropping frames, cleared when it catches up */
+  lag?: { depth: number; bytes: number } | null;
 }
 
 export const emptyView = (): SessionView => ({
@@ -214,6 +217,21 @@ export function reduce(v: SessionView, ev: ProtoEvent, frameTime: number): Sessi
       };
     case "session.state":
       return { ...v, stateDetail: ev.detail };
+    /* the live tunnel link fell behind (issue #218). Nothing in the transcript
+       changes — the dropped frames replay from the event log — but the LAG is
+       visible state, so a session whose live stream is degraded says so
+       instead of silently appearing healthy. `wedged` means the link was
+       closed with 4407 and the session will resync on reconnect. */
+    case "session.lag":
+      return {
+        ...v,
+        lag: ev.lagging ? { depth: ev.depth ?? 0, bytes: ev.bytes ?? 0 } : null,
+        stateDetail: ev.wedged
+          ? "tunnel link wedged — the live stream was closed and resyncs from the event log"
+          : ev.lagging
+            ? `tunnel link lagging (${ev.depth ?? 0} frames buffered) — oldest frames dropped, they replay on reconnect`
+            : undefined,
+      };
     default:
       return v;
   }

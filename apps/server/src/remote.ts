@@ -19,7 +19,7 @@ import type { HarnessId, ProtoEvent } from "@truss/proto";
 interface AgentInfo {
   hostId: string;
   hostname: string;
-  socket: { send: (s: string) => void; close: () => void; readyState?: number };
+  socket: { send: (s: string) => void; close: (code?: number, reason?: string) => void; readyState?: number };
   adapters: { id: string; capabilities: HarnessAdapter["capabilities"] }[];
   /** version handshake (issue #100): the agent reports its protocol level
      and the hash of the bundle it runs — skew against the server's current
@@ -153,10 +153,18 @@ export const QUEUE_MAX_EVENTS = 8192;
  */
 export const WEDGE_AFTER_MS = 60_000;
 
-/** approximate wire size of one frame — the same JSON the socket carries */
+/**
+ * Wire size of one frame in BYTES, which is what the budget claims to measure
+ * (audit B6). `String.length` counts UTF-16 code units, so a non-ASCII frame
+ * (tool output, non-English replies — routinely 2-3 bytes per character in
+ * UTF-8) was charged up to ~3x less than it costs, making the 8 MB budget
+ * looser than documented exactly for the frames most likely to be large.
+ * Buffer.byteLength is the same encoding the socket writes.
+ */
 export function frameBytes(ev: unknown): number {
   try {
-    return JSON.stringify(ev)?.length ?? 0;
+    const json = JSON.stringify(ev);
+    return json === undefined ? 0 : Buffer.byteLength(json, "utf8");
   } catch {
     /* an unserializable payload can't reach the socket either; count it as
        unknown rather than letting the accounting throw in the frame router */
@@ -186,10 +194,15 @@ export interface OverflowOutcome {
  * episode (not per dropped frame, constraint 2), suppressed until the queue
  * drains back under budget.
  *
- * Dropping is SAFE because this queue is only the live path: every event is
- * persisted to the SQLite event log before it reaches here, and a consumer
- * that reconnects replays from that log — the log is the recovery path, the
- * queue is not. Losing queue frames costs latency, never data.
+ * Dropping is SAFE **only because the frame is persisted before it is
+ * enqueued**: `agentFrame`'s event case calls `persistFrame` (wired in
+ * index.ts to `persistInboundEvent`) BEFORE `push`, so an evicted frame is
+ * already in the SQLite event log and a reconnecting consumer replays it —
+ * the log is the recovery path, this queue is not. (Audit B1: the ordering
+ * was originally the other way round, because the goLive pump persists what
+ * it DRAINS — so a dropped frame was never logged and was lost for good. The
+ * queue itself cannot enforce this; the router owns it, and the integration
+ * test drives the real router → queue → pump → store path.)
  *
  * The wedge window uses an INJECTABLE clock (`now`): a test that sleeps 60 s
  * is a test that gets deleted (constraint 1).
@@ -371,6 +384,37 @@ export function wireQueueHealth(h: QueueHealth | null) {
   queueHealth = h;
 }
 
+/**
+ * Write one tunnelled frame to the durable event log (issue #218, audit B1).
+ * Injected by index.ts and pointed at the session sink's persistence, because
+ * remote.ts must not import the store directly (module cycle). It MUST be set
+ * for the drop-oldest policy to be safe: a frame is persisted here on receipt,
+ * BEFORE the live queue can evict it.
+ */
+let persistFrame: ((sessionId: string, ev: ProtoEvent) => void) | null = null;
+
+/** sessions we have already warned about for post-teardown frames (one log line
+    each). Bounded: this is a log-dedup convenience, and an unbounded Set would
+    reintroduce exactly the "grows forever under a misbehaving producer" shape
+    issue #218 exists to remove. Oldest entries fall out first. */
+const warnedNoQueue = new Set<string>();
+const WARNED_NO_QUEUE_MAX = 1000;
+function warnNoQueueOnce(sessionId: string) {
+  if (warnedNoQueue.has(sessionId)) return;
+  if (warnedNoQueue.size >= WARNED_NO_QUEUE_MAX) {
+    const oldest = warnedNoQueue.values().next().value;
+    if (oldest !== undefined) warnedNoQueue.delete(oldest);
+  }
+  warnedNoQueue.add(sessionId);
+  console.warn(
+    `[remote] dropping tunnel frames for ${sessionId}: no live queue (never spawned, disposed, or wedged-closed)`,
+  );
+}
+
+export function wireFramePersistence(fn: ((sessionId: string, ev: ProtoEvent) => void) | null) {
+  persistFrame = fn;
+}
+
 /** the queue class is generic and session-agnostic; the id is attached here */
 const queueOwner = new WeakMap<object, string>();
 
@@ -382,9 +426,24 @@ function notifyQueueHealth(q: BoundedEventQueue<any>, outcome: OverflowOutcome) 
   if (outcome.wedged) queueHealth?.onWedged(sessionId);
 }
 
+/**
+ * Test-only override of the wedge window for queues created from here on.
+ * The window is 60 s in production; a suite cannot sleep that long, and the
+ * only honest way to exercise the REAL onWedged → close(4407) wiring (rather
+ * than hand-calling the teardown) is to shorten it. `null` restores default.
+ */
+let queueWedgeWindowOverride: number | null = null;
+
+export function setQueueWedgeWindowForTest(ms: number | null) {
+  queueWedgeWindowOverride = ms;
+}
+
 /** create a bounded queue already bound to a session's health reporting */
 function sessionQueue(sessionId: string): BoundedEventQueue<ProtoEvent> {
-  const q = new BoundedEventQueue<ProtoEvent>();
+  const q =
+    queueWedgeWindowOverride === null
+      ? new BoundedEventQueue<ProtoEvent>()
+      : new BoundedEventQueue<ProtoEvent>(QUEUE_MAX_BYTES, QUEUE_MAX_EVENTS, queueWedgeWindowOverride);
   queueOwner.set(q, sessionId);
   return q;
 }
@@ -707,7 +766,29 @@ export function agentFrame(hostId: string, msg: Record<string, unknown>) {
     case "event": {
       const { sessionId, ev } = msg as { sessionId: string; ev: ProtoEvent };
       const q = eventQueues.get(sessionId);
-      if (!q) return;
+      if (!q) {
+        /* No queue means this session is not live here: never spawned, already
+           disposed, or torn down by the wedge close. The frame is DROPPED, and
+           audit B2's point stands — that must not be a silent swallow. It is
+           not persisted either: writing frames for a session this server no
+           longer tracks would resurrect transcript entries for a session the
+           agent was told to dispose. Logged once per session so a chatty
+           post-teardown agent cannot flood the log. */
+        warnNoQueueOnce(sessionId);
+        return;
+      }
+      /* PERSIST FIRST, THEN ENQUEUE (issue #218, audit B1). The whole
+         drop-oldest policy rests on "the event log is the recovery path", and
+         that is only true if the frame is in the log BEFORE the queue can
+         evict it. It was not: persistence happens in the goLive pump
+         (sessions.ts sink()), which DRAINS this queue — so a frame dropped by
+         `push` was never persisted and was lost for good.
+         `persistFrame` is the caller-supplied write into the durable log
+         (wired in index.ts to the same store sink the pump uses). It is
+         idempotent-by-contract: the pump's later sink() re-persisting the
+         frame is handled by the caller, so a drained frame is not written
+         twice. */
+      persistFrame?.(sessionId, ev);
       /* the overflow policy runs here (issue #218): the queue drops the
          oldest frames if the consumer is behind, and reports whether that
          started/ended an episode or wedged the link — the health sink emits
@@ -788,26 +869,67 @@ export function queueStats(): {
 
 /**
  * The wedge kill (issue #218): a session's consumer has been behind for the
- * sustained window, so stop buffering forever. The link is closed with the
- * dedicated code; the queue is left to the reconnect/reconcile path — the
- * agent keeps the harness alive (protocol 2) and its next hello reattaches,
- * and the client resyncs the transcript from the SQLite event log rather
- * than from anything the queue held.
+ * sustained window, so stop buffering forever and CLOSE THE LINK with the
+ * dedicated code (audit B2 — an earlier revision only deleted the map entry
+ * and logged that it had closed, which was false, and left the agent
+ * streaming into a router that silently discarded every later frame).
+ *
+ * The tunnel is HOST-WIDE, so the close is scoped honestly:
+ *   - the wedged session is disposed on the agent (`dispose` frame) so it
+ *     stops producing for a link nobody is draining;
+ *   - if that host has NO other live session, the whole tunnel is closed with
+ *     LINK_WEDGED — the link itself is the thing that was wedged;
+ *   - if the host has other live sessions, closing the socket would kill
+ *     THEIR links too, which is exactly the "one wedged host must degrade
+ *     that session only" rule. Those siblings keep their tunnel; the wedged
+ *     session is gone and the agent is told to dispose just it.
+ *
+ * Either way the session is not "lost" in the data sense: the frames are in
+ * the SQLite event log (persisted on receipt — see `wireFramePersistence`),
+ * so the transcript replays; the harness is disposed because a producer whose
+ * consumer is gone is the thing that was wedged.
  */
 export function dropWedgedQueue(sessionId: string) {
   const q = eventQueues.get(sessionId);
   if (!q) return;
+  const hostId = queueHost.get(sessionId);
   eventQueues.delete(sessionId);
   queueHost.delete(sessionId);
   q.close();
-  console.warn(
-    `[remote] session ${sessionId} tunnel link wedged (over budget for ${WEDGE_AFTER_MS / 1000}s) — closed with ${LINK_WEDGED}`,
-  );
-  /* Deliberately NO onRecovered here: the wedge is not a recovery, and the
-     caller's own `session.lag {wedged: true}` frame is the one the UI needs.
-     The session itself is not lost — the harness survives on the agent and
-     the transcript replays from the event log, exactly as the drop policy
-     assumes. */
+
+  const siblings = hostId
+    ? [...queueHost.values()].filter((h) => h === hostId).length
+    : 0;
+  const agent = hostId ? agents.get(hostId) : undefined;
+
+  if (agent) {
+    /* stop the producer for this session first — otherwise it keeps sending
+       frames for a queue that no longer exists */
+    try {
+      agent.socket.send(JSON.stringify({ type: "dispose", sessionId }));
+    } catch {
+      /* socket already dying — the close below is the real signal */
+    }
+    if (siblings === 0) {
+      /* no other session needs this tunnel: it is the wedged link, close it
+         with the dedicated code. The blip-tolerant reconnect path (#100)
+         brings the agent back and its next hello reconciles. */
+      try {
+        agent.socket.close(LINK_WEDGED, "session queue wedged: consumer not draining");
+      } catch {
+        /* already closing */
+      }
+      console.warn(
+        `[remote] session ${sessionId} queue wedged (over budget for ${WEDGE_AFTER_MS / 1000}s) — closed tunnel to ${hostId} with ${LINK_WEDGED}`,
+      );
+      return;
+    }
+    console.warn(
+      `[remote] session ${sessionId} queue wedged (over budget for ${WEDGE_AFTER_MS / 1000}s) — disposed on ${hostId}, tunnel kept for ${siblings} sibling session(s)`,
+    );
+    return;
+  }
+  console.warn(`[remote] session ${sessionId} queue wedged — queue torn down (agent already offline)`);
 }
 
 export function listAgents() {

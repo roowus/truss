@@ -76,13 +76,14 @@ import {
   requestMetrics,
   wireRemoteRegistry,
   wireQueueHealth,
+  wireFramePersistence,
   queueStats,
   dropWedgedQueue,
 } from "./remote.js";
 import { BroadcastGuard, type GuardedClient } from "./broadcastGuard.js";
 import { collectMetrics } from "@truss/proto";
 import { createMetricsHistory, histPointOf } from "./metricsHistory.js";
-import { registerAdapter, unregisterAdapter } from "./sessions.js";
+import { registerAdapter, unregisterAdapter, persistInboundEvent } from "./sessions.js";
 
 /* Node crashes the process on an unhandled rejection by default — one
    adapter hiccup would take every session down with it (issue #97). The
@@ -253,6 +254,13 @@ wireRemoteRegistry({
      recovery path, the queue is only the live path);
    - onWedged stops the buffering for good: the sustained window passed, so
      the link is closed with LINK_WEDGED instead of growing forever. */
+/* The queue applies drop-oldest, so a frame must be in the durable log
+   BEFORE it can be evicted (issue #218, audit B1). This is that write: the
+   router persists on receipt and the pump only broadcasts what it finds
+   already marked. Without this wiring the "log is the recovery path"
+   guarantee is false and a dropped frame is lost for good. */
+wireFramePersistence((_sessionId, ev) => persistInboundEvent(ev));
+
 wireQueueHealth({
   onLag: (sessionId, info) => {
     app.log.warn(`session ${sessionId} tunnel queue lagging: ${info.depth} frames / ${info.bytes} B — dropping oldest`);

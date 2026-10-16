@@ -543,3 +543,27 @@ test("pair.changed refetches hosts; only a fresh ask toasts (the Allow click mus
     delete (s as Record<string, unknown>).refreshHosts;
   }
 });
+
+/* issue #218 — the tunnel lag event is visible state, not a silently ignored
+   frame (audit B5: the proto type existed but the reducer's default branch
+   swallowed it, so a degraded live stream looked healthy). */
+test("session.lag sets and clears the view's lag state", () => {
+  let v = emptyView();
+
+  v = reduce(v, { type: "session.lag", sessionId: "s1", lagging: true, depth: 42, bytes: 1234 } as ProtoEvent, T0);
+  assert.deepEqual(v.lag, { depth: 42, bytes: 1234 }, "lagging view records depth + bytes");
+  assert.match(String(v.stateDetail), /lagging/i, "and says so in the session detail");
+
+  /* recovery clears it — a healthy link must not keep showing a stale lag */
+  v = reduce(v, { type: "session.lag", sessionId: "s1", lagging: false } as ProtoEvent, T0);
+  assert.equal(v.lag, null, "cleared on recovery");
+  assert.equal(v.stateDetail, undefined, "and the detail goes away");
+});
+
+test("a wedged session.lag reports the close, not a plain recovery", () => {
+  let v = emptyView();
+  v = reduce(v, { type: "session.lag", sessionId: "s1", lagging: true, depth: 5, bytes: 10 } as ProtoEvent, T0);
+  v = reduce(v, { type: "session.lag", sessionId: "s1", lagging: false, wedged: true } as ProtoEvent, T0);
+  assert.equal(v.lag, null, "no longer lagging — the link is gone");
+  assert.match(String(v.stateDetail), /wedged/i, "the detail names the wedge, not a silent recovery");
+});

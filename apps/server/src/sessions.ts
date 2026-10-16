@@ -56,6 +56,70 @@ export function onEvent(fn: EventListener) {
   return () => listeners.delete(fn);
 }
 
+/* ── remote frames persisted upstream (issue #218, audit B1) ──────────────
+   The tunnel router writes a frame to the log on RECEIPT, because the live
+   queue below it applies drop-oldest and an unpersisted frame could be
+   evicted before this pump ever drained it. Such a frame must NOT be written
+   a second time when the pump reaches it — `markPersistedByRouter` at the
+   router, `takePersistedByRouter` here. A WeakSet keyed by the event object
+   is exact (the same object identity travels router → queue → pump) and
+   self-cleaning: nothing else holds a reference once drained. */
+const persistedByRouter = new WeakSet<object>();
+
+/** the tunnel router persisted this frame already — do not write it twice */
+export function markPersistedByRouter(ev: ProtoEvent) {
+  persistedByRouter.add(ev);
+}
+
+/** test-facing read of the same predicate the pump uses (no consume side effect) */
+export function persistedByRouterForTest(ev: ProtoEvent): boolean {
+  return persistedByRouter.has(ev);
+}
+
+/** true (once) when this frame was already persisted by the tunnel router */
+function takePersistedByRouter(ev: ProtoEvent): boolean {
+  if (!persistedByRouter.has(ev)) return false;
+  persistedByRouter.delete(ev);
+  return true;
+}
+
+/** fan out an already-persisted event (no second log write) */
+function broadcastOnly(ev: ProtoEvent) {
+  if ((ev as { at?: unknown }).at === undefined) (ev as { at?: unknown }).at = Date.now();
+  if (ev.type === "session.state") store.setSessionState(ev.sessionId, ev.state);
+  broadcastFn({ seq: 0, ev });
+  for (const fn of listeners) {
+    try {
+      fn(ev);
+    } catch (err) {
+      console.error("event listener failed", err);
+    }
+  }
+}
+
+/**
+ * Persist a tunnelled frame on receipt, before the live queue can drop it
+ * (issue #218, audit B1). The router calls this for every inbound tunnel
+ * frame; the pump later finds it marked and only broadcasts. Persistence is
+ * the durable step — the frame is in the log from this moment, so the queue's
+ * drop-oldest policy can only ever cost latency, never transcript data.
+ */
+export function persistInboundEvent(ev: ProtoEvent) {
+  if ((ev as { at?: unknown }).at === undefined) (ev as { at?: unknown }).at = Date.now();
+  try {
+    store.appendEvent(ev);
+  } catch (err) {
+    /* A frame that cannot be logged must NOT enter the queue: dropping it
+       later would be silent data loss with no recovery path, which is the
+       exact failure this ordering exists to prevent. Log loudly and drop it
+       now, where it is visible and attributable. */
+    console.error(`persist failed for inbound frame ${ev.type} (${ev.sessionId}) — frame NOT queued`, err);
+    return;
+  }
+  markPersistedByRouter(ev);
+  if (ev.type === "session.state") store.setSessionState(ev.sessionId, ev.state);
+}
+
 /** Persist + fan out one event. The single sink every adapter event flows through. */
 function sink(ev: ProtoEvent) {
   /* Stamp the wall-clock time on events that don't carry one (msg.chunk,
@@ -266,7 +330,15 @@ function goLive(id: string, adapter: HarnessAdapter, handle: AdapterHandle) {
           if (ref && store.getSession(id)?.harness_ref !== ref) {
             store.setHarnessRef(id, ref);
           }
-          sink(ev);
+          /* A tunnelled frame was ALREADY persisted on receipt, before the
+             live queue could drop it (issue #218, audit B1) — re-persisting
+             here would double every remote transcript entry. The router marks
+             what it wrote; local adapters are unmarked and persist as before. */
+          if (takePersistedByRouter(ev)) {
+            broadcastOnly(ev);
+          } else {
+            sink(ev);
+          }
         } catch (err) {
           /* one bad event (a sqlite hiccup mid-persist, a broadcast throw)
              must not kill the pump — and before this guard it was an

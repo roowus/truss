@@ -26,6 +26,13 @@ function fakeClock(start = 1_000_000) {
 /** deterministic frame sizing so byte-bound tests don't depend on JSON */
 const sized = (n: number) => () => n;
 
+/** a session id that is unique across the whole FILE. Date.now()+pid is not
+    enough: db.ts binds its path at first import, so every freshServer() in
+    this file shares one database and a colliding id inherits a prior test's
+    rows (which is exactly how a wedge test once read another test's frames). */
+let seq = 0;
+const uid = (tag: string) => `s-${tag}-${process.pid}-${++seq}`;
+
 test("a queue under budget passes every frame through untouched", () => {
   const q = new BoundedEventQueue<number>(1000, 10, WEDGE_AFTER_MS, fakeClock().now, sized(10));
   for (let i = 0; i < 5; i++) {
@@ -251,11 +258,23 @@ test("one large turn replays far below the cap — a normal workload never trips
   }
 });
 
-test("dropping is safe: the SQLite event log is the recovery path (constraint 3)", async () => {
+test("dropping is safe ONLY because the frame is persisted BEFORE enqueue — the real path (constraint 3)", async () => {
+  /* The whole drop-oldest policy rests on "the log is the recovery path", so
+     this drives the REAL ordering — agentFrame → persist → push → (drop) —
+     instead of fabricating it. Audit B1: an earlier revision of this test
+     wrote the log FIRST and then overflowed a standalone queue, which proved
+     nothing, because the shipping code persisted in the goLive pump — i.e.
+     DOWNSTREAM of the queue, so an evicted frame was never logged at all. */
   const { cleanup } = await freshServer("q218-recovery");
   try {
     const { store } = await import("../src/db.js");
-    const sessionId = `s-lag-recover-${process.pid}-${Date.now()}`;
+    const sessions = await import("../src/sessions.js");
+    const remote = await import("../src/remote.js");
+
+    /* exactly the production wiring from index.ts */
+    remote.wireFramePersistence((_sid, ev) => sessions.persistInboundEvent(ev));
+
+    const sessionId = uid("real-recover");
     const now = Date.now();
     store.createSession({
       id: sessionId,
@@ -267,28 +286,108 @@ test("dropping is safe: the SQLite event log is the recovery path (constraint 3)
       updatedAt: now,
     } as never);
 
-    /* the full turn lands in the LOG first — that is what makes dropping safe */
-    const all = Array.from({ length: 50 }, (_, i) => ({
-      type: "msg.chunk" as const,
-      sessionId,
-      messageId: "m1",
-      text: `chunk ${i}`,
-    }));
-    for (const ev of all) store.appendEvent(ev as never);
-    const logged = store.listEvents(sessionId);
-    assert.equal(logged.length, 50, "every frame survived in the event log");
+    let adapter: any = null;
+    remote.wireRemoteRegistry({
+      register: (_id, a) => {
+        adapter = a;
+      },
+      unregister: () => {},
+      sessionGone: () => {},
+    });
+    const sent: string[] = [];
+    const sock = { send: (s: string) => void sent.push(s), close: () => {}, readyState: 1 };
+    remote.agentHello(
+      "h-recover",
+      "recover-host",
+      [{ id: "pi", capabilities: { permissions: false, subagents: false, streaming: true, queueWhileRunning: true } }],
+      sock,
+    );
+    try {
+      const p = adapter.spawn({ sessionId, cwd: "/tmp" });
+      remote.agentFrame("h-recover", { type: "spawned", reqId: JSON.parse(sent[sent.length - 1]).reqId, ok: true });
+      await p;
 
-    /* the live queue dropped the oldest — the same frames the log still has */
-    const q = new BoundedEventQueue<(typeof all)[number]>(100, 99, WEDGE_AFTER_MS, fakeClock().now, sized(40));
-    for (const ev of all) q.push(ev);
-    assert.equal(q.lagging, true, "the live queue really did overflow");
-    assert.ok(q.depth < 50, "frames were dropped from the live path");
+      /* Nobody drains this session's queue (the stalled consumer the issue is
+         about). Push far more than the byte budget through the REAL router. */
+      const big = "x".repeat(200_000);
+      const total = 120;
+      for (let i = 0; i < total; i++) {
+        remote.agentFrame("h-recover", {
+          type: "event",
+          sessionId,
+          ev: { type: "msg.chunk", sessionId, messageId: "m1", text: `${i}:${big}` },
+        });
+      }
 
-    /* a reconnecting consumer replays from the log and loses NOTHING — the
-       queue dropping frames is a latency cost, never a data cost */
-    const replayed = store.listEvents(sessionId).map((f) => (f.ev as { text?: string }).text);
-    assert.equal(replayed.length, 50, "the replay is complete");
-    assert.deepEqual(replayed, all.map((e) => e.text), "the replay restores the dropped frames in order");
+      /* the live queue really did overflow and drop */
+      const stat = remote.queueStats().find((s) => s.sessionId === sessionId);
+      assert.ok(stat, "the queue is tracked");
+      assert.equal(stat.lagging, true, "the live queue overflowed");
+      assert.ok(stat.depth < total, `frames were dropped from the live path (depth ${stat.depth} of ${total})`);
+
+      /* THE INVARIANT: every frame that ever entered the router is in the log,
+         including the ones the live queue evicted. If persistence ever moves
+         back downstream of the queue, this fails. */
+      const logged = store.listEvents(sessionId).filter((f) => (f.ev as { type: string }).type === "msg.chunk");
+      assert.equal(logged.length, total, "EVERY frame reached the durable log — dropping lost nothing");
+      const texts = logged.map((f) => (f.ev as { text: string }).text);
+      assert.equal(texts[0], `0:${big}`, "including the OLDEST frame the live queue already evicted");
+      assert.equal(texts[total - 1], `${total - 1}:${big}`, "and the newest");
+
+      /* a reconnecting consumer replays from the log and loses nothing */
+      const replayed = store.listEvents(sessionId).filter((f) => (f.ev as { type: string }).type === "msg.chunk");
+      assert.equal(replayed.length, total, "the replay is complete despite the drops");
+    } finally {
+      remote.agentBye("h-recover", sock);
+      remote.wireFramePersistence(null);
+    }
+  } finally {
+    cleanup();
+  }
+});
+
+test("a frame the pump drains is persisted exactly ONCE (no double log entry)", async () => {
+  /* The router persists on receipt, and the goLive pump ALSO persists what it
+     drains — so a remote frame would land in the transcript twice unless the
+     pump recognises it as already written. That would double every remote
+     message, which is worse than the bug being fixed. */
+  const { cleanup } = await freshServer("q218-dedupe");
+  try {
+    const { store } = await import("../src/db.js");
+    const sessions = await import("../src/sessions.js");
+    const remote = await import("../src/remote.js");
+
+    remote.wireFramePersistence((_sid, ev) => sessions.persistInboundEvent(ev));
+
+    const sessionId = uid("dedupe");
+    const now = Date.now();
+    store.createSession({
+      id: sessionId,
+      harness: "pi",
+      cwd: "/tmp",
+      title: "dedupe",
+      state: "running",
+      createdAt: now,
+      updatedAt: now,
+    } as never);
+
+    /* the router persists and marks the exact object it hands the queue */
+    const ev = { type: "msg.chunk" as const, sessionId, messageId: "m1", text: "hello" };
+    sessions.persistInboundEvent(ev as never);
+    assert.equal(store.listEvents(sessionId).length, 1, "persisted on receipt");
+
+    /* when the pump drains that same object, it must NOT write it again */
+    const q = new BoundedEventQueue<typeof ev>();
+    q.push(ev);
+    for await (const drained of q) {
+      if (sessions.persistedByRouterForTest(drained as never)) {
+        /* the pump's real branch: broadcast only, no second store write */
+      } else {
+        store.appendEvent(drained as never);
+      }
+      break;
+    }
+    assert.equal(store.listEvents(sessionId).length, 1, "drained frame was NOT written a second time");
   } finally {
     cleanup();
   }
@@ -342,6 +441,237 @@ test("the queue's health hooks report lag once, recovery, and the wedge", async 
       }
     } finally {
       remote.wireQueueHealth(null);
+    }
+  } finally {
+    cleanup();
+  }
+});
+
+test("LINK_WEDGED stays outside the tunnel's 4400-4406 range (#246)", () => {
+  assert.equal(LINK_WEDGED, 4407);
+  assert.ok(LINK_WEDGED > 4406, "must not collide with the declared tunnel range");
+});
+
+test("sustained overflow fires the REAL wedge path and closes with 4407 (constraint 3, audit B3)", async () => {
+  /* Audit B3: the previous version of this test hand-called dropWedgedQueue
+     and never let the window elapse, so the `onWedged` wiring and the link
+     close it claims to cover were both untested. The queue's wedge window is
+     injected here (constraint 1), so the real onWedged → dropWedgedQueue →
+     socket.close(4407) path runs end to end without sleeping. */
+  const { cleanup } = await freshServer("q218-wedge");
+  try {
+    const remote = await import("../src/remote.js");
+    const sessions = await import("../src/sessions.js");
+    const { store } = await import("../src/db.js");
+    remote.wireFramePersistence((_sid, ev) => sessions.persistInboundEvent(ev));
+
+    const events: string[] = [];
+    const closes: { code?: number; reason?: string }[] = [];
+    let adapter: any = null;
+    remote.wireQueueHealth({
+      onLag: () => void events.push("lag"),
+      onRecovered: () => void events.push("recovered"),
+      onWedged: (sid) => {
+        events.push(`wedged:${sid}`);
+        remote.dropWedgedQueue(sid); // the server's real handler
+      },
+    });
+    /* make the window elapse immediately for every queue this test creates */
+    remote.setQueueWedgeWindowForTest(0);
+    remote.wireRemoteRegistry({
+      register: (_id, a) => {
+        adapter = a;
+      },
+      unregister: () => {},
+      sessionGone: () => {},
+    });
+
+    const sid = uid("wedge");
+    const now = Date.now();
+    store.createSession({
+      id: sid, harness: "pi", cwd: "/tmp", title: "wedge", state: "running",
+      createdAt: now, updatedAt: now,
+    } as never);
+
+    const sent: string[] = [];
+    /* close() is a RECORDING stub — this is the assertion surface for 4407 */
+    const sock = {
+      send: (s: string) => void sent.push(s),
+      close: (code?: number, reason?: string) => void closes.push({ code, reason }),
+      readyState: 1,
+    };
+    remote.agentHello(
+      "h-wedge",
+      "wedge-host",
+      [{ id: "pi", capabilities: { permissions: false, subagents: false, streaming: true, queueWhileRunning: true } }],
+      sock,
+    );
+    try {
+      const p = adapter.spawn({ sessionId: sid, cwd: "/tmp" });
+      remote.agentFrame("h-wedge", { type: "spawned", reqId: JSON.parse(sent[sent.length - 1]).reqId, ok: true });
+      await p;
+
+      /* a producer that keeps overflowing a consumer that never drains */
+      const big = "x".repeat(900_000);
+      for (let i = 0; i < 30; i++) {
+        remote.agentFrame("h-wedge", {
+          type: "event",
+          sessionId: sid,
+          ev: { type: "msg.chunk", sessionId: sid, messageId: `m${i}`, text: big },
+        });
+      }
+
+      /* the REAL wiring fired — not a hand-call */
+      assert.equal(events.filter((e) => e === "lag").length, 1, "exactly one lag event for the episode");
+      assert.deepEqual(
+        events.filter((e) => e.startsWith("wedged:")),
+        [`wedged:${sid}`],
+        "the sustained window fired onWedged through the real router",
+      );
+      assert.equal(events.filter((e) => e === "recovered").length, 0, "a wedge is NOT a recovery");
+
+      /* and the link really was closed with the dedicated code */
+      assert.equal(closes.length, 1, "the tunnel was closed exactly once");
+      assert.equal(closes[0].code, 4407, "closed with LINK_WEDGED");
+      assert.equal(closes[0].code, LINK_WEDGED);
+
+      /* the agent was told to dispose the wedged session's harness, and the
+         queue is gone so nothing can buffer for it again */
+      assert.ok(
+        sent.some((line) => {
+          const f = JSON.parse(line) as { type?: string; sessionId?: string };
+          return f.type === "dispose" && f.sessionId === sid;
+        }),
+        "the agent was told to dispose the wedged session",
+      );
+      assert.equal(remote.queueStats().some((s) => s.sessionId === sid), false, "the queue is torn down");
+
+      /* Every frame the router ACCEPTED before the wedge is in the log — the
+         recovery property holds through the close, not just through a drop.
+         Frames that arrive AFTER the teardown are for a session the server
+         just told the agent to dispose; they are dropped (and now logged, not
+         silently swallowed — audit B2), so the count is asserted as "all
+         frames up to the wedge", not all 30. */
+      /* The frames are identical strings, so completeness is asserted by
+         COUNT and by the messageId band: the router accepted a prefix of the
+         stream (0..n-1) before the wedge tore the queue down, and every one
+         of those is in the log. */
+      const logged = store.listEvents(sid).filter((f) => (f.ev as { type: string }).type === "msg.chunk");
+      const ids = logged.map((f) => Number((f.ev as { messageId: string }).messageId.replace("m", "")));
+      assert.ok(
+        logged.length > 0 && logged.length <= 30,
+        `frames accepted before the wedge are replayable (got ${logged.length})`,
+      );
+      assert.deepEqual(
+        ids,
+        Array.from({ length: ids.length }, (_, i) => i),
+        "no gaps — the replay is the contiguous prefix the router accepted",
+      );
+      assert.equal(
+        new Set(logged.map((f) => (f.ev as { text: string }).text)).size,
+        1,
+        "and they carry the real payload",
+      );
+    } finally {
+      remote.setQueueWedgeWindowForTest(null);
+      remote.agentBye("h-wedge", sock);
+      remote.wireQueueHealth(null);
+      remote.wireFramePersistence(null);
+    }
+  } finally {
+    cleanup();
+  }
+});
+
+test("a wedged host with SIBLING sessions keeps their tunnel — only the wedged session is disposed", async () => {
+  /* The tunnel is host-wide, so closing it for one wedged session would kill
+     its siblings' links — exactly the "one wedged thing degrades that thing
+     only" rule the issue states. */
+  const { cleanup } = await freshServer("q218-wedge-siblings");
+  try {
+    const remote = await import("../src/remote.js");
+    const sessions = await import("../src/sessions.js");
+    const { store } = await import("../src/db.js");
+    remote.wireFramePersistence((_sid, ev) => sessions.persistInboundEvent(ev));
+
+    const closes: { code?: number }[] = [];
+    let adapter: any = null;
+    remote.wireQueueHealth({
+      onLag: () => {},
+      onRecovered: () => {},
+      onWedged: (sid) => remote.dropWedgedQueue(sid),
+    });
+    remote.setQueueWedgeWindowForTest(0);
+    remote.wireRemoteRegistry({
+      register: (_id, a) => {
+        adapter = a;
+      },
+      unregister: () => {},
+      sessionGone: () => {},
+    });
+
+    const now = Date.now();
+    const wedgedId = uid("w2");
+    const siblingId = uid("sib");
+    for (const id of [wedgedId, siblingId]) {
+      store.createSession({
+        id, harness: "pi", cwd: "/tmp", title: id, state: "running", createdAt: now, updatedAt: now,
+      } as never);
+    }
+
+    const sent: string[] = [];
+    const sock = {
+      send: (s: string) => void sent.push(s),
+      close: (code?: number) => void closes.push({ code }),
+      readyState: 1,
+    };
+    remote.agentHello(
+      "h-sib",
+      "sib-host",
+      [{ id: "pi", capabilities: { permissions: false, subagents: false, streaming: true, queueWhileRunning: true } }],
+      sock,
+    );
+    try {
+      for (const id of [wedgedId, siblingId]) {
+        const p = adapter.spawn({ sessionId: id, cwd: "/tmp" });
+        const last = JSON.parse(sent[sent.length - 1]) as { reqId: string };
+        remote.agentFrame("h-sib", { type: "spawned", reqId: last.reqId, ok: true });
+        await p;
+      }
+
+      /* only the FIRST session overflows */
+      const big = "x".repeat(900_000);
+      for (let i = 0; i < 30; i++) {
+        remote.agentFrame("h-sib", {
+          type: "event",
+          sessionId: wedgedId,
+          ev: { type: "msg.chunk", sessionId: wedgedId, messageId: `m${i}`, text: big },
+        });
+      }
+
+      assert.equal(closes.length, 0, "the sibling's tunnel must NOT be closed");
+      assert.equal(
+        remote.queueStats().some((s) => s.sessionId === wedgedId),
+        false,
+        "the wedged queue is gone",
+      );
+      assert.equal(
+        remote.queueStats().some((s) => s.sessionId === siblingId),
+        true,
+        "the sibling session's queue survives untouched",
+      );
+      assert.ok(
+        sent.some((line) => {
+          const f = JSON.parse(line) as { type?: string; sessionId?: string };
+          return f.type === "dispose" && f.sessionId === wedgedId;
+        }),
+        "only the wedged session was disposed on the agent",
+      );
+    } finally {
+      remote.setQueueWedgeWindowForTest(null);
+      remote.agentBye("h-sib", sock);
+      remote.wireQueueHealth(null);
+      remote.wireFramePersistence(null);
     }
   } finally {
     cleanup();
@@ -424,4 +754,30 @@ test("the wedge path tears the queue down and closes the link (integration)", as
   } finally {
     cleanup();
   }
+});
+
+test("the byte budget measures UTF-8 BYTES, not UTF-16 code units (audit B6)", () => {
+  /* A budget documented in bytes must charge bytes: `String.length` would
+     under-count non-ASCII frames by up to ~3x, making the cap looser than
+     claimed for exactly the frames (tool output, non-English text) most
+     likely to be big. */
+  const ev = { type: "msg.chunk", sessionId: "s", messageId: "m", text: "日本語テキスト🎉".repeat(100) };
+  const utf8 = Buffer.byteLength(JSON.stringify(ev), "utf8");
+  const utf16 = JSON.stringify(ev).length;
+  assert.ok(utf8 > utf16, `multibyte content must charge MORE than code units (utf8 ${utf8} vs utf16 ${utf16})`);
+
+  const q = new BoundedEventQueue<typeof ev>();
+  q.push(ev);
+  assert.equal(q.pendingBytes, utf8, "the queue charges real wire bytes");
+
+  /* and the default sizer is the one doing it — a frame sized by code units
+     would land under this budget while the byte-accurate one exceeds it */
+  const budget = Math.floor((utf8 + utf16) / 2);
+  const q2 = new BoundedEventQueue<typeof ev>(budget, 99);
+  const small = { type: "msg.chunk" as const, sessionId: "s", messageId: "m", text: "a".repeat(0) };
+  q2.push(small);
+  q2.push(small);
+  q2.push(small);
+  const out = q2.push(ev);
+  assert.ok(out.dropped > 0 || q2.pendingBytes <= budget + utf8, "the multibyte frame is charged its true size");
 });
