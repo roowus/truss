@@ -92,3 +92,16 @@ test("regression: opening a menu moves focus into it, not onto the trigger", () 
     );
   }
 });
+
+test("regression: the focus/reset ref runs on MOUNT, never on every render", () => {
+  /* A callback ref re-runs on every render. While the reset lived in one,
+     moving the highlight re-rendered, which re-ran the ref and wiped the
+     index — so End landed on -1 and the arrows appeared dead. The ref must
+     be a stable useCallback so React only calls it on mount/unmount. */
+  for (const [name, src] of [["DesktopStrip", strip], ["Chrome", chrome]] as const) {
+    assert.match(src, /const menuFocusRef = useCallback\(/, `${name} has a stable ref callback`);
+    assert.match(src, /ref=\{menuFocusRef\}/, `${name} passes the stable callback`);
+    assert.doesNotMatch(src, /ref=\{\(el\) =>/, `${name} has no inline render-time ref`);
+    assert.match(src, /cursorRef\.current\?\.reset\(\)/, `${name} resets through the latest cursor`);
+  }
+});

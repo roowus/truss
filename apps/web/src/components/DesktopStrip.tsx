@@ -2,7 +2,7 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "rea
 import { createPortal } from "react-dom";
 import { desktops, useDesktops } from "@/lib/desktops";
 import { workspaceTabCloseMode } from "@/lib/workspaceClose";
-import { useMenuCursor } from "@/lib/useMenuCursor";
+import { useMenuCursor, type MenuCursor } from "@/lib/useMenuCursor";
 import { openPanel } from "@/lib/workspace";
 import { Icon, IconBtn } from "./ui";
 import { TabPicker } from "./TabPicker";
@@ -20,8 +20,17 @@ export function DesktopStrip() {
   const addTabRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLButtonElement | null>(null);
   const editRef = useRef<HTMLInputElement>(null);
-  /* which workspace the open menu belongs to, read when a key opens it */
+  /* which workspace the menu belongs to, read when a key opens it */
   const menuTarget = useRef<string | null>(null);
+  /* the menu container mounts once per open. Focus and reset must happen on
+     THAT mount only: a callback ref re-runs on every render, so resetting
+     there would wipe the highlight each time an arrow moved it. */
+  const cursorRef = useRef<MenuCursor | null>(null);
+  const menuFocusRef = useCallback((el: HTMLDivElement | null) => {
+    if (!el) return;
+    cursorRef.current?.reset();
+    el.focus({ preventScroll: true });
+  }, []);
 
   useEffect(() => {
     if (editing) editRef.current?.select();
@@ -67,6 +76,7 @@ export function DesktopStrip() {
     labels: menuLabels,
     trigger: () => menuRef.current,
   });
+  cursorRef.current = cursor;
   const activateRow = useCallback(
     (i: number) => {
       const item = menuItems[i];
@@ -179,14 +189,7 @@ export function DesktopStrip() {
           <div
             role="menu"
             aria-label="Workspace options"
-            ref={(el) => {
-              /* focus the menu itself on open: the keys must land on the
-                 container, not on the trigger that opened it */
-              if (el && !el.contains(document.activeElement)) {
-                cursor.reset();
-                el.focus({ preventScroll: true });
-              }
-            }}
+            ref={menuFocusRef}
             tabIndex={-1}
             onKeyDown={(e) => cursor.onMenuKeyDown(e, activateRow)}
             className="fixed z-[161] w-48 rounded-lg bg-[var(--t-bg2)] border border-[var(--t-line2)] shadow-2xl py-1 t-pop"

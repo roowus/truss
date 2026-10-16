@@ -5,7 +5,7 @@ import { fmtCost, harnessStyle, shortPath } from "@/lib/format";
 import { harnessDisplay, hostAliases } from "@/lib/device";
 import { openDailyDriver, openFreeShell, openPanel } from "@/lib/workspace";
 import { canClose, describeClosed } from "@/lib/workspaceClose";
-import { useMenuCursor } from "@/lib/useMenuCursor";
+import { useMenuCursor, type MenuCursor } from "@/lib/useMenuCursor";
 import { HarnessMark, Icon, StateDot } from "./ui";
 import { cn } from "@/utils/cn";
 
@@ -32,6 +32,15 @@ export function StatusBar({ onToggleSidebar }: { onToggleSidebar: () => void }) 
   const [menu, setMenu] = useState(false);
   const now = useNow(1000, conn.kind === "closed");
   const runningRef = useRef<HTMLButtonElement | null>(null);
+  /* the menu container mounts once per open. Focus and reset happen on THAT
+     mount only: a callback ref re-runs every render, so resetting there
+     would wipe the highlight each time an arrow moved it. */
+  const cursorRef = useRef<MenuCursor | null>(null);
+  const menuFocusRef = useCallback((el: HTMLDivElement | null) => {
+    if (!el) return;
+    cursorRef.current?.reset();
+    el.focus({ preventScroll: true });
+  }, []);
 
   /* issue #227: the running-agents menu drives the shared roving-focus
      model. Its rows are "open that session", so the typeahead labels are
@@ -44,6 +53,7 @@ export function StatusBar({ onToggleSidebar }: { onToggleSidebar: () => void }) 
     labels: runningTitles,
     trigger: () => runningRef.current,
   });
+  cursorRef.current = cursor;
   const openSession = useCallback(
     (i: number) => {
       const id = running[i];
@@ -101,14 +111,7 @@ export function StatusBar({ onToggleSidebar }: { onToggleSidebar: () => void }) 
           <div
             role="menu"
             aria-label="Running agents"
-            ref={(el) => {
-              /* focus the menu itself on open, so the keys land on the
-                 container rather than on the trigger that opened it */
-              if (el && !el.contains(document.activeElement)) {
-                cursor.reset();
-                el.focus({ preventScroll: true });
-              }
-            }}
+            ref={menuFocusRef}
             tabIndex={-1}
             onKeyDown={(e) => cursor.onMenuKeyDown(e, openSession)}
             className="absolute bottom-[30px] left-16 z-50 w-64 rounded-lg bg-[var(--t-bg2)] border border-[var(--t-line2)] shadow-2xl py-1 t-pop"
