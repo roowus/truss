@@ -7,6 +7,7 @@ import { useApp } from "@/lib/store";
 import { useDesktops } from "@/lib/desktops";
 import { clampPopoverPos } from "@/lib/popover";
 import { selectTriggerHeight } from "@/lib/controls";
+import { isArrowKey, isNavKey, isOpenKey, nextIndex } from "@/lib/listKeys";
 import { HarnessLogo } from "./harnessLogos";
 import { ICON_PATHS } from "@/lib/icons";
 import type { SessionState } from "@/lib/proto";
@@ -233,9 +234,14 @@ export function Select({
     btnRef.current?.focus();
   };
 
+  /* issue #227: arrow movement comes from the shared roving-focus model.
+     The dropdown CLAMPS (never wraps) and keeps its filter-by-typing mode —
+     the model supplies the index math only, so the feel is unchanged. */
+  const move = (key: string) => setHighlight((h) => nextIndex(h, visible.length, key));
+
   const onKeyDown = (e: React.KeyboardEvent) => {
     if (!open) {
-      if (["Enter", " ", "ArrowDown", "ArrowUp"].includes(e.key)) {
+      if (isOpenKey(e.key)) {
         e.preventDefault();
         setHighlight(Math.max(0, options.findIndex((o) => o.value === value)));
         setOpen(true);
@@ -243,8 +249,7 @@ export function Select({
       return;
     }
     if (e.key === "Escape") { e.preventDefault(); setOpen(false); btnRef.current?.focus(); }
-    else if (e.key === "ArrowDown") { e.preventDefault(); setHighlight((h) => Math.min(visible.length - 1, h + 1)); }
-    else if (e.key === "ArrowUp") { e.preventDefault(); setHighlight((h) => Math.max(0, h - 1)); }
+    else if (isNavKey(e.key)) { e.preventDefault(); move(e.key); }
     else if (e.key === "Enter") { e.preventDefault(); const o = visible[highlight]; if (o) pick(o.value); }
     else if (e.key.length === 1 && /\S/.test(e.key)) {
       /* type to filter — preventDefault keeps the char from also landing
@@ -260,8 +265,10 @@ export function Select({
   };
 
   const onFilterKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === "ArrowDown") { e.preventDefault(); setHighlight((h) => Math.min(visible.length - 1, h + 1)); }
-    else if (e.key === "ArrowUp") { e.preventDefault(); setHighlight((h) => Math.max(0, h - 1)); }
+    /* arrows move the highlight, but Home/End must stay the text caret's
+       keys — the filter is a real input and hijacking them breaks editing
+       (issue #227 follow-up) */
+    if (isArrowKey(e.key)) { e.preventDefault(); move(e.key); }
     else if (e.key === "Enter") { e.preventDefault(); const o = visible[highlight]; if (o) pick(o.value); }
     else if (e.key === "Escape") { e.preventDefault(); setOpen(false); btnRef.current?.focus(); }
   };

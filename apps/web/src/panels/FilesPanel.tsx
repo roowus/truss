@@ -4,6 +4,8 @@ import { store, useApp } from "@/lib/store";
 import { fmtSize, shortPath } from "@/lib/format";
 import { Btn, Empty, Icon, Spinner } from "@/components/ui";
 import { Markdown } from "./Markdown";
+import { isNavKey, nextIndex } from "@/lib/listKeys";
+import { clampCursor, shouldTakeTreeFocus, treeKey, type TreeRow } from "@/lib/fileTreeKeys";
 import type { FileEntry, FileRead } from "@/lib/proto";
 import { cn } from "@/utils/cn";
 
@@ -142,6 +144,94 @@ export function FilesPanel({ params }: IDockviewPanelProps<P>) {
     return { flat, mode: "tree" as const, loading: dirs["."] === "loading" };
   }, [dirs, open, hits]);
 
+  /* issue #227: the flat list above IS the visible order — expanded folders
+     in, collapsed subtrees out — so arrow navigation simply walks it. This
+     is the array #226 will anchor shift-ranges to; #226 should not build a
+     second one. */
+  const visible = useMemo(
+    () =>
+      rows.mode === "search"
+        ? (rows.flat as FileEntry[]).map((e) => e.path)
+        : (rows.flat as { e: FileEntry }[]).map(({ e }) => e.path),
+    [rows],
+  );
+
+  /* The focus cursor is deliberately SEPARATE from `sel` (the preview).
+     Arrowing must never read a file: that would fire a server request per
+     keypress. Enter is what opens. The index math lives in
+     src/lib/fileTreeKeys.ts so it is testable without a DOM. */
+  const [cursor, setCursor] = useState(-1);
+  /* rows vanish under the cursor when a folder collapses or the tree
+     reloads; clamp rather than leave the cursor pointing at nothing */
+  const cursorIdx = clampCursor(cursor, visible.length);
+  const focusedRow = cursorIdx >= 0 ? visible[cursorIdx] : null;
+  /* the shared roving-focus model owns the index math for this tree too —
+     the same nextIndex the menu surfaces use (issue #227) */
+  const moveCursor = useCallback((key: string) => setCursor((c) => nextIndex(c, visible.length, key)), [visible.length]);
+  const entryAt = useCallback(
+    (path: string | null) =>
+      !path
+        ? undefined
+        : rows.mode === "search"
+          ? (rows.flat as FileEntry[]).find((e) => e.path === path)
+          : (rows.flat as { e: FileEntry }[]).find(({ e }) => e.path === path)?.e,
+    [rows],
+  );
+
+  /* the panel is a dockview tab, not a DOM child of anything focusable, so
+     the tree takes focus when this panel is shown — arrows then work
+     without a preliminary click. A callback ref is what actually lands it:
+     the container mounts (and remounts, while the first listing loads)
+     independently of this component's own effects, and dockview finishes
+     attaching the panel after them. Focusing on the ref callback covers
+     every one of those mounts and never fights a later steal. */
+  const treeRefCb = useCallback((el: HTMLDivElement | null) => {
+    if (!el) return;
+    /* take focus only when nothing else holds it, so a dialog or an inline
+       edit is never robbed mid-typing. Two frames of retries because the
+       container mounts before dockview finishes attaching the panel, and
+       dockview focuses the panel after that. */
+    const grab = () => {
+      /* the decision lives in fileTreeKeys.shouldTakeTreeFocus so it is
+         covered by a real test rather than only by a browser run */
+      const ok = shouldTakeTreeFocus({
+        connected: el.isConnected,
+        containsActive: el.contains(document.activeElement),
+        activeTag: document.activeElement?.tagName ?? null,
+      });
+      if (ok) el.focus({ preventScroll: true });
+    };
+    /* NOTE: deliberately no cleanup return — React 19 treats a function
+       returned from a ref callback as a ref cleanup and runs it on EVERY
+       re-render, which cancelled these timers before they fired and left
+       focus on <body>. The retries are short and idempotent, and grab()
+       bails once the element is gone. */
+    grab();
+    requestAnimationFrame(() => { grab(); requestAnimationFrame(grab); });
+    window.setTimeout(grab, 120);
+    window.setTimeout(grab, 400);
+  }, []);
+
+  const onTreeKeyDown = (ev: React.KeyboardEvent) => {
+    if (isNavKey(ev.key)) {
+      ev.preventDefault();
+      moveCursor(ev.key);
+      return;
+    }
+    const rowList: TreeRow[] = visible.map((p) => ({ path: p, kind: entryAt(p)?.kind === "dir" ? "dir" : "file" }));
+    const action = treeKey(cursorIdx, rowList, open, ev.key);
+    if (action.type === "none") return;
+    ev.preventDefault();
+    if (action.type === "move") setCursor(action.index);
+    else if (action.type === "open") setSel(action.path);
+    else toggle(action.path);
+  };
+
+  /* when search results replace the tree, keep the cursor in range */
+  useEffect(() => {
+    setCursor((c) => (c >= 0 && c >= visible.length ? (visible.length ? 0 : -1) : c));
+  }, [visible.length]);
+
   if (!root) {
     return (
       <div className="h-full flex flex-col bg-[var(--t-bg1)] t-panel">
@@ -202,13 +292,20 @@ export function FilesPanel({ params }: IDockviewPanelProps<P>) {
 
       {/* body: tree + preview */}
       <div className="flex-1 min-h-0 flex">
-        <div className={cn("h-full overflow-auto t-scroll py-1", sel ? "w-[42%] shrink-0 border-r border-[var(--t-line)]" : "flex-1")}>
+        <div
+          ref={treeRefCb}
+          role="tree"
+          aria-label="Files"
+          tabIndex={0}
+          onKeyDown={onTreeKeyDown}
+          className={cn("h-full overflow-auto t-scroll py-1 outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-[var(--t-amber)]/60", sel ? "w-[42%] shrink-0 border-r border-[var(--t-line)]" : "flex-1")}
+        >
           {rows.mode === "search" ? (
             hits!.length === 0 ? (
               <div className="px-3 py-6 text-center text-[11.5px] text-[var(--t-dim)]">No files match “{q}”.</div>
             ) : (
               (rows.flat as FileEntry[]).map((e) => (
-                <Row key={e.path} e={e} depth={0} showPath expanded={false} selected={sel === e.path} onToggle={toggle} onSelect={(p) => { setSel(p); setQ(""); }} />
+                <Row key={e.path} e={e} depth={0} showPath expanded={false} selected={sel === e.path} focused={focusedRow === e.path} onFocusRow={() => setCursor(visible.indexOf(e.path))} onToggle={toggle} onSelect={(p) => { setSel(p); setQ(""); }} />
               ))
             )
           ) : dirs["."] === "loading" || dirs["."] === undefined ? (
@@ -217,7 +314,7 @@ export function FilesPanel({ params }: IDockviewPanelProps<P>) {
             <div className="px-3 py-6 text-center text-[11.5px] text-[var(--t-dim)]">Empty directory.</div>
           ) : (
             (rows.flat as { e: FileEntry; depth: number }[]).map(({ e, depth }) => (
-              <Row key={e.path} e={e} depth={depth} expanded={!!open[e.path]} selected={sel === e.path} onToggle={toggle} onSelect={setSel} />
+              <Row key={e.path} e={e} depth={depth} expanded={!!open[e.path]} selected={sel === e.path} focused={focusedRow === e.path} onFocusRow={() => setCursor(visible.indexOf(e.path))} onToggle={toggle} onSelect={setSel} />
             ))
           )}
         </div>
@@ -287,7 +384,9 @@ function Row({
   depth,
   expanded,
   selected,
+  focused,
   showPath,
+  onFocusRow,
   onToggle,
   onSelect,
 }: {
@@ -295,17 +394,26 @@ function Row({
   depth: number;
   expanded: boolean;
   selected: boolean;
+  focused?: boolean;
   showPath?: boolean;
+  onFocusRow?: () => void;
   onToggle: (rel: string) => void;
   onSelect: (rel: string) => void;
 }) {
   const hidden = e.name.startsWith(".");
   return (
     <button
-      onClick={() => (e.kind === "dir" ? onToggle(e.path) : onSelect(e.path))}
+      role="treeitem"
+      aria-expanded={e.kind === "dir" ? expanded : undefined}
+      aria-selected={selected}
+      tabIndex={-1}
+      onClick={() => { onFocusRow?.(); if (e.kind === "dir") onToggle(e.path); else onSelect(e.path); }}
       className={cn(
         "w-full flex items-center gap-1.5 h-7 pr-2 text-left hover:bg-white/[0.04]",
         selected && "bg-white/[0.06]",
+        /* the roving cursor gets a visible ring, so the keyboard position is
+           always on screen (issue #227) */
+        focused && "ring-1 ring-inset ring-[var(--t-amber)]/60 bg-white/[0.05]",
         hidden && "opacity-55",
       )}
       style={{ paddingLeft: 8 + depth * 14 }}
