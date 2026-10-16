@@ -1,6 +1,6 @@
 import type { HarnessAdapter, AdapterHandle, SessionOpts } from "./adapters/types.js";
 import { isCatalogModel } from "./adapters/model-catalog-cache.js";
-import { TUNNEL_PROTOCOL } from "@truss/proto";
+import { TUNNEL_REATTACH_MIN } from "@truss/proto";
 import type { HarnessId, ProtoEvent } from "@truss/proto";
 
 /**
@@ -423,14 +423,18 @@ export function agentBye(hostId: string, socket?: AgentInfo["socket"]) {
   /* protocol-1 agents dispose every harness at close and hello with no
      session list — their sessions can never reattach, so waiting for the
      reconcile just leaks the queues (audit B5). Reap them at the blip, the
-     pre-handshake behavior. Protocol-2 sessions stay: the agent kept them
-     alive and its next hello reattaches. */
-  if (agent.protocol < TUNNEL_PROTOCOL) {
+     pre-handshake behavior. Agents at or above the REATTACH floor keep their
+     sessions: the agent kept them alive and its next hello reattaches.
+
+     The floor is TUNNEL_REATTACH_MIN, NOT TUNNEL_PROTOCOL (audit B1): this
+     asks "can this agent reattach?", not "is it the current level?". The two
+     coincide today and must not be conflated — see the constant's comment. */
+  if (agent.protocol < TUNNEL_REATTACH_MIN) {
     for (const [sessionId, q] of eventQueues) {
       if (queueHost.get(sessionId) !== hostId) continue;
       reapSession(sessionId, q, `node-agent ${hostId} disconnected`);
     }
-      console.log(`[remote] agent ${hostId} gone (protocol ${agent.protocol} — its sessions were disposed at close)`);
+    console.log(`[remote] agent ${hostId} gone (protocol ${agent.protocol} — its sessions were disposed at close)`);
     registrySink?.();
     return;
   }

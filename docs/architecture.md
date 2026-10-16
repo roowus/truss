@@ -60,6 +60,8 @@ A remote host runs `packages/node-agent`, which dials out to the server over one
 
 **When to bump it:** in the same commit that changes the tunnel *wire format* — a frame added or removed, a field's meaning changed, anything that makes an older peer half-understand a newer one. Do **not** bump it for a server-side behavior change that rides fields both sides already send: installed agents never auto-update, so every bump marks every existing agent `outdated` and banners its host.
 
+**Do not conflate the level with a capability floor.** `TUNNEL_REATTACH_MIN` (also in `packages/proto/src/tunnel.ts`) is a *different number answering a different question*: "can this agent reattach after a blip?" Protocol 2 introduced that capability (issue #100), so `agentBye` reaps a disconnecting agent's sessions only when it is **below the reattach floor**. Asking `< TUNNEL_PROTOCOL` there instead compiles and passes today — the two are both 2 — and then reaps every live session of a fully capable protocol-2 agent on the first blip after the level bumps to 3. Bump the reattach floor only when a level genuinely gains or loses the capability; `apps/server/test/remote.test.ts` pins the distinction.
+
 The handshake and the floor (all in `assessTunnelProtocol`):
 
 | agent's `protocol` | verdict | server behavior |

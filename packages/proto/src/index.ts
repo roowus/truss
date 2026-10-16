@@ -312,5 +312,5 @@ export type { HostMetrics } from "./metrics.js";
 
 /* the node-agent tunnel handshake — ONE protocol level + close-code table
    both sides import (issue #217) */
-export { TUNNEL_PROTOCOL, TUNNEL_CLOSE, TUNNEL_CLOSE_REASON_MAX, assessTunnelProtocol, tunnelCloseReason } from "./tunnel.js";
+export { TUNNEL_PROTOCOL, TUNNEL_REATTACH_MIN, TUNNEL_CLOSE, TUNNEL_CLOSE_REASON_MAX, assessTunnelProtocol, tunnelCloseReason } from "./tunnel.js";
 export type { TunnelCloseCode, TunnelProtocolVerdict, TunnelProtocolAssessment } from "./tunnel.js";

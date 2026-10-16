@@ -20,6 +20,29 @@
 export const TUNNEL_PROTOCOL = 2;
 
 /**
+ * The CAPABILITY floor for blip-tolerant reattach — a different question from
+ * "what level is current", and deliberately a different number (audit B1 on
+ * #217).
+ *
+ * Protocol 2 introduced the reattach handshake (issue #100): its agents keep
+ * their harnesses alive across a disconnect and list them in the next hello,
+ * so the server must NOT reap their sessions at the blip. Protocol 1 agents
+ * dispose everything at close and cannot reattach, so theirs are reaped
+ * immediately rather than leaking queues.
+ *
+ * This must NOT be written as `TUNNEL_PROTOCOL`. Comparing against the
+ * CURRENT level silently asks "is this agent up to date?" when the code needs
+ * "can this agent reattach?" — and the two only coincide today. On the next
+ * bump to 3, every installed protocol-2 agent (which fully supports reattach)
+ * would satisfy `2 < 3`, get all its sessions reaped on every blip, and lose
+ * running turns — the exact silent drift #217 exists to prevent.
+ *
+ * Bump this ONLY when a level genuinely loses (or gains) reattach capability;
+ * an agent at or above it keeps its sessions across a disconnect.
+ */
+export const TUNNEL_REATTACH_MIN = 2;
+
+/**
  * Tunnel close codes — the canonical table (issue #217 item 5), so agent
  * logs are greppable and a new code can't quietly collide with an old one.
  * 4400-4406 are the tunnel's own range; anything below is a WebSocket or
