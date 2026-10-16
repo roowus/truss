@@ -1,5 +1,15 @@
 import { useSyncExternalStore, useRef, useCallback, useEffect, useState } from "react";
 import type { Backend, ConnStatus } from "./backend";
+import {
+  emptyOutbox,
+  enqueue,
+  newOpId,
+  pending as outboxPending,
+  retire as outboxRetire,
+  RETRY_NOTE,
+  type OpKind,
+  type OutboxState,
+} from "./outbox";
 import type {
   AgentInfo,
   CreateSessionBody,
@@ -250,6 +260,10 @@ class Store {
   private refreshTimer: number | undefined;
   private toastN = 0;
   private unsubBus?: () => void;
+  /* send outbox (issue #216): op ids awaiting an ack, kept OUT of AppState —
+     it is transport bookkeeping, not render state, so putting it in the
+     render path would re-render every subscriber on each send */
+  private outbox: OutboxState = emptyOutbox;
 
   subscribe = (fn: () => void) => {
     this.subs.add(fn);
@@ -328,6 +342,9 @@ class Store {
     if (s.kind === "open" && wasDown && wasEverUp) {
       this.toast("ok", "Event bus reconnected", "Resyncing sessions — events missed while offline are being replayed.");
       void this.resync();
+      /* unacked sends ride the same reconnect (issue #216): same op ids, so
+         the server replays their original result instead of a second turn */
+      void this.replayOutbox();
     }
   }
 
@@ -609,8 +626,123 @@ class Store {
     void this.ensureHydrated(session.id);
     return session;
   }
+  /* ---------- send outbox (issue #216) ---------- */
+
+  /**
+   * Fire one mutating op with an idempotency key and retire it on ack.
+   *
+   * The entry is queued BEFORE the request, so a response lost after the
+   * server acted still leaves the op id on the outbox for the reconnect
+   * replay (that is the whole point — ack-arrival is not the same fact as
+   * work-happened). A reply, however, retires it: the HTTP 200 is the ack.
+   *
+   * `allowQueue` is false for a first send from the composer: a blind network
+   * failure must surface to the user as it always did, not silently become a
+   * background retry. The reconnect replay is the only automatic retry.
+   */
+  private async op<K extends OpKind>(
+    kind: K,
+    sessionId: string,
+    body: Record<string, unknown>,
+    fire: (opId: string) => Promise<{ ok: boolean; deduped?: boolean }>,
+    opts: { allowQueue: boolean; replayed?: boolean; opId?: string } = { allowQueue: true },
+  ): Promise<{ ok: boolean; deduped?: boolean; opId: string; queued: boolean }> {
+    const opId = opts.opId ?? newOpId();
+    if (opts.allowQueue) {
+      this.outbox = enqueue(this.outbox, { opId, kind, sessionId, body, replayed: opts.replayed });
+    }
+    try {
+      const res = await fire(opId);
+      this.outbox = outboxRetire(this.outbox, opId);
+      return { ok: res.ok !== false, deduped: res.deduped, opId, queued: false };
+    } catch (err) {
+      /* the ack never arrived. When we queued it, leave the entry for the
+         replay; when we did not (a composer send), drop it — the caller
+         shows the error and the user decides. */
+      if (!opts.allowQueue) this.outbox = outboxRetire(this.outbox, opId);
+      throw err;
+    }
+  }
+
+  /**
+   * Replay every unacked op after a reconnect. Same op ids, so the server's
+   * ledger returns the original result rather than a second turn; entries
+   * past the outbox age cap are abandoned instead (replaying one the server
+   * has forgotten would BE the duplicate we are preventing).
+   *
+   * Called from the reconnect path only — see onConn.
+   */
+  async replayOutbox() {
+    const { replay, state } = outboxPending(this.outbox);
+    this.outbox = state;
+    if (!replay.length) return;
+    let recovered = 0;
+    for (const entry of replay) {
+      try {
+        const res = await this.op(
+          entry.kind,
+          entry.sessionId,
+          entry.body,
+          (opId) => this.fireOp(entry.kind, entry.sessionId, entry.body, opId),
+          { allowQueue: false, opId: entry.opId },
+        );
+        recovered++;
+        /* the send landed while we were offline — say so in the transcript,
+           so a later reader never mistakes it for a duplicate bubble */
+        if (res.ok) this.noteRetried(entry);
+      } catch {
+        /* still failing: leave it retired rather than looping here — the
+           entries already left the queue in `pending`, and the next
+           reconnect re-derives what is still unacked from the server */
+      }
+    }
+    if (recovered) {
+      this.toast("ok", "Resent", `${recovered} message${recovered === 1 ? "" : "s"} delivered after reconnect`);
+    }
+  }
+
+  private fireOp(
+    kind: OpKind,
+    sessionId: string,
+    body: Record<string, unknown>,
+    opId: string,
+  ): Promise<{ ok: boolean; deduped?: boolean }> {
+    if (kind === "prompt") {
+      return this.be.prompt(sessionId, String(body.text ?? ""), body.attachments as never, opId);
+    }
+    if (kind === "interrupt") return this.be.interrupt(sessionId, opId);
+    return this.be.permission(sessionId, String(body.requestId ?? ""), String(body.choice ?? ""), opId);
+  }
+
+  /** a system note for a prompt that only landed on the replay */
+  private noteRetried(entry: { kind: OpKind; sessionId: string; replayed?: boolean }) {
+    if (entry.kind !== "prompt" || !entry.replayed) return;
+    const view = this.state.views[entry.sessionId];
+    if (!view) return;
+    const id = `m-retry-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    const at = Date.now();
+    this.set((s) => {
+      const v = s.views[entry.sessionId];
+      if (!v) return {};
+      return {
+        views: {
+          ...s.views,
+          [entry.sessionId]: {
+            ...v,
+            msgs: { ...v.msgs, [id]: { id, role: "system", segments: [{ channel: "text" as const, text: RETRY_NOTE }], done: true, at } },
+            items: [...v.items, { kind: "msg", id }],
+          },
+        },
+      };
+    });
+  }
+
   async prompt(id: string, text: string, attachments?: import("./proto").PromptAttachment[]) {
-    await this.be.prompt(id, text, attachments);
+    /* a first send is NOT queued: a dead server must report itself, exactly
+       as it did before this change. Only the reconnect replay retries. */
+    await this.op("prompt", id, { text, attachments }, (opId) => this.be.prompt(id, text, attachments, opId), {
+      allowQueue: false,
+    });
   }
   /** upload a File into the session workspace; returns the attachable ref */
   async upload(id: string, file: File): Promise<import("./proto").PromptAttachment> {
@@ -623,7 +755,9 @@ class Store {
   }
   async interrupt(id: string) {
     try {
-      await this.be.interrupt(id);
+      /* queued: a double interrupt is a real hazard (it can stop a turn the
+         user asked to keep), so an unacked one replays with the same op id */
+      await this.op("interrupt", id, {}, (opId) => this.be.interrupt(id, opId));
     } catch (e: any) {
       this.toast("error", "Interrupt failed", e.message);
     }
@@ -645,7 +779,9 @@ class Store {
   }
   async answer(id: string, requestId: string, choice: string) {
     try {
-      await this.be.permission(id, requestId, choice);
+      /* queued: two answers to one card is the other mutation a retry must
+         not double-fire */
+      await this.op("perm", id, { requestId, choice }, (opId) => this.be.permission(id, requestId, choice, opId));
     } catch (e: any) {
       this.toast("error", "Permission answer rejected", e.message);
     }

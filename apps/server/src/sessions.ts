@@ -30,6 +30,66 @@ interface LiveSession {
 
 const live = new Map<string, LiveSession>();
 
+/* ── op ledger (issue #216): at-least-once sends, deduped ──────────────
+
+   The client stamps every mutating call that can be harmfully double-fired
+   (prompt, interrupt, permission resolve) with its own op id, and keeps that
+   id until the server acks. A retry — a POST that timed out but landed, or
+   the outbox replayed after a WS reconnect — carries the same id, and the
+   recorded result comes back instead of a second dispatch.
+
+   Deduping is OPT-IN and never a new failure mode: no op id (curl, the MCP
+   tools, every pre-#216 client) behaves exactly as it did before, and the
+   replay of a known id is a success, not a 409. */
+
+/** how long a recorded op stays replayable */
+export const OP_TTL_MS = 24 * 60 * 60 * 1000;
+/** most op rows kept per session before the oldest are evicted */
+export const OP_CAP_PER_SESSION = 500;
+/** an op id longer than this is not ours — never index it */
+const OP_ID_MAX = 200;
+
+/** normalize a client-supplied op id: non-empty and bounded, else undefined
+    (undefined = "do not dedupe this call", which is the old behavior) */
+export function normalizeOpId(v: unknown): string | undefined {
+  if (typeof v !== "string") return undefined;
+  const id = v.trim();
+  if (!id || id.length > OP_ID_MAX) return undefined;
+  return id;
+}
+
+/** the ack shape every deduped mutation returns */
+export interface OpAck {
+  ok: true;
+  /** echoed so the client can retire its outbox entry */
+  clientOpId?: string;
+  /** prompts only: the user message the turn belongs to (same id on replay) */
+  messageId?: string;
+  /** true when this call replayed a recorded result instead of dispatching */
+  deduped?: boolean;
+}
+
+/** boot + daily sweep of the ledger, on the existing trash-sweep timer */
+export function sweepOpLedger(now = Date.now()): number {
+  try {
+    return store.sweepOpLedger(OP_TTL_MS, now);
+  } catch (err) {
+    console.error("[ops] ledger sweep failed", err);
+    return 0;
+  }
+}
+
+/* Message ids were `u-${Date.now()}` / `m-sys-${Date.now()}`. Two sends in
+   the same millisecond — a double-click, a queue drain, and now the op-ledger
+   replay — minted the SAME id, and the client reducer drops a repeated
+   msg.start, so one of the two user bubbles vanished from the transcript
+   (found by the #216 two-turn test). The counter keeps ids unique within a
+   process while the stamp keeps them sortable and readable. */
+let idSeq = 0;
+function mintId(prefix: "u" | "m-sys"): string {
+  return `${prefix}-${Date.now()}-${(idSeq++).toString(36)}`;
+}
+
 /** wire frame: seq is the event-log rowid; clients dedupe replay vs live by it */
 export interface EventFrame {
   seq: number;
@@ -107,12 +167,16 @@ export function reconcileOnBoot() {
   } catch (err) {
     console.error("[trash] boot sweep failed", err);
   }
+  /* op ledger rides the same timer (issue #216): the table is recreated at
+     boot, so the boot sweep only matters for a very long-lived process */
+  sweepOpLedger();
   const daily = setInterval(() => {
     try {
       purgeExpiredTrash();
     } catch (err) {
       console.error("[trash] daily sweep failed", err);
     }
+    sweepOpLedger();
   }, 24 * 60 * 60 * 1000);
   daily.unref();
 }
@@ -384,11 +448,24 @@ async function resumeSessionOnce(id: string, opts: { spawnTimeoutMs?: number }):
   }
 }
 
+/**
+ * Deliver a prompt as one turn. `clientOpId` makes the call idempotent: a
+ * retry carrying an id this session already ran returns the original
+ * messageId (and deduped: true) without echoing a second bubble or sending
+ * the text to the harness again.
+ */
 export async function sendPrompt(
   sessionId: string,
   text: string,
   attachments?: { name: string; path: string; size: number; mime?: string }[],
-) {
+  clientOpId?: string,
+): Promise<OpAck> {
+  const opId = normalizeOpId(clientOpId);
+  if (opId) {
+    const seen = store.getOp(sessionId, "prompt", opId) as { messageId?: string } | undefined;
+    if (seen !== undefined) return { ok: true, clientOpId: opId, messageId: seen?.messageId, deduped: true };
+  }
+
   let s = live.get(sessionId);
   if (!s) {
     const row = store.getSession(sessionId);
@@ -402,8 +479,13 @@ export async function sendPrompt(
     if (!s) throw new Error(`session is ${row.state} — harness process not running`);
   }
   // the user bubble is a local echo: instant in UI, persisted like everything else
-  const messageId = `u-${Date.now()}`;
+  const messageId = mintId("u");
   const atts = attachments?.length ? attachments : undefined;
+  /* claim the op BEFORE the bubble is echoed: two concurrent retries of one
+     op id would otherwise both read "unseen" and both dispatch — the ledger
+     write has to win the race the sink cannot (sink is sync, the resume
+     above is not, so both callers can reach this line) */
+  if (opId) store.putOp(sessionId, "prompt", opId, { messageId }, OP_CAP_PER_SESSION);
   sink({ type: "msg.start", sessionId, messageId, role: "user", at: Date.now(), ...(atts ? { attachments: atts } : {}) });
   sink({ type: "msg.chunk", sessionId, messageId, text });
   sink({ type: "msg.done", sessionId, messageId });
@@ -435,15 +517,22 @@ export async function sendPrompt(
        honest (audit round 5): an explicit marker, so a reload never shows an
        unanswered bubble and a retry reads as a retry, not a duplicate */
     const detail = err instanceof Error ? err.message : String(err);
-    const noteId = `m-sys-${Date.now()}`;
+    const noteId = mintId("m-sys");
     sink({ type: "msg.start", sessionId, messageId: noteId, role: "system", at: Date.now() });
     sink({ type: "msg.chunk", sessionId, messageId: noteId, text: `prompt not delivered: ${detail}` });
     sink({ type: "msg.done", sessionId, messageId: noteId });
+    /* the send never happened, so the op id stays unclaimed: the client's
+       retry of this same op must really dispatch, not replay a phantom
+       success. (The bubble is already echoed, so the retry carries a fresh
+       op id and its own bubble — the transcript's "prompt not delivered"
+       note is what keeps that honest.) */
+    if (opId) store.forgetOp(sessionId, "prompt", opId);
     throw err;
   }
   /* the marker moves only on a DELIVERED first prompt — a refused send must
      not burn the practices preamble (the retry still carries it) */
   if (firstPrompt) firstPromptDone.add(sessionId);
+  return { ok: true, clientOpId: opId, messageId };
 }
 
 /* harnesses whose adapters attach the per-session truss MCP server (they get
@@ -455,10 +544,25 @@ const baseOf = (harness: string) => harness.split("@")[0];
    pinned there) — it interpolates the canonical deliverablesGuidance() */
 
 
-export function interrupt(sessionId: string) {
+/**
+ * Stop the running turn. Deduped like a prompt: interrupt has no result to
+ * replay, so a repeat of a seen op id just returns the same ack and does not
+ * fire the adapter again.
+ */
+export function interrupt(sessionId: string, clientOpId?: string): OpAck {
+  const opId = normalizeOpId(clientOpId);
+  if (opId) {
+    if (store.getOp(sessionId, "interrupt", opId) !== undefined) return { ok: true, clientOpId: opId, deduped: true };
+    store.putOp(sessionId, "interrupt", opId, { ok: true }, OP_CAP_PER_SESSION);
+  }
   const s = live.get(sessionId);
-  if (!s) throw new Error(`session not live: ${sessionId}`);
+  if (!s) {
+    /* nothing was interrupted — do not burn the op id on a refusal */
+    if (opId) store.forgetOp(sessionId, "interrupt", opId);
+    throw new Error(`session not live: ${sessionId}`);
+  }
   s.adapter.interrupt(s.handle);
+  return { ok: true, clientOpId: opId };
 }
 
 /**
@@ -532,18 +636,29 @@ export async function switchModel(
       : mode === "restart"
         ? `model switched to ${label} — harness restarted, history kept`
         : `model set to ${label} — applies when the session resumes`;
-  const noteId = `m-sys-${Date.now()}`;
+  const noteId = mintId("m-sys");
   sink({ type: "msg.start", sessionId, messageId: noteId, role: "system", at: Date.now() });
   sink({ type: "msg.chunk", sessionId, messageId: noteId, text: note });
   sink({ type: "msg.done", sessionId, messageId: noteId });
   return { mode };
 }
 
-export function resolvePermission(sessionId: string, requestId: string, choice: string) {
+/**
+ * Answer a permission card. Deduped like a prompt (issue #216): a double-fire
+ * would otherwise hand the harness two answers for one request. Same shape —
+ * no result payload to replay, just the "already ran" ack.
+ */
+export function resolvePermission(sessionId: string, requestId: string, choice: string, clientOpId?: string): OpAck {
+  const opId = normalizeOpId(clientOpId);
+  if (opId) {
+    if (store.getOp(sessionId, "perm", opId) !== undefined) return { ok: true, clientOpId: opId, deduped: true };
+  }
   const s = live.get(sessionId);
   if (!s?.adapter.resolve) throw new Error(`session ${sessionId} has no permission host`);
+  if (opId) store.putOp(sessionId, "perm", opId, { ok: true }, OP_CAP_PER_SESSION);
   s.adapter.resolve(s.handle, requestId, choice);
   sink({ type: "perm.resolve", sessionId, requestId, choice });
+  return { ok: true, clientOpId: opId };
 }
 
 export function closeSession(sessionId: string) {

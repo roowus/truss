@@ -1,0 +1,269 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { freshServer, tick } from "./helpers.js";
+import type { AdapterHandle, HarnessAdapter, SessionOpts } from "../src/adapters/types.js";
+import type { ProtoEvent } from "@truss/proto";
+
+/* issue #216 — the op ledger: a retried send must not become a second turn.
+
+   Same fake-adapter rig as sessions.test.ts: a real (temp) SQLite store and a
+   harness that records what it was actually asked to send, so "one turn" and
+   "two turns" are observed at the boundary that matters (adapter.send calls
+   and the persisted user bubbles), not inferred. */
+
+interface FakeRec {
+  sent: string[];
+  interrupts: number;
+  resolved: { requestId: string; choice: string }[];
+  events: ProtoEvent[];
+}
+
+function fakeAdapter(id: string, rec: FakeRec): HarnessAdapter {
+  return {
+    id: id as never,
+    capabilities: { permissions: true, subagents: false, streaming: true, queueWhileRunning: true },
+    async listModels() {
+      return [];
+    },
+    async spawn(opts: SessionOpts): Promise<AdapterHandle> {
+      return { sessionId: opts.sessionId };
+    },
+    send(_h: AdapterHandle, text: string) {
+      rec.sent.push(text);
+    },
+    interrupt() {
+      rec.interrupts++;
+    },
+    resolve(_h: AdapterHandle, requestId: string, choice: string) {
+      rec.resolved.push({ requestId, choice });
+    },
+    async *events() {
+      await new Promise(() => {});
+      yield undefined as never;
+    },
+    dispose() {},
+  };
+}
+
+/** boot a session on the fake harness and return the rig */
+async function rig(tag: string) {
+  const { db, cleanup } = await freshServer(tag);
+  const sessions = await import("../src/sessions.js");
+  const rec: FakeRec = { sent: [], interrupts: 0, resolved: [], events: [] };
+  sessions.registerAdapter("fake" as never, fakeAdapter("fake", rec));
+  const s = await sessions.createSession({ harness: "fake" as never, cwd: "/tmp" });
+  /* capture the event bus without a websocket */
+  sessions.setBroadcaster((f) => rec.events.push(f.ev));
+  return { db, sessions, rec, session: s, cleanup };
+}
+
+/** user bubbles persisted for a session */
+function userBubbles(db: { store: { listEvents: (id: string) => { ev: ProtoEvent }[] } }, id: string) {
+  return db.store
+    .listEvents(id)
+    .map((f) => f.ev)
+    .filter((ev) => ev.type === "msg.start" && ev.role === "user");
+}
+
+test("#216: the same op id twice is ONE turn and two identical acks", async () => {
+  const { db, sessions, rec, session, cleanup } = await rig("op-dup");
+  try {
+    const a = await sessions.sendPrompt(session.id, "hello", undefined, "op-1");
+    const b = await sessions.sendPrompt(session.id, "hello", undefined, "op-1");
+
+    /* the harness saw the text once */
+    assert.equal(rec.sent.length, 1, "adapter.send ran once");
+    assert.equal(userBubbles(db, session.id).length, 1, "one user bubble");
+
+    /* both acks agree, and the replay says so */
+    assert.equal(a.ok, true);
+    assert.equal(b.ok, true);
+    assert.equal(b.messageId, a.messageId, "replay returns the original messageId");
+    assert.equal(b.clientOpId, "op-1");
+    assert.equal(a.deduped, undefined);
+    assert.equal(b.deduped, true);
+  } finally {
+    cleanup();
+  }
+});
+
+test("#216: different op ids are not deduped — two turns", async () => {
+  const { db, sessions, rec, session, cleanup } = await rig("op-distinct");
+  try {
+    const a = await sessions.sendPrompt(session.id, "hello", undefined, "op-a");
+    const b = await sessions.sendPrompt(session.id, "hello", undefined, "op-b");
+    assert.equal(rec.sent.length, 2, "adapter.send ran twice");
+    assert.equal(userBubbles(db, session.id).length, 2, "two user bubbles");
+    assert.notEqual(a.messageId, b.messageId);
+  } finally {
+    cleanup();
+  }
+});
+
+test("#216: no op id behaves exactly as before (back-compat)", async () => {
+  const { db, sessions, rec, session, cleanup } = await rig("op-none");
+  try {
+    const a = await sessions.sendPrompt(session.id, "hello");
+    const b = await sessions.sendPrompt(session.id, "hello");
+    assert.equal(rec.sent.length, 2, "undeduped without an op id");
+    assert.equal(userBubbles(db, session.id).length, 2);
+    assert.equal(a.clientOpId, undefined);
+    assert.equal(b.deduped, undefined);
+  } finally {
+    cleanup();
+  }
+});
+
+test("#216: malformed op ids are ignored, not rejected", async () => {
+  const { sessions, rec, session, cleanup } = await rig("op-bad");
+  try {
+    /* empty / whitespace / oversized / non-string: dedupe is skipped, the
+       send still happens, and nothing new throws (no new failure mode) */
+    await sessions.sendPrompt(session.id, "a", undefined, "");
+    await sessions.sendPrompt(session.id, "b", undefined, "   ");
+    await sessions.sendPrompt(session.id, "c", undefined, "x".repeat(201));
+    await sessions.sendPrompt(session.id, "d", undefined, undefined);
+    assert.equal(rec.sent.length, 4);
+  } finally {
+    cleanup();
+  }
+});
+
+test("#216: a refused send does not burn the op id", async () => {
+  const { sessions, rec, session, cleanup } = await rig("op-refuse");
+  try {
+    /* make the adapter refuse, like a dead harness */
+    const adapter = rec as unknown as { sent: string[] };
+    void adapter;
+    const orig = rec.sent.push.bind(rec.sent);
+    rec.sent.push = () => {
+      throw new Error("harness gone");
+    };
+    await assert.rejects(() => sessions.sendPrompt(session.id, "boom", undefined, "op-x"));
+    rec.sent.push = orig;
+
+    /* the retry of the SAME op id must really dispatch, not replay a success */
+    const retry = await sessions.sendPrompt(session.id, "boom", undefined, "op-x");
+    assert.equal(retry.deduped, undefined, "retry dispatched for real");
+    assert.equal(rec.sent.length, 1, "the retry reached the harness");
+  } finally {
+    cleanup();
+  }
+});
+
+test("#216: interrupt dedupes on the same op id", async () => {
+  const { sessions, rec, session, cleanup } = await rig("op-int");
+  try {
+    const a = sessions.interrupt(session.id, "int-1");
+    const b = sessions.interrupt(session.id, "int-1");
+    assert.equal(rec.interrupts, 1, "adapter.interrupt ran once");
+    assert.equal(a.deduped, undefined);
+    assert.equal(b.deduped, true);
+    assert.equal(b.clientOpId, "int-1");
+
+    /* a different op id is a real second interrupt */
+    sessions.interrupt(session.id, "int-2");
+    assert.equal(rec.interrupts, 2);
+  } finally {
+    cleanup();
+  }
+});
+
+test("#216: permission resolve dedupes on the same op id", async () => {
+  const { sessions, rec, session, cleanup } = await rig("op-perm");
+  try {
+    const a = sessions.resolvePermission(session.id, "req-1", "allow", "perm-1");
+    const b = sessions.resolvePermission(session.id, "req-1", "allow", "perm-1");
+    assert.equal(rec.resolved.length, 1, "adapter.resolve ran once");
+    assert.equal(a.deduped, undefined);
+    assert.equal(b.deduped, true);
+
+    sessions.resolvePermission(session.id, "req-1", "deny", "perm-2");
+    assert.equal(rec.resolved.length, 2, "a new op id still resolves");
+    /* the perm.resolve frame was emitted once per real resolve */
+    const frames = rec.events.filter((e) => e.type === "perm.resolve");
+    assert.equal(frames.length, 2);
+  } finally {
+    cleanup();
+  }
+});
+
+test("#216: a failed interrupt does not burn the op id", async () => {
+  const { sessions, rec, cleanup } = await rig("op-int-fail");
+  try {
+    assert.throws(() => sessions.interrupt("no-such-live-session", "int-fail"));
+    /* the ledger must not have kept the claim: a later real interrupt with
+       the same id (once the session is live) is not swallowed */
+    assert.equal(rec.interrupts, 0);
+  } finally {
+    cleanup();
+  }
+});
+
+test("#216: ledger entries expire on the TTL", async () => {
+  const { db, sessions, rec, session, cleanup } = await rig("op-ttl");
+  try {
+    await sessions.sendPrompt(session.id, "hello", undefined, "op-ttl");
+    /* still replayable */
+    const before = await sessions.sendPrompt(session.id, "hello", undefined, "op-ttl");
+    assert.equal(before.deduped, true);
+
+    /* sweep as if a day and a minute had passed. `freshServer` reuses one
+       module-level db across this file's tests, so assert on THIS op rather
+       than an absolute row count. */
+    const removed = sessions.sweepOpLedger(Date.now() + sessions.OP_TTL_MS + 60_000);
+    assert.ok(removed >= 1, "at least the expired row went");
+    assert.equal(db.store.getOp(session.id, "prompt", "op-ttl"), undefined, "op-ttl is gone");
+
+    /* and now the same op id is a fresh turn again */
+    const after = await sessions.sendPrompt(session.id, "hello", undefined, "op-ttl");
+    assert.equal(after.deduped, undefined);
+    assert.equal(rec.sent.length, 2);
+  } finally {
+    cleanup();
+  }
+});
+
+test("#216: the per-session cap evicts the OLDEST ops", async () => {
+  const { db, sessions, rec, session, cleanup } = await rig("op-cap");
+  try {
+    const cap = sessions.OP_CAP_PER_SESSION;
+    for (let i = 0; i < cap + 5; i++) {
+      await sessions.sendPrompt(session.id, `m${i}`, undefined, `op-${i}`);
+      /* distinct millisecond stamps so "oldest" is unambiguous */
+      await tick(2);
+    }
+    /* the first five are gone: replaying op-0 dispatches again */
+    const evicted = await sessions.sendPrompt(session.id, "replay", undefined, "op-0");
+    assert.equal(evicted.deduped, undefined, "op-0 was evicted");
+    /* the newest is still recorded */
+    const kept = await sessions.sendPrompt(session.id, "m", undefined, `op-${cap + 4}`);
+    assert.equal(kept.deduped, true, "the newest op is still deduped");
+    assert.ok(rec.sent.length > cap, "sends kept flowing");
+
+    /* and the table is actually bounded */
+    const rows = db.store.get<{ n: number }>(
+      `SELECT COUNT(*) AS n FROM op_ledger WHERE session_id = ? AND op_kind = 'prompt'`,
+      session.id,
+    );
+    assert.ok((rows?.n ?? 0) <= cap, `ledger bounded to ${cap}, saw ${rows?.n}`);
+  } finally {
+    cleanup();
+  }
+});
+
+test("#216: two concurrent retries of one op id produce one turn", async () => {
+  const { db, sessions, rec, session, cleanup } = await rig("op-race");
+  try {
+    /* the resume path awaits, so two callers can both pass the "unseen"
+       check — the ledger claim has to win that race */
+    await Promise.all([
+      sessions.sendPrompt(session.id, "race", undefined, "op-race"),
+      sessions.sendPrompt(session.id, "race", undefined, "op-race"),
+    ]);
+    assert.equal(rec.sent.length, 1, "only one dispatch");
+    assert.equal(userBubbles(db, session.id).length, 1, "only one bubble");
+  } finally {
+    cleanup();
+  }
+});
