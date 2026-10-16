@@ -10,7 +10,7 @@ import { CHAT_WIDTH_DEFAULT, chatHandleGeometry, commitChatWidth, dragDisplayWid
 import { filesFromTransfer, isFileDrag } from "@/lib/attach";
 import { composerAlign, composerTextareaHeight } from "@/lib/composerFit";
 import { composerActions } from "@/lib/composerActions";
-import { formatSessionRef } from "@/lib/sessionRef";
+import { formatSessionRef, formatSessionRefFull } from "@/lib/sessionRef";
 import { resumeCommand } from "@/lib/resumeCommand";
 import { RAIL_INSET, activeRailIndex, railIndexAtOffset, railMarkTop, railNaturalHeight, turnRailItems } from "@/lib/turnRail";
 import { createBrowserVoiceInput, appendTranscript, type BrowserVoiceController } from "@/lib/voice";
@@ -231,6 +231,25 @@ function ChatHeader({ id }: { id: string }) {
               <Icon name="clip" size={13} className="text-[var(--t-mute)]" />
               Copy reference
             </button>
+            {/* the full identity, copyable (issue #132): line 1 is the #13
+                one-liner, untouched, then every id we hold labeled and the
+                unshortened cwd (formatSessionRefFull's labels match the dump
+                below). The toast body is a one-line hint, not the block: the
+                toast renders bodies on a single line, and every other copy
+                affordance here does the same (audit B1) */}
+            <button
+              onClick={() => {
+                const fullText = formatSessionRefFull(meta, hosts);
+                void navigator.clipboard.writeText(fullText);
+                store.toast("ok", "Full details copied", formatSessionRef(meta, hosts));
+                setMenu(false);
+              }}
+              className="w-full flex items-center gap-2.5 px-3 h-8 text-left text-[12.5px] text-[var(--t-fg2)] hover:bg-white/[0.05]"
+              title="Copy every id this session holds (truss id, harness session, host id) plus the full, unshortened directory"
+            >
+              <Icon name="clip" size={13} className="text-[var(--t-mute)]" />
+              Copy full details
+            </button>
             {resumeCmd && (
               <button
                 onClick={() => {
@@ -247,8 +266,10 @@ function ChatHeader({ id }: { id: string }) {
             )}
             <div className="px-3 py-1.5 text-[11px] leading-relaxed">
               {/* the all-ids dump, displayed: every id we hold, labeled, full
-                  cwd — labels mirror issue #132's PROPOSED dump format; its
-                  copyable half ("Copy full details") is #132's own to land */}
+                  cwd — the labels are formatSessionRefFull's (issue #132).
+                  This is a superset of the copy block, not a transcript of
+                  it: it also shows the resume row, and it renders a cwd row
+                  even when cwd is empty where the copy omits one */}
               <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-2.5 gap-y-0.5 font-mono">
                 <dt className="text-[var(--t-dim)]">truss</dt>
                 <dd className="text-[var(--t-mute)] break-all">{meta.id}</dd>
