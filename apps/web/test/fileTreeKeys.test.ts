@@ -110,4 +110,7 @@ test("read-through: FilesPanel uses the tested helper and ships no ref cleanup",
   assert.doesNotMatch(refBody, /return \(\) => \{ cancelAnimationFrame/, "no cleanup return in the focus ref");
   assert.match(refBody, /window\.setTimeout\(grab, 400\)/, "the retries are still scheduled");
   assert.match(panel, /ref=\{treeRefCb\}/, "the callback ref is wired to the container");
+  /* audit B2: a leftover treeRef was written but never read — the callback
+     already holds the element, so the ref must not come back */
+  assert.doesNotMatch(panel, /const treeRef = useRef/, "no write-only ref left behind");
 });

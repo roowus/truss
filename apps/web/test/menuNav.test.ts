@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { isOpenKey, nextIndex, typeaheadIndex } from "../src/lib/listKeys";
+import { menuKeyIntent, triggerIntent, typeaheadBuffer } from "../src/lib/useMenuCursor";
 
 /* The app's own popup menus (the workspace ⋯ menu, the running-agents
    menu) had no keyboard handling at all before issue #227. Both drive the
@@ -120,4 +121,49 @@ test("the typeahead jump and the wrap order agree with the rendered labels", () 
      never land on a label the user cannot see */
   assert.match(strip, /const menuLabels = useMemo\(\(\) => menuItems\.map/, "labels come from the rows");
   assert.equal(typeaheadIndex(MENU, "a", -1), 2, "and the jump lands on Archive workspace, row 2");
+});
+
+/* ---- the hook's decisions, tested behaviorally (issue #227, audit B3) --
+
+   menuNav.test.ts used to be source greps plus pure-model calls, so the
+   hook's own logic could break while the suite stayed green — which is how
+   the three menu regressions fixed en route shipped. The hook now calls
+   these pure functions, so the open -> focus -> navigate path is covered. */
+
+test("triggerIntent: a closed trigger opens on Enter/Space/arrows, never Tab", () => {
+  for (const k of ["Enter", " ", "ArrowDown", "ArrowUp"]) {
+    assert.equal(triggerIntent(k, false), "open", `${JSON.stringify(k)} opens the menu`);
+  }
+  assert.equal(triggerIntent("Tab", false), "ignore", "Tab is never hijacked");
+  assert.equal(triggerIntent("a", false), "ignore", "typing on a closed trigger does nothing");
+});
+
+test("triggerIntent: an open menu closes on Esc and ignores the open keys", () => {
+  assert.equal(triggerIntent("Escape", true), "close");
+  assert.equal(triggerIntent("Enter", true), "ignore", "Enter activates a row, it does not re-open");
+  assert.equal(triggerIntent("ArrowDown", true), "ignore", "the container handles arrows once open");
+});
+
+test("menuKeyIntent: Esc closes, Enter/Space activate, arrows wrap, letters typeahead", () => {
+  assert.deepEqual(menuKeyIntent({ key: "Escape" }), { kind: "close" });
+  assert.deepEqual(menuKeyIntent({ key: "Enter" }), { kind: "activate" });
+  assert.deepEqual(menuKeyIntent({ key: " " }), { kind: "activate" });
+  assert.deepEqual(menuKeyIntent({ key: "ArrowDown" }), { kind: "move", wrap: true });
+  assert.deepEqual(menuKeyIntent({ key: "Home" }), { kind: "move", wrap: true });
+  assert.deepEqual(menuKeyIntent({ key: "d" }), { kind: "typeahead" });
+  assert.deepEqual(menuKeyIntent({ key: "Tab" }), { kind: "ignore" }, "Tab leaves the menu");
+});
+
+test("menuKeyIntent: modifier chords are never typeahead", () => {
+  for (const mod of ["metaKey", "ctrlKey", "altKey"] as const) {
+    assert.deepEqual(menuKeyIntent({ key: "d", [mod]: true }), { kind: "ignore" }, `${mod}+d must not jump the list`);
+  }
+  assert.deepEqual(menuKeyIntent({ key: " " }), { kind: "activate" }, "plain space still activates");
+});
+
+test("typeaheadBuffer: letters accumulate, then reset after a pause", () => {
+  assert.equal(typeaheadBuffer("", 0, "a", 1000), "a", "first character");
+  assert.equal(typeaheadBuffer("a", 1000, "r", 1200), "ar", "still within the window");
+  assert.equal(typeaheadBuffer("ar", 1000, "c", 1800), "c", "a pause starts a fresh search");
+  assert.equal(typeaheadBuffer("ar", 1000, "c", 1700), "arc", "the boundary is inclusive of the gap");
 });

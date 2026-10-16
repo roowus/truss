@@ -1,6 +1,45 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { isNavKey, isOpenKey, nextIndex, typeaheadIndex } from "./listKeys";
 
+
+/* ---- the hook's decisions, as pure functions -------------------------
+
+   These are what the hook actually calls, so the menu's key handling is
+   covered by real tests rather than only by source greps: the same remedy
+   the Files tree got with shouldTakeTreeFocus. */
+
+/** What a key on a CLOSED menu trigger means. */
+export type TriggerIntent = "open" | "close" | "ignore";
+
+export function triggerIntent(key: string, open: boolean): TriggerIntent {
+  if (open) return key === "Escape" ? "close" : "ignore";
+  return isOpenKey(key) ? "open" : "ignore";
+}
+
+/** What a key inside an OPEN menu means. */
+export type MenuKeyIntent =
+  | { kind: "close" }
+  | { kind: "activate" }
+  | { kind: "move"; wrap: true }
+  | { kind: "typeahead" }
+  | { kind: "ignore" };
+
+/** `count` is only needed to stay honest about disabled/empty menus. */
+export function menuKeyIntent(e: { key: string; metaKey?: boolean; ctrlKey?: boolean; altKey?: boolean }): MenuKeyIntent {
+  if (e.key === "Escape") return { kind: "close" };
+  if (e.key === "Enter" || e.key === " ") return { kind: "activate" };
+  if (isNavKey(e.key)) return { kind: "move", wrap: true };
+  if (e.key.length === 1 && /\S/.test(e.key) && !e.metaKey && !e.ctrlKey && !e.altKey) return { kind: "typeahead" };
+  return { kind: "ignore" };
+}
+
+/** Fold a printable character into the typeahead buffer, resetting it when
+ *  the user pauses — so "ar" reaches "Archive workspace" but a later "d"
+ *  starts a fresh search. */
+export function typeaheadBuffer(prev: string, prevAt: number, key: string, now: number, gapMs = 700): string {
+  return now - prevAt > gapMs ? key : prev + key;
+}
+
 /**
  * Roving focus for the app's own popup menus (issue #227).
  *
@@ -62,16 +101,13 @@ export function useMenuCursor(
 
   const onTriggerKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
-      if (opts.open) {
-        if (e.key === "Escape") {
-          e.preventDefault();
-          e.stopPropagation();
-          close();
-        }
-        return;
-      }
-      if (isOpenKey(e.key)) {
-        e.preventDefault();
+      const intent = triggerIntent(e.key, opts.open);
+      if (intent === "ignore") return;
+      e.preventDefault();
+      if (intent === "close") {
+        e.stopPropagation();
+        close();
+      } else {
         opts.onOpen();
       }
     },
@@ -80,31 +116,29 @@ export function useMenuCursor(
 
   const onMenuKeyDown = useCallback(
     (e: React.KeyboardEvent, activate: (i: number) => void) => {
-      if (e.key === "Escape") {
-        e.preventDefault();
-        e.stopPropagation();
-        close();
-        return;
-      }
-      if (e.key === "Enter" || e.key === " ") {
-        e.preventDefault();
-        if (index >= 0) activate(index);
-        return;
-      }
-      if (isNavKey(e.key)) {
-        e.preventDefault();
-        /* menus wrap — arrowing off the end comes back to the start */
-        setIndex((i) => nextIndex(i, count, e.key, { wrap: true }));
-        return;
-      }
-      /* typeahead: single printable characters, never modifier chords */
-      if (e.key.length === 1 && /\S/.test(e.key) && !e.metaKey && !e.ctrlKey && !e.altKey) {
-        e.preventDefault();
-        const now = Date.now();
-        typed.current = now - typedAt.current > 700 ? e.key : typed.current + e.key;
-        typedAt.current = now;
-        const hit = typeaheadIndex(opts.labels, typed.current, index);
-        if (hit >= 0) setIndex(hit);
+      const intent = menuKeyIntent(e);
+      if (intent.kind === "ignore") return;
+      e.preventDefault();
+      switch (intent.kind) {
+        case "close":
+          e.stopPropagation();
+          close();
+          return;
+        case "activate":
+          if (index >= 0) activate(index);
+          return;
+        case "move":
+          /* menus wrap — arrowing off the end comes back to the start */
+          setIndex((i) => nextIndex(i, count, e.key, { wrap: intent.wrap }));
+          return;
+        case "typeahead": {
+          const now = Date.now();
+          typed.current = typeaheadBuffer(typed.current, typedAt.current, e.key, now);
+          typedAt.current = now;
+          const hit = typeaheadIndex(opts.labels, typed.current, index);
+          if (hit >= 0) setIndex(hit);
+          return;
+        }
       }
     },
     [index, count, opts.labels, close],

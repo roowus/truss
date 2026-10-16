@@ -161,7 +161,6 @@ export function FilesPanel({ params }: IDockviewPanelProps<P>) {
      keypress. Enter is what opens. The index math lives in
      src/lib/fileTreeKeys.ts so it is testable without a DOM. */
   const [cursor, setCursor] = useState(-1);
-  const treeRef = useRef<HTMLDivElement>(null);
   /* rows vanish under the cursor when a folder collapses or the tree
      reloads; clamp rather than leave the cursor pointing at nothing */
   const cursorIdx = clampCursor(cursor, visible.length);
@@ -187,7 +186,6 @@ export function FilesPanel({ params }: IDockviewPanelProps<P>) {
      attaching the panel after them. Focusing on the ref callback covers
      every one of those mounts and never fights a later steal. */
   const treeRefCb = useCallback((el: HTMLDivElement | null) => {
-    treeRef.current = el;
     if (!el) return;
     /* take focus only when nothing else holds it, so a dialog or an inline
        edit is never robbed mid-typing. Two frames of retries because the
