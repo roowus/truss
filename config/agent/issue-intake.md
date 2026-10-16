@@ -53,6 +53,13 @@ yourself — an issue that just rewords the developer's sentence is a failure.
    - Apply the labels: the `area:*` you chose, the `priority:*`, the
      `complexity:*`, `qa-first` when warranted, and `bug` or
      `enhancement`/`new feature` as classified.
+   - Priority and complexity are INDEPENDENT judgments: a one-line fix for a
+     data-loss bug is `complexity: trivial` + `priority: critical`; a week of
+     work on a cosmetic feature is `complexity: high` + `priority: low`. Never
+     let one imply the other. Both are corrected later by whoever does the
+     work (they own the labels once they have read the code), so label
+     honestly rather than defensively — a wrong label that gets fixed with
+     evidence beats a hedged one nobody can act on.
    - **End the body with this exact JSON block** (fenced `json`, last thing
      in the issue). It is a hard contract: the cron and the workers parse it,
      and an issue missing it is malformed. Do not add keys, do not omit keys:

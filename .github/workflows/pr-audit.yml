@@ -372,6 +372,20 @@ jobs:
             design gate: ran | should have run (<what was decided unilaterally>)
             | not required`.
 
+            PRIORITY — the issue also carries a `priority: critical|high|
+            medium|low` label. The work is often where the true severity shows
+            up, so check it against what the diff actually does: a "low"
+            polish item that turns out to touch stored data is understated; a
+            "critical" whose blast radius is an unreachable path is
+            overstated. Judge the ACTUAL consequence for someone using truss
+            today — data loss, security, a broken daily flow outrank a rough
+            edge. Only recommend a change you can point at in the diff.
+            Verdict line: `Priority: <label on the issue> — appropriate |
+            understated (<actual> — <consequence in this diff>) | overstated
+            (<actual> — <why the consequence does not land>)`. State
+            `(no linked issue — judged from commits)` when the issue's priority
+            was not visible to you.
+
             TEST COVERAGE — three checks against the diff and its tests:
             (a) Path coverage — are the changed code paths covered by tests in
             this PR or existing ones? Name the specific uncovered paths.

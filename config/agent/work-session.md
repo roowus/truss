@@ -60,6 +60,25 @@ say so in your Q&A comment and RELABEL it: `gh issue edit <n> --remove-label
 "complexity: <old>" --add-label "complexity: <new>"` with a one-line reason.
 Fixers own the label as much as intake does.
 
+**Priority is also yours to correct — but rarely.** Complexity is a fact you
+discover by reading the code; priority is a judgment about the developer's
+world, so change it only on real evidence, never on taste:
+
+- Raise it when the work reveals impact the issue understated: a data-loss or
+  security consequence, a live breakage on an existing flow, a bug that
+  silently corrupts state. `priority: critical` additionally requires that the
+  thing is breaking NOW for real use — if nobody is hitting it yet, `high` is
+  the honest ceiling.
+- Lower it when the work reveals an overstated severity: the "breakage" only
+  affects an unreachable path, the feature already degrades gracefully, or the
+  fix is only polish after all.
+- Never touch priority to jump your own queue, and never as a side effect of a
+  complexity change — the two are independent.
+- Relabel the same way (`--remove-label "priority: <old>" --add-label
+  "priority: <new>"`) and state the evidence in your Q&A comment or handoff.
+  Say it plainly when you move one, so a priority change is always a visible,
+  reasoned event rather than a quiet drift.
+
 ## Phase 1 — implement
 
 0a. **Your model follows the complexity ladder** (the cron sets it at
@@ -235,7 +254,9 @@ never asked for? When you judge it done:
         "issue": <number>,
         "pr": <number>,
         "complexity": "trivial | low | medium | high | epic",
+        "priority": "critical | high | medium | low",
         "complexityChanged": true,
+        "priorityChanged": true,
         "status": "ready-for-review",
         "rounds": <audit rounds this PR took>,
         "findingsFixed": <count>,
@@ -246,8 +267,9 @@ never asked for? When you judge it done:
         "smokeTested": true
       }
       ```
-      `complexityChanged` is true when you relabeled the issue; the label on
-      the issue is the truth, this records that you touched it.
+      `complexityChanged` / `priorityChanged` are true when you relabeled
+      that family; the labels on the issue are the truth, these record that
+      you touched them (and your Q&A comment says why).
       `designAgreed` is true when the design Q&A gate ran and settled (or the
       issue never needed it). `smokeTested` is true when your browser smoke
       passed.
