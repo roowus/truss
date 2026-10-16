@@ -795,3 +795,97 @@ test("a seq-0 control frame does not regress lastSeq or duplicate buffered frame
   assert.equal(text, "hello world", `buffered frames the snapshot already covered must stay deduped (got ${JSON.stringify(text)})`);
   assert.deepEqual(view.lag, { depth: 2, bytes: 20 }, "while the control frame's own effect still applies");
 });
+
+/* issue #218 audit round 6, B1 — a session deleted during the fetch.
+   `rehydrate` read the view AFTER its `getEvents` await, so a `session.deleted`
+   landing mid-flight left `prev` undefined, threw into the generic catch, and
+   fired a bogus "Rehydration failed" toast (and would have resurrected the
+   deleted view). */
+test("rehydrate survives a session deleted while its fetch is in flight (round 6, B1)", async () => {
+  const { store: s } = await import("../src/lib/store");
+
+  /* the resolver is captured through an object so TS's control-flow analysis
+     does not narrow `release` to null at the call site below */
+  const gateCtl: { release?: () => void } = {};
+  const gate = new Promise<void>((r) => {
+    gateCtl.release = r;
+  });
+  (s as unknown as { state: { backend: unknown } }).state.backend = {
+    /* the fetch parks until the test deletes the session underneath it */
+    getEvents: async () => {
+      await gate;
+      return { events: [] };
+    },
+    connectEvents: () => () => {},
+    sessions: async () => ({ sessions: [] }),
+  } as never;
+
+  s.set((st) => ({
+    ...st,
+    sessions: { sGone: { id: "sGone", title: "t" } } as never,
+    views: { sGone: { ...(st.views["sGone"] ?? {}), hydration: "ready" } } as never,
+  }));
+
+  const pending = (s as unknown as { rehydrate: (id: string) => Promise<void> }).rehydrate("sGone");
+  /* the session is deleted on another device while getEvents is in flight */
+  s.set((st) => {
+    const views = { ...st.views };
+    delete views["sGone"];
+    return { ...st, views };
+  });
+  gateCtl.release?.();
+  await pending;
+
+  assert.equal(s.state.views["sGone"], undefined, "a deleted session must NOT be resurrected by an in-flight repair");
+  /* The observable symptom: without the guard, `prev.hydration` throws into the
+     generic catch and fires a bogus "Rehydration failed" toast. (The view was
+     never literally resurrected — the throw happens before the write — so the
+     TOAST is the thing to pin, and pinning the view alone would be a test that
+     passes for the wrong reason.) */
+  const errors = s.state.toasts.filter((t) => t.kind === "error");
+  assert.deepEqual(
+    errors,
+    [],
+    `a session deleted mid-fetch must not raise a spurious error toast (got ${JSON.stringify(errors.map((t) => t.title))})`,
+  );
+});
+
+/* issue #218 audit round 6, B2 — the tunnel-health notice must survive the
+   repair. `ChatPanel` renders `stateDetail`, and the rebuild derives it from
+   the log's `session.state` frames, which clobbered the live `session.lag`
+   string. Since a lag event fires once per EPISODE, an ongoing episode showed
+   no notice until it recovered and a new one started. */
+test("a resync preserves the rendered tunnel-health notice (round 6, B2)", async () => {
+  const { store: s, emptyView } = await import("../src/lib/store");
+
+  const log = [{ seq: 1, ev: { type: "msg.start", sessionId: "sNotice", messageId: "m1", role: "assistant", at: 1000 } }];
+  (s as unknown as { state: { backend: unknown } }).state.backend = {
+    getEvents: async () => ({ events: log }),
+    connectEvents: () => () => {},
+    sessions: async () => ({ sessions: [] }),
+  } as never;
+  s.set((st) => ({ ...st, sessions: { sNotice: { id: "sNotice", title: "t" } } as never, views: {} }));
+
+  const storeAny = s as unknown as {
+    applyFrames: (v: unknown, f: unknown, replay: boolean) => ReturnType<typeof emptyView>;
+  };
+  let view = storeAny.applyFrames(emptyView(), log, false);
+  view = storeAny.applyFrames(
+    view,
+    [{ seq: 0, ev: { type: "session.lag", sessionId: "sNotice", lagging: true, depth: 4, bytes: 50 } }],
+    false,
+  );
+  s.set((st) => ({ ...st, views: { ...st.views, sNotice: { ...view, hydration: "ready" as const } } }));
+
+  const before = s.state.views["sNotice"].stateDetail;
+  assert.match(String(before), /lagging/i, "the notice is rendered before the resync");
+
+  await (s as unknown as { rehydrate: (id: string) => Promise<void> }).rehydrate("sNotice");
+
+  /* ChatPanel reads exactly this field */
+  assert.match(
+    String(s.state.views["sNotice"].stateDetail),
+    /lagging/i,
+    "the repair must not clear the notice — a lag event fires once per episode, so it would not come back until the next one",
+  );
+});

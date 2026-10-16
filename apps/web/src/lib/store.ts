@@ -487,9 +487,23 @@ class Store {
          would flash back to a spinner) and `lag` (the tunnel health notice,
          which is live state with no log row and would otherwise be lost by the
          very reconnect that triggers this). */
+      /* Re-read AFTER the await (audit round 6, B1): the session can be
+         deleted on another device while getEvents is in flight, in which case
+         `session.deleted` has already removed `views[id]` and there is nothing
+         to repair — writing a rebuilt view here would resurrect a session the
+         user just deleted, and dereferencing the missing view threw a
+         misleading "Rehydration failed" toast. */
       const prev = this.state.views[id];
+      if (!prev) return;
       const rebuilt = this.applyFrames(emptyView(), events, true);
-      const view = { ...rebuilt, hydration: prev.hydration, lag: prev.lag ?? null };
+      /* `stateDetail` is carried across too (audit round 6, B2). It is REBUILT
+         from the log's `session.state` frames, so replaying clobbers the
+         tunnel-health string the live `session.lag` reducer set (`:229-233`).
+         Since a lag event fires once per episode (design constraint 2), an
+         ongoing episode would show no notice again until it recovered and a
+         NEW episode started. Carrying it preserves the notice across the very
+         resync that triggers this repair. */
+      const view = { ...rebuilt, hydration: prev.hydration, lag: prev.lag ?? null, stateDetail: prev.stateDetail };
       this.set((s) => ({ views: { ...s.views, [id]: view } }));
     } catch (e: any) {
       this.toast("error", "Rehydration failed", e.message);
