@@ -567,3 +567,61 @@ test("a wedged session.lag reports the close, not a plain recovery", () => {
   assert.equal(v.lag, null, "no longer lagging — the link is gone");
   assert.match(String(v.stateDetail), /wedged/i, "the detail names the wedge, not a silent recovery");
 });
+
+/* issue #218 audit round 2, B3 — the drop-recovery property.
+
+   Dropped tunnel frames are the OLDEST in the queue (lowest rowids) while the
+   frames that survive and broadcast are the NEWEST. So after a successful
+   drain the view's `lastSeq` is a rowid ABOVE every dropped frame, and the
+   `seq <= lastSeq` dedupe skips them again on every resync — the gap was only
+   repaired by a full page reload, which makes the PR's stated recovery
+   property false for the exact scenario the feature targets.
+
+   The view below is what REAL event flow produces after a drop: the dropped
+   frames never arrived at all, so they are missing from `items` AND `msgs`
+   (and `lastSeq` has still advanced past them, because the newer frames that
+   DID arrive carry higher rowids). */
+test("a resync after a dropped-frame gap repairs the transcript (B3)", async () => {
+  const { store: s, emptyView } = await import("../src/lib/store");
+
+  /* six frames; 3 and 4 were dropped from the live queue */
+  const allFrames = [1, 2, 3, 4, 5, 6].map((seq) => ({
+    seq,
+    ev: { type: "msg.start", sessionId: "sB3", messageId: `m${seq}`, role: "assistant", at: 1000 + seq },
+  }));
+  const dropped = new Set([3, 4]);
+  const wire = allFrames.filter((f) => !dropped.has(f.seq));
+
+  /* the log is complete; the wire was not */
+  const fakeBackend = {
+    getEvents: async () => ({ events: allFrames }),
+    connectEvents: () => () => {},
+    sessions: async () => ({ sessions: [] }),
+  } as never;
+
+  (s as unknown as { state: { backend: unknown } }).state.backend = fakeBackend;
+  s.set((st) => ({ ...st, sessions: { sB3: { id: "sB3", title: "t" } } as never, views: {} }));
+
+  /* build the view from the DELIVERED frames only — exactly what the browser
+     had after the live queue dropped 3 and 4 */
+  const storeAny = s as unknown as {
+    applyFrames: (v: unknown, f: unknown, replay: boolean) => ReturnType<typeof emptyView>;
+  };
+  let view = emptyView();
+  view = storeAny.applyFrames(view, wire, false);
+  s.set((st) => ({ ...st, views: { ...st.views, sB3: { ...view, hydration: "ready" as const } } }));
+
+  const before = s.state.views["sB3"];
+  assert.equal(before.lastSeq, 6, "lastSeq advanced past the dropped rowids (3 and 4) — the precondition for the bug");
+  assert.equal(before.items.length, 4, "four of six frames arrived live");
+
+  /* reconnect -> resync -> rehydrate: the replay must refill the gap */
+  await (s as unknown as { rehydrate: (id: string) => Promise<void> }).rehydrate("sB3");
+  const after = s.state.views["sB3"];
+  assert.equal(
+    after.items.length,
+    6,
+    `resync must repair the dropped-frame gap (got ${after.items.length} of 6) — otherwise the transcript stays incomplete until a manual reload`,
+  );
+  assert.equal(wire.length, 4, "and the wire really did omit two frames");
+});

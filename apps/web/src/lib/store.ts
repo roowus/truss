@@ -462,7 +462,19 @@ class Store {
     if (!v || v.hydration !== "ready") return this.ensureHydrated(id);
     try {
       const { events } = await this.be.getEvents(id);
-      const view = this.applyFrames(this.state.views[id], events, true);
+      /* REPAIR, not catch-up (issue #218 audit round 2, B3). A tunnel queue
+         that dropped frames loses the OLDEST ones (lowest rowids) while the
+         survivors that broadcast are the NEWEST — so after a drain the view's
+         `lastSeq` sits ABOVE every dropped frame, and the `seq <= lastSeq`
+         dedupe would skip them again on every reconnect. That left the
+         transcript permanently short until a full page reload, which is the
+         exact scenario this feature exists for.
+         Resetting `lastSeq` here makes the replay re-apply the whole log and
+         refill the gap. It is safe because replay frames are applied with
+         `replay = true` (they never mutate session state) and `reduce` is
+         idempotent for transcript frames — the dedupe exists to stop LIVE
+         frames from double-applying, not to stop a repair. */
+      const view = this.applyFrames({ ...this.state.views[id], lastSeq: 0 }, events, true);
       this.set((s) => ({ views: { ...s.views, [id]: view } }));
     } catch (e: any) {
       this.toast("error", "Rehydration failed", e.message);
