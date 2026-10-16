@@ -481,11 +481,19 @@ export async function sendPrompt(
   // the user bubble is a local echo: instant in UI, persisted like everything else
   const messageId = mintId("u");
   const atts = attachments?.length ? attachments : undefined;
-  /* claim the op BEFORE the bubble is echoed: two concurrent retries of one
-     op id would otherwise both read "unseen" and both dispatch — the ledger
-     write has to win the race the sink cannot (sink is sync, the resume
-     above is not, so both callers can reach this line) */
-  if (opId) store.putOp(sessionId, "prompt", opId, { messageId }, OP_CAP_PER_SESSION);
+  /* Claim the op AFTER the possible resume await, and claim it ATOMICALLY.
+     The check at the top of this function runs before `await
+     resumeLiveSession`, so two concurrent retries of one op id into a dead
+     session both pass it — and a plain upsert would let both "claim"
+     afterwards, so both would dispatch (two turns, two bubbles). claimOp is
+     insert-if-absent, so exactly one caller wins and the loser replays. */
+  if (opId) {
+    const claim = store.claimOp(sessionId, "prompt", opId, { messageId }, OP_CAP_PER_SESSION);
+    if (!claim.won) {
+      const prev = claim.result as { messageId?: string } | undefined;
+      return { ok: true, clientOpId: opId, messageId: prev?.messageId, deduped: true };
+    }
+  }
   sink({ type: "msg.start", sessionId, messageId, role: "user", at: Date.now(), ...(atts ? { attachments: atts } : {}) });
   sink({ type: "msg.chunk", sessionId, messageId, text });
   sink({ type: "msg.done", sessionId, messageId });
@@ -551,17 +559,22 @@ const baseOf = (harness: string) => harness.split("@")[0];
  */
 export function interrupt(sessionId: string, clientOpId?: string): OpAck {
   const opId = normalizeOpId(clientOpId);
-  if (opId) {
-    if (store.getOp(sessionId, "interrupt", opId) !== undefined) return { ok: true, clientOpId: opId, deduped: true };
-    store.putOp(sessionId, "interrupt", opId, { ok: true }, OP_CAP_PER_SESSION);
-  }
   const s = live.get(sessionId);
-  if (!s) {
-    /* nothing was interrupted — do not burn the op id on a refusal */
-    if (opId) store.forgetOp(sessionId, "interrupt", opId);
-    throw new Error(`session not live: ${sessionId}`);
+  /* refuse BEFORE claiming: nothing was interrupted, so the op id must stay
+     free for the client's retry once the session is live again */
+  if (!s) throw new Error(`session not live: ${sessionId}`);
+  if (opId && !store.claimOp(sessionId, "interrupt", opId, { ok: true }, OP_CAP_PER_SESSION).won) {
+    return { ok: true, clientOpId: opId, deduped: true };
   }
-  s.adapter.interrupt(s.handle);
+  try {
+    s.adapter.interrupt(s.handle);
+  } catch (err) {
+    /* the adapter refused, so the interrupt did not happen — release the
+       claim or the queued retry would come back "deduped" and the real
+       interrupt would never run (matches sendPrompt's release on failure) */
+    if (opId) store.forgetOp(sessionId, "interrupt", opId);
+    throw err;
+  }
   return { ok: true, clientOpId: opId };
 }
 
@@ -650,13 +663,20 @@ export async function switchModel(
  */
 export function resolvePermission(sessionId: string, requestId: string, choice: string, clientOpId?: string): OpAck {
   const opId = normalizeOpId(clientOpId);
-  if (opId) {
-    if (store.getOp(sessionId, "perm", opId) !== undefined) return { ok: true, clientOpId: opId, deduped: true };
-  }
   const s = live.get(sessionId);
+  /* refuse BEFORE claiming — same reason as interrupt */
   if (!s?.adapter.resolve) throw new Error(`session ${sessionId} has no permission host`);
-  if (opId) store.putOp(sessionId, "perm", opId, { ok: true }, OP_CAP_PER_SESSION);
-  s.adapter.resolve(s.handle, requestId, choice);
+  if (opId && !store.claimOp(sessionId, "perm", opId, { ok: true }, OP_CAP_PER_SESSION).won) {
+    return { ok: true, clientOpId: opId, deduped: true };
+  }
+  try {
+    s.adapter.resolve(s.handle, requestId, choice);
+  } catch (err) {
+    /* the answer never reached the harness — release the claim so the queued
+       retry really resolves the card instead of replaying a phantom success */
+    if (opId) store.forgetOp(sessionId, "perm", opId);
+    throw err;
+  }
   sink({ type: "perm.resolve", sessionId, requestId, choice });
   return { ok: true, clientOpId: opId };
 }

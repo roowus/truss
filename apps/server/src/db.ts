@@ -336,6 +336,36 @@ export const store = {
     }
   },
 
+  /**
+   * Claim an op atomically: INSERT-if-absent, so exactly one of two
+   * concurrent callers with the same op id wins. Returns the recorded result
+   * when the op was ALREADY there (`won: false`), which is the caller's cue
+   * to replay instead of dispatching.
+   *
+   * `putOp`'s upsert is deliberately not used for claiming: it always
+   * succeeds, so two racing retries would both believe they claimed the op.
+   */
+  claimOp(
+    sessionId: string,
+    kind: string,
+    clientOpId: string,
+    result: unknown,
+    evictOver: number,
+  ): { won: boolean; result?: unknown } {
+    const info = db
+      .prepare(
+        `INSERT INTO op_ledger (session_id, op_kind, client_op_id, result, at)
+         VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(session_id, op_kind, client_op_id) DO NOTHING`,
+      )
+      .run(sessionId, kind, clientOpId, JSON.stringify(result ?? {}), Date.now());
+    if (info.changes === 0) {
+      return { won: false, result: this.getOp(sessionId, kind, clientOpId) };
+    }
+    this.evictOps(sessionId, evictOver);
+    return { won: true };
+  },
+
   /** record an op's result. `evictOver` bounds the per-session rows: the
      oldest beyond the cap go, so a client that never retires its op ids
      cannot grow this table without limit. */
@@ -345,6 +375,11 @@ export const store = {
        VALUES (?, ?, ?, ?, ?)
        ON CONFLICT(session_id, op_kind, client_op_id) DO UPDATE SET result = excluded.result, at = excluded.at`,
     ).run(sessionId, kind, clientOpId, JSON.stringify(result ?? {}), Date.now());
+    this.evictOps(sessionId, evictOver);
+  },
+
+  /** enforce the per-session cap, oldest first */
+  evictOps(sessionId: string, evictOver: number) {
     /* tie-break on rowid: `at` is millisecond-resolution, so a burst of sends
        in the same millisecond would otherwise evict in arbitrary order */
     db.prepare(

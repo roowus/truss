@@ -259,11 +259,22 @@ class Store {
   private buffers: Record<string, Frame[]> = {};
   private refreshTimer: number | undefined;
   private toastN = 0;
+
   private unsubBus?: () => void;
   /* send outbox (issue #216): op ids awaiting an ack, kept OUT of AppState —
      it is transport bookkeeping, not render state, so putting it in the
      render path would re-render every subscriber on each send */
   private outbox: OutboxState = emptyOutbox;
+
+  /**
+   * Read the unacked ops. Exists so a test can assert the wiring that
+   * audit B1 found missing — that a prompt really lands in the outbox — which
+   * is otherwise invisible from outside the class. Read-only: the queue is
+   * still driven only by op()/replayOutbox().
+   */
+  pendingOps(): readonly { opId: string; kind: OpKind; sessionId: string }[] {
+    return this.outbox.entries;
+  }
 
   subscribe = (fn: () => void) => {
     this.subs.add(fn);
@@ -632,34 +643,36 @@ class Store {
    * Fire one mutating op with an idempotency key and retire it on ack.
    *
    * The entry is queued BEFORE the request, so a response lost after the
-   * server acted still leaves the op id on the outbox for the reconnect
+   * server acted still leaves the op id in the outbox for the reconnect
    * replay (that is the whole point — ack-arrival is not the same fact as
-   * work-happened). A reply, however, retires it: the HTTP 200 is the ack.
+   * work-happened). A reply retires it: the HTTP 200 is the ack.
    *
-   * `allowQueue` is false for a first send from the composer: a blind network
-   * failure must surface to the user as it always did, not silently become a
-   * background retry. The reconnect replay is the only automatic retry.
+   * `rethrow` controls only whether the FIRST-attempt failure is passed to
+   * the caller so the composer can show it. It does NOT decide whether the
+   * op is queued: queueing is what makes the lost-ack case recoverable, and
+   * dropping the entry on failure would take the prompt ledger out of reach
+   * of the one path that needs it.
    */
   private async op<K extends OpKind>(
     kind: K,
     sessionId: string,
     body: Record<string, unknown>,
     fire: (opId: string) => Promise<{ ok: boolean; deduped?: boolean }>,
-    opts: { allowQueue: boolean; replayed?: boolean; opId?: string } = { allowQueue: true },
-  ): Promise<{ ok: boolean; deduped?: boolean; opId: string; queued: boolean }> {
+    opts: { opId?: string; replayed?: boolean } = {},
+  ): Promise<{ ok: boolean; deduped?: boolean; opId: string }> {
     const opId = opts.opId ?? newOpId();
-    if (opts.allowQueue) {
-      this.outbox = enqueue(this.outbox, { opId, kind, sessionId, body, replayed: opts.replayed });
-    }
+    this.outbox = enqueue(this.outbox, { opId, kind, sessionId, body, replayed: opts.replayed });
     try {
       const res = await fire(opId);
       this.outbox = outboxRetire(this.outbox, opId);
-      return { ok: res.ok !== false, deduped: res.deduped, opId, queued: false };
+      return { ok: res.ok !== false, deduped: res.deduped, opId };
     } catch (err) {
-      /* the ack never arrived. When we queued it, leave the entry for the
-         replay; when we did not (a composer send), drop it — the caller
-         shows the error and the user decides. */
-      if (!opts.allowQueue) this.outbox = outboxRetire(this.outbox, opId);
+      /* The ack never arrived. The entry STAYS queued: the server may well
+         have done the work (that is the at-least-once case this exists for),
+         so the reconnect replay resends this same op id and the ledger
+         returns the original result instead of a second turn. The caller
+         still sees the rejection, so a genuinely dead server is reported to
+         the user rather than silently swallowed — see prompt(). */
       throw err;
     }
   }
@@ -677,6 +690,7 @@ class Store {
     this.outbox = state;
     if (!replay.length) return;
     let recovered = 0;
+    let failed = 0;
     for (const entry of replay) {
       try {
         const res = await this.op(
@@ -684,20 +698,26 @@ class Store {
           entry.sessionId,
           entry.body,
           (opId) => this.fireOp(entry.kind, entry.sessionId, entry.body, opId),
-          { allowQueue: false, opId: entry.opId },
+          { replayed: true, opId: entry.opId },
         );
         recovered++;
         /* the send landed while we were offline — say so in the transcript,
            so a later reader never mistakes it for a duplicate bubble */
         if (res.ok) this.noteRetried(entry);
       } catch {
-        /* still failing: leave it retired rather than looping here — the
-           entries already left the queue in `pending`, and the next
-           reconnect re-derives what is still unacked from the server */
+        /* still failing. `op` left the entry queued (it retires only on an
+           ack), so it stays for the NEXT reconnect instead of vanishing —
+           the only thing this catch does is keep one bad entry from
+           abandoning the rest of the queue. The age cap in outbox.ts is what
+           eventually stops an op that can never land. */
+        failed++;
       }
     }
     if (recovered) {
       this.toast("ok", "Resent", `${recovered} message${recovered === 1 ? "" : "s"} delivered after reconnect`);
+    }
+    if (failed) {
+      this.toast("error", "Still offline", `${failed} send${failed === 1 ? "" : "s"} could not be delivered — will retry on the next reconnect`);
     }
   }
 
@@ -738,11 +758,14 @@ class Store {
   }
 
   async prompt(id: string, text: string, attachments?: import("./proto").PromptAttachment[]) {
-    /* a first send is NOT queued: a dead server must report itself, exactly
-       as it did before this change. Only the reconnect replay retries. */
-    await this.op("prompt", id, { text, attachments }, (opId) => this.be.prompt(id, text, attachments, opId), {
-      allowQueue: false,
-    });
+    /* The prompt IS queued, then the failure is rethrown: queueing is what
+       lets a lost ack be replayed with the same op id on reconnect (the
+       duplicate this feature exists to stop), while rethrowing keeps the old
+       behavior of actually telling the user the send failed. Queued is not
+       the same as auto-retried — nothing is resent until the socket has been
+       down and come back, and the user's next manual send is a NEW op id
+       only because they typed a new message. */
+    await this.op("prompt", id, { text, attachments }, (opId) => this.be.prompt(id, text, attachments, opId));
   }
   /** upload a File into the session workspace; returns the attachable ref */
   async upload(id: string, file: File): Promise<import("./proto").PromptAttachment> {

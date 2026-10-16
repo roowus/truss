@@ -16,6 +16,16 @@ interface FakeRec {
   interrupts: number;
   resolved: { requestId: string; choice: string }[];
   events: ProtoEvent[];
+  /** make the adapter's mutations throw (audit B3: a refused adapter call
+      must not burn the op id) */
+  throwOnSend?: boolean;
+  throwOnInterrupt?: boolean;
+  throwOnResolve?: boolean;
+  /** gate every spawn so a test can hold the resume open and force the
+      concurrent-retry race (audit B2) */
+  spawnGate?: Promise<void>;
+  /** how many spawns have happened (the first is create, the rest resume) */
+  spawns: number;
 }
 
 function fakeAdapter(id: string, rec: FakeRec): HarnessAdapter {
@@ -26,15 +36,21 @@ function fakeAdapter(id: string, rec: FakeRec): HarnessAdapter {
       return [];
     },
     async spawn(opts: SessionOpts): Promise<AdapterHandle> {
+      /* the gate holds the RESUME open, so a test can park two callers
+         inside sendPrompt's await (the B2 race window) */
+      if (rec.spawnGate && rec.spawns++ > 0) await rec.spawnGate;
       return { sessionId: opts.sessionId };
     },
     send(_h: AdapterHandle, text: string) {
+      if (rec.throwOnSend) throw new Error("adapter refused the send");
       rec.sent.push(text);
     },
     interrupt() {
+      if (rec.throwOnInterrupt) throw new Error("adapter refused the interrupt");
       rec.interrupts++;
     },
     resolve(_h: AdapterHandle, requestId: string, choice: string) {
+      if (rec.throwOnResolve) throw new Error("adapter refused the resolve");
       rec.resolved.push({ requestId, choice });
     },
     async *events() {
@@ -49,10 +65,31 @@ function fakeAdapter(id: string, rec: FakeRec): HarnessAdapter {
 async function rig(tag: string) {
   const { db, cleanup } = await freshServer(tag);
   const sessions = await import("../src/sessions.js");
-  const rec: FakeRec = { sent: [], interrupts: 0, resolved: [], events: [] };
+  const rec: FakeRec = { sent: [], interrupts: 0, resolved: [], events: [], spawns: 0 };
   sessions.registerAdapter("fake" as never, fakeAdapter("fake", rec));
   const s = await sessions.createSession({ harness: "fake" as never, cwd: "/tmp" });
   /* capture the event bus without a websocket */
+  sessions.setBroadcaster((f) => rec.events.push(f.ev));
+  return { db, sessions, rec, session: s, cleanup };
+}
+
+/**
+ * A session that is NOT live but IS resumable — the state in which
+ * sendPrompt awaits `resumeLiveSession` (audit B2: that await is the window
+ * two same-op-id retries both pass the "unseen" check in).
+ *
+ * `spawnGate` delays only the RESUME spawn (the first is the create).
+ */
+async function rigDead(tag: string, spawnGate?: Promise<void>) {
+  const { db, cleanup } = await freshServer(tag);
+  const sessions = await import("../src/sessions.js");
+  const rec: FakeRec = { sent: [], interrupts: 0, resolved: [], events: [], spawnGate, spawns: 0 };
+  sessions.registerAdapter("fake" as never, fakeAdapter("fake", rec));
+  const s = await sessions.createSession({ harness: "fake" as never, cwd: "/tmp" });
+  /* a real dead-but-resumable session carries the harness's own ref — that
+     is what resumeLiveSession spawns on — so set it, then take it down */
+  db.store.setHarnessRef(s.id, "ref-dead");
+  await sessions.closeSession(s.id);
   sessions.setBroadcaster((f) => rec.events.push(f.ev));
   return { db, sessions, rec, session: s, cleanup };
 }
@@ -252,17 +289,85 @@ test("#216: the per-session cap evicts the OLDEST ops", async () => {
   }
 });
 
-test("#216: two concurrent retries of one op id produce one turn", async () => {
-  const { db, sessions, rec, session, cleanup } = await rig("op-race");
+test("#216: a live session serializes two same-op-id sends (no race window)", async () => {
+  const { db, sessions, rec, session, cleanup } = await rig("op-race-live");
   try {
-    /* the resume path awaits, so two callers can both pass the "unseen"
-       check — the ledger claim has to win that race */
     await Promise.all([
       sessions.sendPrompt(session.id, "race", undefined, "op-race"),
       sessions.sendPrompt(session.id, "race", undefined, "op-race"),
     ]);
     assert.equal(rec.sent.length, 1, "only one dispatch");
     assert.equal(userBubbles(db, session.id).length, 1, "only one bubble");
+  } finally {
+    cleanup();
+  }
+});
+
+test("#216: the resume await does not let two same-op-id retries double-dispatch", async () => {
+  /* audit B2: this is the case the live-session test above does NOT cover.
+     The session is closed-but-resumable, so sendPrompt awaits the resume
+     between its "unseen" check and its dispatch — both callers can be inside
+     that window at once. The claim must be atomic and must happen after the
+     await, or both dispatch and the transcript gets two turns. */
+  let release!: () => void;
+  const gate = new Promise<void>((r) => (release = r));
+  const { db, sessions, rec, session, cleanup } = await rigDead("op-race-dead", gate);
+  try {
+    /* both calls park inside the shared resume attempt */
+    const a = sessions.sendPrompt(session.id, "race", undefined, "op-race-dead");
+    const b = sessions.sendPrompt(session.id, "race", undefined, "op-race-dead");
+    await tick(10);
+    release();
+    const [ra, rb] = await Promise.all([a, b]);
+
+    assert.equal(rec.sent.length, 1, "the harness got the prompt exactly once");
+    assert.equal(userBubbles(db, session.id).length, 1, "exactly one user bubble");
+
+    /* one dispatched, the other replayed the winner's messageId */
+    const deduped = [ra, rb].filter((r) => r.deduped);
+    assert.equal(deduped.length, 1, "exactly one call is a deduped replay");
+    assert.equal(ra.messageId, rb.messageId, "both acks name the same message");
+  } finally {
+    cleanup();
+  }
+});
+
+test("#216: a throwing adapter does not burn the op id (send, interrupt, resolve)", async () => {
+  const { sessions, rec, session, cleanup } = await rig("op-throws");
+  try {
+    /* --- prompt --- */
+    rec.throwOnSend = true;
+    await assert.rejects(() => sessions.sendPrompt(session.id, "boom", undefined, "op-s"));
+    rec.throwOnSend = false;
+    const s2 = await sessions.sendPrompt(session.id, "boom", undefined, "op-s");
+    assert.equal(s2.deduped, undefined, "prompt retry really dispatched");
+    assert.equal(rec.sent.length, 1, "the retry reached the harness");
+
+    /* --- interrupt (audit B3) --- */
+    rec.throwOnInterrupt = true;
+    assert.throws(() => sessions.interrupt(session.id, "op-i"));
+    rec.throwOnInterrupt = false;
+    const i2 = sessions.interrupt(session.id, "op-i");
+    assert.equal(i2.deduped, undefined, "interrupt retry is not swallowed as deduped");
+    assert.equal(rec.interrupts, 1, "the retry really interrupted");
+
+    /* --- permission resolve (audit B3) --- */
+    rec.throwOnResolve = true;
+    assert.throws(() => sessions.resolvePermission(session.id, "req-1", "allow", "op-p"));
+    rec.throwOnResolve = false;
+    const p2 = sessions.resolvePermission(session.id, "req-1", "allow", "op-p");
+    assert.equal(p2.deduped, undefined, "resolve retry is not swallowed as deduped");
+    assert.equal(rec.resolved.length, 1, "the retry really resolved the card");
+  } finally {
+    cleanup();
+  }
+});
+
+test("#216: a refused interrupt leaves the op id free even when the session is not live", async () => {
+  const { sessions, rec, cleanup } = await rigDead("op-int-nolive");
+  try {
+    assert.throws(() => sessions.interrupt("missing-session", "op-x"));
+    assert.equal(rec.interrupts, 0);
   } finally {
     cleanup();
   }
