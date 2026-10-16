@@ -5,6 +5,7 @@ import { harnessStyle, hostOf, shortPath } from "@/lib/format";
 import { hostAliases, hostDisplay } from "@/lib/device";
 import { resolveDefaultCwd, resolveDefaultProject, hostDefaultFor, hostSuggestedFor } from "@/lib/cwdDefault";
 import { createBrowseNav, type BrowseNav } from "@/lib/browseNav";
+import { browseCrumbs } from "@/lib/browseCrumbs";
 import { buildModelOptions, modelSelectOptions, splitModelValue } from "@/lib/models";
 import { createPortal } from "react-dom";
 import type { BrowseDir } from "@/lib/proto";
@@ -332,6 +333,10 @@ function Cap({ on, children }: { on: boolean; children: React.ReactNode }) {
 function DirPicker({ anchorRef, onPick, onClose }: { anchorRef: { current: HTMLDivElement | null }; onPick: (path: string) => void; onClose: () => void }) {
   const [path, setPath] = useState<string | null>(null);
   const [roots, setRoots] = useState<string[]>([]);
+  /* the roots with symlinks resolved: mkdir answers with a CANONICAL path,
+     so a path created under a symlinked root (/tmp on macOS) only matches a
+     crumb through this list (audit round 2, B1) */
+  const [realRoots, setRealRoots] = useState<string[]>([]);
   const [dirs, setDirs] = useState<BrowseDir[]>([]);
   const [parent, setParent] = useState<string | null>(null);
   const [hidden, setHidden] = useState(false);
@@ -402,6 +407,7 @@ function DirPicker({ anchorRef, onPick, onClose }: { anchorRef: { current: HTMLD
       .then((r) => {
         if (!alive) return;
         if (r.roots) setRoots(r.roots);
+        if (r.realRoots) setRealRoots(r.realRoots);
         setDirs(r.dirs ?? []);
         setParent(r.parent ?? null);
         loadedFor.current = path;
@@ -432,19 +438,7 @@ function DirPicker({ anchorRef, onPick, onClose }: { anchorRef: { current: HTMLD
     if (listRef.current) listRef.current.scrollTop = nav.scrollMemory(target);
   });
 
-  const crumbs = useMemo(() => {
-    if (path === null) return [];
-    const root = [...roots].filter((r) => path === r || path.startsWith(r + "/")).sort((a, b) => b.length - a.length)[0];
-    const home = roots[0];
-    const out: { label: string; path: string }[] = [];
-    let cur = root ?? "";
-    if (root) out.push({ label: root === home ? "~" : root, path: root });
-    for (const seg of path.slice(cur.length).split("/").filter(Boolean)) {
-      cur += "/" + seg;
-      out.push({ label: seg, path: cur });
-    }
-    return out;
-  }, [path, roots]);
+  const crumbs = useMemo(() => browseCrumbs(path, roots, realRoots), [path, roots, realRoots]);
 
   /* anchor the overlay under the cwd field; follow any scroll (the dialog
      itself can scroll on short viewports — capture phase, scroll doesn't

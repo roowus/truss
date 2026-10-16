@@ -730,7 +730,7 @@ export function createDemoBackend(): Backend {
     /* cwd picker demo: browse the virtual fs's directory set */
     async browse(path, showHidden) {
       await net(60);
-      if (!path) return { roots: [HOME] };
+      if (!path) return { roots: [HOME], realRoots: [HOME] };
       const prefix = path === "/" ? "/" : `${path}/`;
       const entries = [...dirs]
         .filter((d) => d.startsWith(prefix) && d !== path && !d.slice(prefix.length).includes("/"))

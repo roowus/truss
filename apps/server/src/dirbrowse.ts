@@ -38,7 +38,14 @@ export function browseRoots(): string[] {
   return out;
 }
 
-/** Roots with symlinks resolved (e.g. /tmp -> /private/tmp on macOS). */
+/** Roots with symlinks resolved (e.g. /tmp -> /private/tmp on macOS).
+   Exported for the picker (audit round 2, B1): mkdir answers with the
+   canonical path, so the client must be able to match a canonical path
+   against a root that is itself a symlink. */
+export function realBrowseRoots(): string[] {
+  return realRoots();
+}
+
 function realRoots(): string[] {
   const out: string[] = [];
   for (const root of browseRoots()) {

@@ -122,9 +122,12 @@ export interface BrowseDir {
   name: string;
   path: string; // absolute
 }
-/** `roots` when no path was asked for; `dirs` + `parent` for a listing. */
+/** `roots` when no path was asked for; `dirs` + `parent` for a listing.
+   `realRoots` are the roots with symlinks resolved — the picker matches a
+   canonical path (what mkdir returns) against these too (audit round 2, B1). */
 export interface BrowseResp {
   roots?: string[];
+  realRoots?: string[];
   dirs?: BrowseDir[];
   parent?: string | null;
 }

@@ -106,6 +106,16 @@ test("confinement: parents outside the roots never create anything anywhere", as
   assert.ok(!existsSync(join(OUTSIDE, "truss-mkdir-should-not-exist")), "never in an outside dir");
 });
 
+test("confinement: the roots listing carries the resolved roots too", async () => {
+  /* audit round 2 (B1): mkdir answers with the canonical path, so the picker
+     needs the resolved roots to match a crumb against a symlinked root */
+  const res = await fetch(`${srv.base}/api/browse`).then((r) => r.json());
+  assert.ok(Array.isArray(res.roots) && res.roots.length >= 1, "lexical roots as before");
+  assert.ok(Array.isArray(res.realRoots), "and realRoots rides along");
+  assert.equal(res.realRoots.length, res.roots.length, "one resolved entry per root");
+  assert.ok(res.realRoots.every((r: any) => typeof r === "string" && r.startsWith("/")), "all absolute");
+});
+
 test("confinement: an escape is 403 (a permission answer), bad input is 400", async () => {
   /* Regression: confine() is shared with listDirs and throws plain Errors,
      so an untranslated route answered 400 for EVERY refusal and the

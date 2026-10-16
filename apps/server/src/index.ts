@@ -39,7 +39,7 @@ import {
   searchFiles,
   writeFile as writeWorkspaceFile,
 } from "./files.js";
-import { BrowseError, browseRoots, listDirs, mkdirInRoots } from "./dirbrowse.js";
+import { BrowseError, browseRoots, listDirs, mkdirInRoots, realBrowseRoots } from "./dirbrowse.js";
 import { saveUpload } from "./uploads.js";
 import { gitBranches, gitDiff, gitGraph, gitStatus, gitSwitch } from "./git.js";
 import { createTask, deleteTask, listTasks, runTask, updateTask, type TaskStatus } from "./tasks.js";
@@ -1172,7 +1172,11 @@ app.post("/api/git/switch", async (req, reply) => {
 app.get("/api/browse", async (req, reply) => {
   const { path, hidden } = req.query as { path?: string; hidden?: string };
   try {
-    if (!path) return { roots: browseRoots() };
+    /* `realRoots` rides along so the picker can match a CANONICAL path
+       against its roots: mkdir returns the resolved path, and a browse root
+       that is itself a symlink (/tmp on macOS) would otherwise match no
+       crumb (audit round 2, B1). */
+    if (!path) return { roots: browseRoots(), realRoots: realBrowseRoots() };
     return listDirs(path, { showHidden: hidden === "1" });
   } catch (e: any) {
     return reply.code(400).send({ error: e.message ?? String(e) });
