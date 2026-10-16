@@ -199,11 +199,15 @@ export function FilesPanel({ params }: IDockviewPanelProps<P>) {
       if (a && a !== document.body && a !== document.documentElement) return;
       el.focus({ preventScroll: true });
     };
+    /* NOTE: deliberately no cleanup return — React 19 treats a function
+       returned from a ref callback as a ref cleanup and runs it on EVERY
+       re-render, which cancelled these timers before they fired and left
+       focus on <body>. The retries are short and idempotent, and grab()
+       bails once the element is gone. */
     grab();
-    const r1 = requestAnimationFrame(() => { grab(); requestAnimationFrame(grab); });
-    const t1 = window.setTimeout(grab, 120);
-    const t2 = window.setTimeout(grab, 400);
-    return () => { cancelAnimationFrame(r1); window.clearTimeout(t1); window.clearTimeout(t2); };
+    requestAnimationFrame(() => { grab(); requestAnimationFrame(grab); });
+    window.setTimeout(grab, 120);
+    window.setTimeout(grab, 400);
   }, []);
 
   const onTreeKeyDown = (ev: React.KeyboardEvent) => {
