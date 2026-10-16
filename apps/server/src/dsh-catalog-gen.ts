@@ -40,7 +40,7 @@
  */
 
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 import { dataDir } from "./db.js";
 import { catalogForPickers, modelCatalog, type CatalogProvider } from "./modelcat.js";
 
@@ -56,9 +56,23 @@ export const __sources: CatalogSources = { modelCatalog, catalogForPickers };
 /** the generated patch filename inside the runtime data dir */
 const GENERATED_NAME = "truss-dsh-acp-models.yml";
 
+/* The runtime data dir can arrive as a RELATIVE path — the preview harness
+   sets TRUSS_DATA_DIR=w/<pr>/apps/server/data-pr<pr> while the server's cwd
+   is apps/server, so joining it naively yields a nested path. That is fine
+   and pre-existing (the sqlite db and the agent bundle land in the same
+   place), and it does NOT dirty the repo tree: .gitignore covers
+   apps/server/w/, which is exactly the directory that nesting creates.
+
+   What this must NOT do is write into a tracked part of the checkout, so the
+   path is forced absolute — a relative dir resolved from an unexpected cwd
+   is the one way this could surprise us. */
+function absoluteDataDir(): string {
+  return isAbsolute(dataDir) ? dataDir : resolve(dataDir);
+}
+
 /** absolute path of the generated patch (may not exist yet) */
 export function generatedPatchPath(): string {
-  return join(dataDir, GENERATED_NAME);
+  return join(absoluteDataDir(), GENERATED_NAME);
 }
 
 interface CatalogRow {
@@ -161,14 +175,14 @@ export async function syncDshCatalogPatch(): Promise<DshCatalogSyncResult> {
     let wrote = false;
     try {
       if (readFileSync(path, "utf8") !== yml) {
-        mkdirSync(dataDir, { recursive: true });
+        mkdirSync(absoluteDataDir(), { recursive: true });
         writeFileSync(path, yml);
         wrote = true;
       }
     } catch {
       /* unreadable (missing) or unwritable: attempt the write, and if that
          fails the caller keeps the static catalog */
-      mkdirSync(dataDir, { recursive: true });
+      mkdirSync(absoluteDataDir(), { recursive: true });
       writeFileSync(path, yml);
       wrote = true;
     }

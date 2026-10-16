@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
+import { isAbsolute } from "node:path";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -81,6 +82,34 @@ test("a model the credential catalog offers is never dropped from the report", (
   const yml = dshgen.renderDshCatalogPatch(CATALOG, rows);
   const offered = (yml.match(/- id:/g) ?? []).length;
   assert.ok(offered >= 4, `all 4 credential models must appear, saw ${offered} -id entries`);
+});
+
+test("a RELATIVE TRUSS_DATA_DIR resolves to an absolute path, never a tracked one", async () => {
+  /* REGRESSION (caught by reading the live preview's generated file): the
+     preview harness sets a relative TRUSS_DATA_DIR while the server's cwd is
+     apps/server, so a naive join produced a nested path. That nesting is
+     pre-existing and harmless — .gitignore covers apps/server/w/, which is
+     exactly what it creates — but the path must never be RELATIVE, because a
+     relative path resolved from an unexpected cwd is the one way this could
+     write into a tracked part of the checkout.
+
+     Deliberately does not shell out to git: this box's checkouts are partly
+     root-owned, so `git` is unreliable from tests here (see version.test.ts). */
+  const { execFileSync } = await import("node:child_process");
+  const script = `
+    process.env.TRUSS_DATA_DIR = "w/9999/apps/server/data-pr9999";
+    const m = await import(${JSON.stringify(join(process.cwd(), "src/dsh-catalog-gen.ts"))});
+    process.stdout.write(m.generatedPatchPath());
+  `;
+  const out = execFileSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+  }).trim();
+
+  assert.ok(isAbsolute(out), `generated path must be absolute, got ${out}`);
+  assert.ok(out.endsWith("truss-dsh-acp-models.yml"), `unexpected filename: ${out}`);
+  /* apps/server/w/ is the directory this nesting creates, and it is ignored */
+  assert.ok(out.includes("/apps/server/w/"), `nested path must land in the ignored apps/server/w/: ${out}`);
 });
 
 test("the generated file is written OUTSIDE the repo tree", () => {
