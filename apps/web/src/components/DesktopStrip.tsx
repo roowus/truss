@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { desktops, useDesktops } from "@/lib/desktops";
 import { workspaceTabCloseMode } from "@/lib/workspaceClose";
@@ -179,17 +179,25 @@ export function DesktopStrip() {
           <div
             role="menu"
             aria-label="Workspace options"
-            ref={(el) => { if (el) cursor.reset(); }}
+            ref={(el) => {
+              /* focus the menu itself on open: the keys must land on the
+                 container, not on the trigger that opened it */
+              if (el && !el.contains(document.activeElement)) {
+                cursor.reset();
+                el.focus({ preventScroll: true });
+              }
+            }}
+            tabIndex={-1}
             onKeyDown={(e) => cursor.onMenuKeyDown(e, activateRow)}
             className="fixed z-[161] w-48 rounded-lg bg-[var(--t-bg2)] border border-[var(--t-line2)] shadow-2xl py-1 t-pop"
             style={menuPosition(menuRef.current)}
           >
-            {menuItems.map((item, i) =>
-              item.separatorBefore ? (
-                <div key={`sep-${i}`} className="my-1 border-t border-[var(--t-line)]" />
-              ) : (
+            {menuItems.map((item, i) => (
+              <Fragment key={item.label}>
+                {/* the separator is a sibling of the row, never a substitute
+                    for it — a group divider must not swallow its own item */}
+                {item.separatorBefore && <div className="my-1 border-t border-[var(--t-line)]" />}
                 <MenuItem
-                  key={item.label}
                   icon={item.icon}
                   dangerous={item.dangerous}
                   disabled={item.disabled}
@@ -199,8 +207,8 @@ export function DesktopStrip() {
                 >
                   {item.label}
                 </MenuItem>
-              ),
-            )}
+              </Fragment>
+            ))}
             {deleteConfirm && <p className="px-3 pt-1 pb-1.5 text-[10.5px] text-[var(--t-dim)] leading-snug">Closes its tabs, not the sessions. A shell with no other tabs will be stopped.</p>}
           </div>
         </>, document.body,

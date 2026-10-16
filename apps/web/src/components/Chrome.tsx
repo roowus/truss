@@ -101,7 +101,15 @@ export function StatusBar({ onToggleSidebar }: { onToggleSidebar: () => void }) 
           <div
             role="menu"
             aria-label="Running agents"
-            ref={(el) => { if (el) cursor.reset(); }}
+            ref={(el) => {
+              /* focus the menu itself on open, so the keys land on the
+                 container rather than on the trigger that opened it */
+              if (el && !el.contains(document.activeElement)) {
+                cursor.reset();
+                el.focus({ preventScroll: true });
+              }
+            }}
+            tabIndex={-1}
             onKeyDown={(e) => cursor.onMenuKeyDown(e, openSession)}
             className="absolute bottom-[30px] left-16 z-50 w-64 rounded-lg bg-[var(--t-bg2)] border border-[var(--t-line2)] shadow-2xl py-1 t-pop"
           >

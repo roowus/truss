@@ -67,3 +67,28 @@ test("the ⋯ trigger is a real button with menu semantics", () => {
   assert.match(strip, /aria-haspopup="menu"/, "the trigger advertises a menu");
   assert.match(strip, /aria-expanded=/, "and reports whether it is open");
 });
+
+test("regression: a separatorBefore row is DIVIDED, never swallowed", () => {
+  /* the ⋯ menu's Delete workspace sits behind a separator. An earlier
+     render returned the separator INSTEAD of the row, so Delete vanished
+     from a menu that also reports its own label list — the key model knew
+     about a row the user could not see or click. */
+  assert.match(strip, /separatorBefore && <div/, "the separator renders alongside its row");
+  assert.match(strip, /<Fragment key=\{item\.label\}>/, "separator and row share one fragment");
+  /* every row in the spec is rendered, including the divider group */
+  assert.match(strip, /label: opts\.deleteConfirm \? "Confirm delete" : "Delete workspace"/, "Delete is still a real row");
+});
+
+test("regression: opening a menu moves focus into it, not onto the trigger", () => {
+  /* focus used to stay on the trigger, so the container's onKeyDown never
+     fired and the arrows did nothing at all */
+  for (const [name, src] of [["DesktopStrip", strip], ["Chrome", chrome]] as const) {
+    assert.match(src, /el\.focus\(\{ preventScroll: true \}\)/, `${name} focuses the menu on open`);
+    assert.match(src, /tabIndex=\{-1\}/, `${name} makes the container focusable`);
+    assert.doesNotMatch(
+      src,
+      /ref=\{\(el\) => \{ if \(el\) cursor\.reset\(\); \}\}/,
+      `${name} no longer resets without focusing`,
+    );
+  }
+});
