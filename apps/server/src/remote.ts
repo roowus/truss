@@ -42,7 +42,7 @@ interface RemoteHandle extends AdapterHandle {
 
 const agents = new Map<string, AgentInfo>();
 /** sessionId → queue of proto events arriving over the tunnel */
-const eventQueues = new Map<string, AsyncQueue<ProtoEvent>>();
+const eventQueues = new Map<string, BoundedEventQueue<ProtoEvent>>();
 /** sessionId → hostId owning the queue, so an agent drop only kills ITS sessions */
 const queueHost = new Map<string, string>();
 /** reqId → spawn ack resolver (+ timeout so an answered ack frees the timer) */
@@ -118,30 +118,275 @@ export function wireRemoteRegistry(fns: {
   modelsSink = fns.modelsChanged ?? null;
 }
 
-class AsyncQueue<T> {
+/**
+ * The wedged-link close code (issue #218). Codes 4400-4406 belong to the
+ * tunnel's own range (PR #246, packages/proto/src/tunnel.ts), so 4407 sits
+ * outside it and cannot collide.
+ *
+ * RECONCILIATION: #246 was still open when this landed and tunnel.ts does not
+ * exist on main yet, so the constant lives here. When #246 merges, move it to
+ * that table as `LINK_WEDGED` and re-export it from here — do NOT edit
+ * tunnel.ts while #246 is open.
+ */
+export const LINK_WEDGED = 4407;
+
+/**
+ * Queue bounds (issue #218). Tuned from the measured live event log
+ * (44,288 rows): median 135 B, p90 1.3 KB, p99 9 KB, max 72 KB, mean 655 B.
+ *
+ * Bytes are the real budget because a count cap is unfair across that spread
+ * — 2000 events is ~270 KB typical but ~144 MB worst case. The count ceiling
+ * is a cheap secondary tripwire for a pathological stream of tiny frames
+ * (thousands of 20 B chunks would sit under the byte cap yet still be a real
+ * queue); it is deliberately NOT a tuned knob.
+ *
+ * Sizing: 8 MB is ~115x the p99 frame and ~2800x the median — a normal agent
+ * turn (even a large transcript replay) stays far below it, so the cap only
+ * trips on a genuinely stalled consumer.
+ */
+export const QUEUE_MAX_BYTES = 8 * 1024 * 1024;
+export const QUEUE_MAX_EVENTS = 8192;
+
+/**
+ * How long a queue may stay over budget before the link is declared wedged
+ * and closed with LINK_WEDGED (issue #218) — the issue's suggested window.
+ */
+export const WEDGE_AFTER_MS = 60_000;
+
+/** approximate wire size of one frame — the same JSON the socket carries */
+export function frameBytes(ev: unknown): number {
+  try {
+    return JSON.stringify(ev)?.length ?? 0;
+  } catch {
+    /* an unserializable payload can't reach the socket either; count it as
+       unknown rather than letting the accounting throw in the frame router */
+    return 0;
+  }
+}
+
+/** what the overflow policy did on one push, so the owner can react */
+export interface OverflowOutcome {
+  /** frames dropped from the front of the queue by this push */
+  dropped: number;
+  /** this push started an overflow episode — the lag event fires exactly here */
+  episodeStarted: boolean;
+  /** the queue is back under budget — clears `lagging`, re-arms the lag event */
+  recovered: boolean;
+  /** over budget continuously for the sustained window — kill the link */
+  wedged: boolean;
+}
+
+/**
+ * A bounded async queue (issue #218).
+ *
+ * OVERFLOW POLICY (explicit, never silent): when a push would exceed the byte
+ * budget or the count ceiling, the OLDEST frames are dropped until it fits —
+ * newest frames are the live ones a consumer actually needs. `lagging` is
+ * exposed so the owner sets the session flag and emits ONE `session.lag` per
+ * episode (not per dropped frame, constraint 2), suppressed until the queue
+ * drains back under budget.
+ *
+ * Dropping is SAFE because this queue is only the live path: every event is
+ * persisted to the SQLite event log before it reaches here, and a consumer
+ * that reconnects replays from that log — the log is the recovery path, the
+ * queue is not. Losing queue frames costs latency, never data.
+ *
+ * The wedge window uses an INJECTABLE clock (`now`): a test that sleeps 60 s
+ * is a test that gets deleted (constraint 1).
+ */
+export class BoundedEventQueue<T> {
   private buf: T[] = [];
+  private bytes = 0;
   private waiters: ((r: IteratorResult<T>) => void)[] = [];
   private done = false;
-  push(item: T) {
-    if (this.done) return;
-    const w = this.waiters.shift();
-    if (w) w({ value: item, done: false });
-    else this.buf.push(item);
+  /** true while over budget — this IS the `lagging` flag */
+  private over = false;
+  /** when the current unbroken overflow episode began; null while healthy */
+  private overSince: number | null = null;
+  private wedged = false;
+
+  constructor(
+    private maxBytes: number = QUEUE_MAX_BYTES,
+    private maxEvents: number = QUEUE_MAX_EVENTS,
+    private wedgeAfterMs: number = WEDGE_AFTER_MS,
+    private now: () => number = Date.now,
+    private sizeOf: (item: T) => number = frameBytes,
+  ) {}
+
+  get depth(): number {
+    return this.buf.length;
   }
+  get pendingBytes(): number {
+    return this.bytes;
+  }
+  /** the `lagging` flag the issue asks for */
+  get lagging(): boolean {
+    return this.over;
+  }
+  get isWedged(): boolean {
+    return this.wedged;
+  }
+  get isClosed(): boolean {
+    return this.done;
+  }
+
+  /** true when the queue is at or over either bound right now */
+  private isOver(): boolean {
+    return this.bytes > this.maxBytes || this.buf.length > this.maxEvents;
+  }
+
+  /**
+   * Push one item, applying the overflow policy. Returns what the policy did
+   * — `dropped: 0` and no episode change on the happy path.
+   */
+  push(item: T): OverflowOutcome {
+    if (this.done) return { dropped: 0, episodeStarted: false, recovered: false, wedged: false };
+
+    /* a waiting consumer takes it directly: nothing is ever queued, so the
+       budget can't be involved — but the queue may have been over budget and
+       this is the moment it catches up */
+    const w = this.waiters.shift();
+    if (w) {
+      w({ value: item, done: false });
+      return this.settle();
+    }
+
+    /* Was the queue ALREADY over budget before this frame landed? That is the
+       question the episode turns on: dropping happens *while* shrinking the
+       queue back to fit, so by the time the loop finishes the queue is
+       legitimately under budget again and a post-hoc isOver() would miss the
+       overflow entirely. Ask before pushing. */
+    const wasOver = this.isOver();
+
+    this.buf.push(item);
+    this.bytes += this.sizeOf(item);
+
+    let dropped = 0;
+    /* drop from the FRONT until both bounds hold — the count ceiling too, or
+       a flood of tiny frames under the byte cap would still grow unbounded.
+       `buf.length > 1` keeps the frame just pushed. */
+    while (this.isOver() && this.buf.length > 1) {
+      const old = this.buf.shift() as T;
+      this.bytes -= this.sizeOf(old);
+      dropped++;
+    }
+    if (this.bytes < 0) this.bytes = 0;
+
+    /* An episode is live while frames are being dropped OR the queue is over
+       budget. Once it starts it stays open until a DRAIN brings the queue
+       back under budget (`settle` from the iterator) — that is what makes the
+       lag event fire once per episode instead of once per frame. */
+    if (dropped > 0 || this.isOver() || wasOver) return this.overflowing_(dropped);
+    return this.healthy(dropped);
+  }
+
+  /** the happy path: at/under budget, and it was not over before either */
+  private healthy(dropped: number): OverflowOutcome {
+    const wasLagging = this.over;
+    const hadTimer = this.overSince !== null;
+    this.over = false;
+    this.overSince = null;
+    return { dropped, episodeStarted: false, recovered: wasLagging || hadTimer, wedged: false };
+  }
+
+  /** the queue is overflowing (dropping or over budget) — open/extend an episode */
+  private overflowing_(dropped = 0): OverflowOutcome {
+    const episodeStarted = !this.over;
+    this.over = true;
+    const t = this.now();
+    /* the window is measured from the START of this unbroken episode, so a
+       queue that keeps overflowing for 60 s is wedged regardless of how many
+       frames passed through */
+    if (this.overSince === null) this.overSince = t;
+    const wedgedNow = !this.wedged && t - this.overSince >= this.wedgeAfterMs;
+    if (wedgedNow) this.wedged = true;
+    return { dropped, episodeStarted, recovered: false, wedged: wedgedNow };
+  }
+
+  /**
+   * Recompute the health flags after a DRAIN. This is the only place an
+   * episode can close: a consumer taking frames is the recovery signal, and
+   * clearing `over` here re-arms the lag event for the next episode.
+   */
+  private settle(): OverflowOutcome {
+    if (!this.isOver() && this.buf.length === 0) {
+      /* fully drained — an empty queue is unambiguously recovered */
+      const wasLagging = this.over || this.overSince !== null;
+      this.over = false;
+      this.overSince = null;
+      return { dropped: 0, episodeStarted: false, recovered: wasLagging && !this.wedged, wedged: false };
+    }
+    if (this.isOver()) return this.overflowing_();
+    /* under budget but frames remain: the consumer is keeping up, so the
+       episode is over even though the queue is not empty */
+    const wasLagging = this.over;
+    this.over = false;
+    this.overSince = null;
+    return { dropped: 0, episodeStarted: false, recovered: wasLagging && !this.wedged, wedged: false };
+  }
+
   close() {
     this.done = true;
+    this.buf = [];
+    this.bytes = 0;
+    this.over = false;
+    this.overSince = null;
     for (const w of this.waiters.splice(0)) w({ value: undefined as never, done: true });
   }
+
   [Symbol.asyncIterator]() {
     return {
       next: (): Promise<IteratorResult<T>> => {
         const head = this.buf.shift();
-        if (head !== undefined) return Promise.resolve({ value: head, done: false });
+        if (head !== undefined) {
+          this.bytes -= this.sizeOf(head);
+          if (this.bytes < 0) this.bytes = 0;
+          notifyQueueHealth(this, this.settle());
+          return Promise.resolve({ value: head, done: false });
+        }
         if (this.done) return Promise.resolve({ value: undefined as never, done: true });
         return new Promise((res) => this.waiters.push(res));
       },
     };
   }
+}
+
+/* ── queue health wiring ──────────────────────────────────────────────────
+   remote.ts owns the policy; index.ts owns the sockets. These hooks let a
+   queue report "I just started lagging / recovered / am wedged" without
+   remote.ts importing the WS layer (which would be a cycle). */
+
+export interface QueueHealth {
+  /** an overflow episode began — emit session.lag once, set `lagging` */
+  onLag: (sessionId: string, info: { depth: number; bytes: number }) => void;
+  /** drained back under budget — clear `lagging`, no event (constraint 2) */
+  onRecovered: (sessionId: string) => void;
+  /** over budget for the sustained window — close the link with LINK_WEDGED */
+  onWedged: (sessionId: string) => void;
+}
+
+let queueHealth: QueueHealth | null = null;
+
+export function wireQueueHealth(h: QueueHealth | null) {
+  queueHealth = h;
+}
+
+/** the queue class is generic and session-agnostic; the id is attached here */
+const queueOwner = new WeakMap<object, string>();
+
+function notifyQueueHealth(q: BoundedEventQueue<any>, outcome: OverflowOutcome) {
+  const sessionId = queueOwner.get(q);
+  if (!sessionId) return;
+  if (outcome.episodeStarted) queueHealth?.onLag(sessionId, { depth: q.depth, bytes: q.pendingBytes });
+  if (outcome.recovered) queueHealth?.onRecovered(sessionId);
+  if (outcome.wedged) queueHealth?.onWedged(sessionId);
+}
+
+/** create a bounded queue already bound to a session's health reporting */
+function sessionQueue(sessionId: string): BoundedEventQueue<ProtoEvent> {
+  const q = new BoundedEventQueue<ProtoEvent>();
+  queueOwner.set(q, sessionId);
+  return q;
 }
 
 class RemoteAdapter implements HarnessAdapter {
@@ -204,7 +449,7 @@ class RemoteAdapter implements HarnessAdapter {
     const socket = this.socketOrThrow();
 
     const reqId = `spawn-${++reqCounter}`;
-    const queue = new AsyncQueue<ProtoEvent>();
+    const queue = sessionQueue(opts.sessionId);
     eventQueues.set(opts.sessionId, queue);
     queueHost.set(opts.sessionId, this.hostId);
 
@@ -273,7 +518,7 @@ class RemoteAdapter implements HarnessAdapter {
   events(handle: AdapterHandle): AsyncIterable<ProtoEvent> {
     let q = eventQueues.get(handle.sessionId);
     if (!q) {
-      q = new AsyncQueue<ProtoEvent>();
+      q = sessionQueue(handle.sessionId);
       eventQueues.set(handle.sessionId, q);
       queueHost.set(handle.sessionId, this.hostId);
     }
@@ -358,7 +603,7 @@ export function agentHello(
 }
 
 /** error + close one host session's event stream (the reverse of reattach) */
-function reapSession(sessionId: string, q: AsyncQueue<ProtoEvent>, detail: string) {
+function reapSession(sessionId: string, q: BoundedEventQueue<ProtoEvent>, detail: string) {
   q.push({ type: "session.state", sessionId, state: "error", detail });
   q.close();
   eventQueues.delete(sessionId);
@@ -461,7 +706,14 @@ export function agentFrame(hostId: string, msg: Record<string, unknown>) {
     }
     case "event": {
       const { sessionId, ev } = msg as { sessionId: string; ev: ProtoEvent };
-      eventQueues.get(sessionId)?.push(ev);
+      const q = eventQueues.get(sessionId);
+      if (!q) return;
+      /* the overflow policy runs here (issue #218): the queue drops the
+         oldest frames if the consumer is behind, and reports whether that
+         started/ended an episode or wedged the link — the health sink emits
+         the ONE session.lag and owns the close. Push only returns the happy
+         outcome when a consumer was already waiting, so nothing is queued. */
+      notifyQueueHealth(q, q.push(ev));
       return;
     }
     case "metrics": {
@@ -511,6 +763,51 @@ export function requestMetrics(hostId: string, timeoutMs = 3500): Promise<unknow
       },
     });
   });
+}
+
+/**
+ * Queue depth per tunnelled session (issue #218, metrics ask): "is the tunnel
+ * backed up" is answerable from `/api/metrics` without a probe round-trip.
+ * Cheap and synchronous — the queue keeps its own counters.
+ */
+export function queueStats(): {
+  sessionId: string;
+  hostId: string | null;
+  depth: number;
+  bytes: number;
+  lagging: boolean;
+}[] {
+  return [...eventQueues].map(([sessionId, q]) => ({
+    sessionId,
+    hostId: queueHost.get(sessionId) ?? null,
+    depth: q.depth,
+    bytes: q.pendingBytes,
+    lagging: q.lagging,
+  }));
+}
+
+/**
+ * The wedge kill (issue #218): a session's consumer has been behind for the
+ * sustained window, so stop buffering forever. The link is closed with the
+ * dedicated code; the queue is left to the reconnect/reconcile path — the
+ * agent keeps the harness alive (protocol 2) and its next hello reattaches,
+ * and the client resyncs the transcript from the SQLite event log rather
+ * than from anything the queue held.
+ */
+export function dropWedgedQueue(sessionId: string) {
+  const q = eventQueues.get(sessionId);
+  if (!q) return;
+  eventQueues.delete(sessionId);
+  queueHost.delete(sessionId);
+  q.close();
+  console.warn(
+    `[remote] session ${sessionId} tunnel link wedged (over budget for ${WEDGE_AFTER_MS / 1000}s) — closed with ${LINK_WEDGED}`,
+  );
+  /* Deliberately NO onRecovered here: the wedge is not a recovery, and the
+     caller's own `session.lag {wedged: true}` frame is the one the UI needs.
+     The session itself is not lost — the harness survives on the agent and
+     the transcript replays from the event log, exactly as the drop policy
+     assumes. */
 }
 
 export function listAgents() {

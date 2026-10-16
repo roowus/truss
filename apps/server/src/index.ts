@@ -75,7 +75,11 @@ import {
   listAgents,
   requestMetrics,
   wireRemoteRegistry,
+  wireQueueHealth,
+  queueStats,
+  dropWedgedQueue,
 } from "./remote.js";
+import { BroadcastGuard, type GuardedClient } from "./broadcastGuard.js";
 import { collectMetrics } from "@truss/proto";
 import { createMetricsHistory, histPointOf } from "./metricsHistory.js";
 import { registerAdapter, unregisterAdapter } from "./sessions.js";
@@ -94,11 +98,31 @@ const app = Fastify({ logger: process.env.TRUSS_TEST ? false : true });
 await app.register(websocket);
 
 /* ── WS fan-out ── */
-const clients = new Set<{ send: (s: string) => void }>();
+const clients = new Set<GuardedClient>();
+
+/* Broadcast backpressure guard (issue #218): a client that stops reading
+   piles frames up in its socket buffer with no cap. The guard closes THAT
+   client (LINK_WEDGED) once it has been over budget for the sustained
+   window and leaves every other client untouched — one stalled tab must not
+   cost anyone else a frame, and must never be able to grow the server's
+   memory without bound. */
+const broadcastGuard = new BroadcastGuard({
+  onClose: (reason) => console.warn(`[ws] closing a lagging client: ${reason}`),
+});
+
+/** fan one already-serialized line out, applying per-client backpressure */
+function fanOutLine(line: string) {
+  for (const c of clients) {
+    const outcome = broadcastGuard.deliver(c, line);
+    if (outcome !== "sent") {
+      broadcastGuard.forget(c);
+      clients.delete(c);
+    }
+  }
+}
 
 setBroadcaster((frame: EventFrame) => {
-  const line = JSON.stringify(frame);
-  for (const c of clients) c.send(line);
+  fanOutLine(JSON.stringify(frame));
 });
 
 /* feed/todo mutations ride the same bus as broadcast-only frames */
@@ -177,22 +201,20 @@ app.get("/health", async () => ({ ok: true, service: "truss", time: Date.now(), 
 
 app.get("/events", { websocket: true }, (socket) => {
   clients.add(socket);
-  socket.on("close", () => clients.delete(socket));
+  socket.on("close", () => {
+    broadcastGuard.forget(socket);
+    clients.delete(socket);
+  });
 });
 
 /* heartbeat: an app-level ping every 15s keeps the tailnet/NAT path warm and
    lets the client watchdog spot zombie sockets (browser WebSockets never see
    protocol-level ping/pong, so liveness has to ride the JSON channel).
-   Non-frame shape — clients filter it out of the event stream by `seq`. */
+   Non-frame shape — clients filter it out of the event stream by `seq`.
+   It rides the same guard as the fan-out (issue #218): a wedged client is
+   caught here too, on the one path that runs even when no events flow. */
 const heartbeat = setInterval(() => {
-  const line = JSON.stringify({ type: "ping", at: Date.now() });
-  for (const c of clients) {
-    try {
-      c.send(line);
-    } catch {
-      clients.delete(c);
-    }
-  }
+  fanOutLine(JSON.stringify({ type: "ping", at: Date.now() }));
 }, 15_000);
 heartbeat.unref();
 
@@ -217,6 +239,36 @@ wireRemoteRegistry({
        vanishes into an agent that no longer knows the session */
     forgetLive(sessionId);
     app.log.warn(`remote session ${sessionId} lost: ${detail}`);
+  },
+});
+
+/* tunnel queue overflow policy (issue #218). remote.ts decides WHEN a queue
+   is lagging/wedged; the server decides what that means for the wire:
+
+   - onLag fires ONCE per overflow episode (the queue suppresses repeats), so
+     `session.lag` is one explicit frame the UI can show — never one per
+     dropped frame, which would flood the very link that is already behind;
+   - dropping itself is safe because every event is already in the SQLite
+     event log, so a reconnecting client replays the gap (the log is the
+     recovery path, the queue is only the live path);
+   - onWedged stops the buffering for good: the sustained window passed, so
+     the link is closed with LINK_WEDGED instead of growing forever. */
+wireQueueHealth({
+  onLag: (sessionId, info) => {
+    app.log.warn(`session ${sessionId} tunnel queue lagging: ${info.depth} frames / ${info.bytes} B — dropping oldest`);
+    broadcastRaw({ type: "session.lag", sessionId, lagging: true, depth: info.depth, bytes: info.bytes });
+  },
+  onRecovered: (sessionId) => {
+    /* one frame clears the flag — the lag event itself stays once-per-episode
+       (constraint 2); this is the recovery half of that same episode */
+    app.log.info(`session ${sessionId} tunnel queue recovered`);
+    broadcastRaw({ type: "session.lag", sessionId, lagging: false });
+  },
+  onWedged: (sessionId) => {
+    /* dropWedgedQueue tears the queue down and reports recovery; this frame is
+       the one the UI needs to stop showing "lagging" and show the link gone */
+    dropWedgedQueue(sessionId);
+    broadcastRaw({ type: "session.lag", sessionId, lagging: false, wedged: true });
   },
 });
 
@@ -559,7 +611,18 @@ app.get("/api/metrics", async () => {
       }
     }),
   );
-  return { local: { metrics: local, history: metricsHistory.get("local") ?? [] }, agents: agentsOut };
+  return {
+    local: { metrics: local, history: metricsHistory.get("local") ?? [] },
+    agents: agentsOut,
+    /* tunnel + broadcast backpressure (issue #218): "is the tunnel backed up"
+       answered without a probe round-trip. `tunnels` is per tunnelled session
+       (the agent-event queues); `broadcast` is the browser fan-out, where a
+       stalled tab shows up as buffered bytes on one client. */
+    backpressure: {
+      tunnels: queueStats(),
+      broadcast: broadcastGuard.stats(clients),
+    },
+  };
 });
 
 /* ── auto-pairing (issue #111, review rounds): the WhatsApp shape — the new

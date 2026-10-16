@@ -139,6 +139,28 @@ export interface ModelsUpdated {
   harness: HarnessId;
 }
 
+/**
+ * The live tunnel queue for a session fell behind and started dropping its
+ * oldest frames (issue #218). Broadcast-only and NEVER persisted: this is a
+ * statement about the live path, not history — the dropped events themselves
+ * are still in the SQLite event log, and a reconnecting client replays them.
+ *
+ * `lagging: true` is emitted ONCE per overflow episode (never per dropped
+ * frame); `lagging: false` clears the flag on recovery, or marks the link
+ * wedged when the sustained window passed and the tunnel was closed.
+ */
+export interface SessionLag {
+  type: "session.lag";
+  sessionId: string;
+  lagging: boolean;
+  /** frames still queued when the episode started (lagging: true only) */
+  depth?: number;
+  /** bytes still queued when the episode started (lagging: true only) */
+  bytes?: number;
+  /** the sustained window passed and the link was closed (4407) */
+  wedged?: boolean;
+}
+
 /* ── message stream ── */
 /** a file attached to a user prompt (lands in the workspace .truss-uploads/) */
 export interface PromptAttachment {
@@ -290,6 +312,7 @@ export type ProtoEvent =
   | AgentsChanged
   | PairChanged
   | ModelsUpdated
+  | SessionLag
   | MsgStart
   | MsgChunk
   | MsgDone
