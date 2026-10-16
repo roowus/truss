@@ -352,7 +352,7 @@ function goLive(id: string, adapter: HarnessAdapter, handle: AdapterHandle) {
               type: "session.state",
               sessionId: id,
               state: "error",
-              detail: "harness event stream ended; the next prompt resumes the session",
+              detail: PUMP_END_NOTE,
             });
           }
           if (row && row.state !== "closed") settleOrphanedPerms(id);

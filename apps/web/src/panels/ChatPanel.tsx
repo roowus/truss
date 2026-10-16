@@ -697,13 +697,14 @@ function Composer({ id, active }: { id: string; active: boolean }) {
       setText("");
       setAtts([]);
     } catch (e: any) {
-      /* a dead session's refusal carries its own reason from the server —
+      /* a dead session's refusal carries its own reason from the server:
          e.message names the failure, and the server also sends it as
          `detail`. Never the cwd: the directory is irrelevant to a spawn
          failure, and pointing at it sent users to the wrong place
-         (issue #235). The fallback is path-free too. */
+         (issue #235). The fallback is path-free, and em-dash-free like the
+         server's own copy (TRUSS.md). */
       if (e.status === 409 && dead) {
-        setErr(e.message ?? "This session can't be resumed — the harness has no stored reference for it.");
+        setErr(e.message ?? "This session can't be resumed: the harness has no stored reference for it.");
       } else setErr(e.message ?? String(e));
     } finally {
       setSending(false);

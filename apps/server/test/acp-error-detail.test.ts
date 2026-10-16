@@ -215,7 +215,12 @@ test("the 409 on a dead session carries the stored failure detail, never the cwd
 });
 
 /* the pump-end note says the next prompt RESUMES the session — quoting it as
-   a refusal's reason would contradict the sentence carrying it (audit B1) */
+   a refusal's reason would contradict the sentence carrying it (audit B1).
+
+   This literal is deliberately INDEPENDENT of the writer's (audit round 2,
+   B1): the writer now emits PUMP_END_NOTE and this test spells the same text
+   out, so rewording the writer fails here instead of silently un-guarding
+   the lookup. It is the canary for that coupling. */
 test("a 409 does not quote the pump-end note as its reason", async () => {
   db.store.createSession({ id: "pump235", harness: "dsh", title: "pump-end", cwd: "/tmp/pump-235" });
   db.store.setSessionState("pump235", "error");
