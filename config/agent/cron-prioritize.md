@@ -50,10 +50,19 @@ issue right now, and if so, which one. Cheap and deterministic: no wandering.
     "prompt": "You are a work session for the truss repo. The repo is at /home/ubuntu/projects/truss — work there (cd first; your cwd is the automation home, which only anchors your sidebar group). Read /home/ubuntu/projects/truss/config/agent/work-session.md and follow it fully. Your issue is #<n> — start at phase 1."}
    JSON
    ```
-   The `model` line is the brain budget: GLM 5.3 Flash is the default
-   fixer. ESCALATE to "accounts/fireworks/models/kimi-k3" when the issue is
-   a large design/UI task (multi-file UI work, architecture, gnarly
-   interaction state) — your triage judgment decides from the title/body.
+   The `model` line is the brain budget, and it follows the issue's
+   `complexity:*` label (not your mood):
+   - `trivial` / `low` → "deepseek-flash"
+   - `medium` / `high` → "accounts/fireworks/models/glm-5p3-flash"
+   - `epic` → spawn on "accounts/fireworks/models/kimi-k3" for the planning
+     phase; the worker drops to GLM Flash to execute (its own rule).
+   Before spawning an escalated model, spend one call checking it exists
+   (the key proxy fronts the providers; a `/models` probe answers in a
+   second). If the intended model is unavailable, spawn on the next one down
+   anyway — the worker is required to tell the developer which model it got
+   and to park for their call before doing the work (work-session.md phase 1
+   step 0a). Never silently downgrade, and never skip the issue entirely
+   just because a model is out.
    The `cwd` is the automation home on purpose: DSH groups a session under
    the workspace over its cwd, so workers file under "truss automation"
    while doing the actual work in the real repo. The response is

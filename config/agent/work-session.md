@@ -89,6 +89,40 @@ world, so change it only on real evidence, never on taste:
    - `high` → GLM 5.3 Flash plans and fixes; audits run DeepSeek Flash.
    - `epic` → Kimi K3 for PLANNING ONLY, then drop to GLM 5.3 Flash to
      execute; audits run DeepSeek Flash.
+
+  **When the ladder's model is not actually available** (the provider
+  errors, the key is out of credit, the model id 404s, or the model is
+  visibly degrading — repeating itself, losing the thread, ignoring the
+  spec), do NOT silently substitute and do NOT stall:
+
+  1. **Check before you claim it.** Availability is queryable, not a
+     feeling: the key proxy fronts every provider, so
+     `curl -sS https://api.deepseek.com/models -H "Authorization: Bearer
+     $DEEPSEEK_KEY"` (or the Fireworks equivalent) tells you whether the
+     model id still exists. A provider error mid-work is the other signal.
+  2. **Drop exactly one rung, never two, and never below DeepSeek Flash.**
+     The ladder is a quality contract, so the fallback is the next model
+     down that is available (`epic`→`high`'s model, `high`/`medium`→
+     DeepSeek Flash, `trivial`/`low`→ DeepSeek Flash is already the floor;
+     if THAT is down, stop and tell the developer rather than working on
+     nothing).
+  3. **Tell the developer in this session, in one message**: which model
+     the complexity called for, that it is unavailable and why (the exact
+     error or the failed probe), which model you would drop to, and what
+     that trade-off means for this specific task ("DeepSeek Flash is fine
+     for a contained fix like this" vs "this is the epic's planning step,
+     and the plan quality is the whole point").
+  4. **Then PARK for the decision** (bracket `[needs-answer]`, label
+     `needs-answer`, badge unread, ledger `blocked`, no polling — the
+     watcher wakes you on their reply). Do not start work on the lower
+     model while you wait.
+  5. **On their answer**: "go ahead" → proceed on the lower model, and say
+     in your handoff which model actually did the work so the record is
+     honest. "wait" → stay parked; the developer will raise the model
+     themselves when the provider recovers (or re-spawn you). Re-check
+     availability when you next run — a transient outage self-heals.
+  6. Never upgrade yourself to a model ABOVE your tier, even if it is
+     available: the ladder is also a cost contract.
 0. **Make yourself visible first.** Note your own id (`echo $DSH_SESSION_ID`)
    — you will publish it with the PR in phase 2. Your session TITLE carries a
    live status bracket; set it now and at every transition (the developer
