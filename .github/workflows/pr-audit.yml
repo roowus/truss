@@ -222,26 +222,16 @@ jobs:
           allowed_bots: github-actions
           github_token: ${{ github.token }}
           anthropic_api_key: ${{ secrets.DEEPSEEK_API_KEY }}
+          # direct-prompt mode still evaluates the trigger gate, and the action
+          # defaults trigger_phrase to "@claude" — without this it decides no
+          # trigger was met and skips itself (0 ms, no review, green run).
+          trigger_phrase: "audit"
           claude_args: |
             --model ${{ env.DS_MODEL }}
             --max-turns 80
             --add-dir ${{ runner.temp }}/review-out
             --add-dir ${{ runner.temp }}/build-out
             --allowed-tools "Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh issue view:*),Bash(curl:*),Read,Write,Glob,Grep"
-          prompt: &audit-prompt |
-      - name: Agent audit (GLM fallback)
-        id: run-glm
-        if: steps.run-ds.outcome == 'failure'
-        uses: anthropics/claude-code-action@v1.0.35
-        continue-on-error: true
-        env:
-          ANTHROPIC_BASE_URL: ${{ env.ZAI_BASE_URL }}
-          ANTHROPIC_AUTH_TOKEN: ${{ secrets.ZAI_API_KEY }}
-        with:
-          # Labeled/pushed runs can be initiated by bots.
-          allowed_bots: github-actions
-          github_token: ${{ github.token }}
-          anthropic_api_key: ${{ secrets.ZAI_API_KEY }}
           prompt: &audit-prompt |
             You are auditing Pull Request #${{ needs.gate.outputs.pr_number }} in the
             repository ${{ github.repository }} (triggered via ${{ needs.gate.outputs.via }}).
@@ -465,6 +455,21 @@ jobs:
             commas, no comments. A clean audit still carries the block:
             {"version": 1, "head": "${{ needs.gate.outputs.head_sha }}",
             "verdict": "approve", "findings": [], "warnings": []}.
+      - name: Agent audit (GLM fallback)
+        id: run-glm
+        if: steps.run-ds.outcome == 'failure'
+        uses: anthropics/claude-code-action@v1.0.35
+        continue-on-error: true
+        env:
+          ANTHROPIC_BASE_URL: ${{ env.ZAI_BASE_URL }}
+          ANTHROPIC_AUTH_TOKEN: ${{ secrets.ZAI_API_KEY }}
+        with:
+          # Labeled/pushed runs can be initiated by bots.
+          allowed_bots: github-actions
+          github_token: ${{ github.token }}
+          anthropic_api_key: ${{ secrets.ZAI_API_KEY }}
+          trigger_phrase: "audit"
+          prompt: *audit-prompt
           claude_args: |
             --model ${{ needs.gate.outputs.provider == 'zai' && env.GLM_MODEL || env.KIMI_MODEL }}
             --max-turns 80
@@ -486,6 +491,7 @@ jobs:
           allowed_bots: github-actions
           github_token: ${{ github.token }}
           anthropic_api_key: ${{ secrets.FIREWORKS_API_KEY }}
+          trigger_phrase: "audit"
           prompt: *audit-prompt
           claude_args: |
             --model ${{ env.KIMI_MODEL }}
@@ -596,6 +602,12 @@ jobs:
               | gh api -X PATCH "repos/${{ github.repository }}/issues/comments/$EDIT_ID" --input - > /dev/null
           else
             gh pr comment "$PR_NUMBER" --repo "${{ github.repository }}" --body-file "$RUNNER_TEMP/comment.md"
+            # A missing report is a PIPELINE FAILURE, not a quiet success.
+            # Every agent step is continue-on-error, so without this the job
+            # stays green while no audit actually ran (that masked a
+            # trigger_phrase misconfiguration across ten PRs — #228..#242).
+            echo "::error::no audit report was produced — every agent leg failed or skipped; treating this run as failed"
+            exit 1
           fi
 
       # Optional push-style delivery: when AUDIT_FORWARD_URL is configured,
