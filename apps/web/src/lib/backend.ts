@@ -57,7 +57,7 @@ export interface Backend {
      Probing rides a POST (JSON body → preflight → not cross-site
      triggerable), never a GET param. */
   harnesses(opts?: { probe?: boolean }): Promise<HarnessesResp>;
-  agents(): Promise<{ agents: AgentInfo[] }>;
+  agents(): Promise<{ agents: AgentInfo[]; protocol?: number }>;
   listSessions(): Promise<{ sessions: SessionMeta[] }>;
   createSession(body: CreateSessionBody): Promise<{ session: SessionMeta }>;
   getSession(id: string): Promise<{ session: SessionMeta }>;
@@ -211,7 +211,7 @@ export function createLiveBackend(): Backend {
   return {
     mode: "live",
     harnesses: (opts) => (opts?.probe ? req("POST", "/api/harnesses/probe", {}) : req("GET", "/api/harnesses")),
-    agents: () => req<{ agents: AgentInfo[] }>("GET", "/api/agents"),
+    agents: () => req<{ agents: AgentInfo[]; protocol?: number }>("GET", "/api/agents"),
     listSessions: () => req("GET", "/api/sessions"),
     createSession: (b) => req("POST", "/api/sessions", b),
     getSession: (id) => req("GET", `/api/sessions/${encodeURIComponent(id)}`),

@@ -68,6 +68,10 @@ export interface AppState {
   models: ModelInfo[];
   agents: AgentInfo[];
   agentsError?: string;
+  /** the SERVER's own tunnel protocol level, from /api/agents (issue #217) —
+      lets the host panel render "agent X vs server Y" without the UI
+      importing @truss/proto for one number */
+  serverProtocol?: number;
   sessions: Record<string, SessionMeta>;
   order: string[];
   sessionsLoaded: boolean;
@@ -343,8 +347,8 @@ class Store {
 
   async refreshAgents() {
     try {
-      const { agents } = await this.be.agents();
-      this.set({ agents, agentsError: undefined });
+      const { agents, protocol } = await this.be.agents();
+      this.set({ agents, serverProtocol: protocol, agentsError: undefined });
     } catch (e: any) {
       this.set({ agentsError: e?.message ?? String(e) });
       this.toast("error", "Could not load remote hosts", e?.message ?? String(e));

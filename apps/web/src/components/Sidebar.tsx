@@ -585,6 +585,18 @@ function HostRow({ h, alias }: { h: HostInfo; alias?: string }) {
         >{alias || h.label}</span>
       )}
       {h.revoked && !confirm && <span className="text-[8.5px] font-mono uppercase text-[var(--t-red)] shrink-0 group-hover:hidden">revoked</span>}
+      {/* protocol skew at a glance (issue #217): the agent is older than the
+          server, so it still works but wants a reinstall. The full sentence
+          lives in the host detail — this is only the flag. Hidden on hover
+          like `revoked`: the action cluster owns the right edge then.
+          An agent NEWER than the server never gets here: it is refused
+          before it registers, so it can never be online. */}
+      {h.online && h.agent?.outdated && !confirm && (
+        <span
+          title={`This host's agent speaks an older tunnel protocol (${h.agent.protocol ?? "legacy"} vs the server's). It still works — reinstall it from the host panel to upgrade.`}
+          className="text-[8.5px] font-mono uppercase text-[var(--t-amber)] shrink-0 group-hover:hidden"
+        >outdated</span>
+      )}
       {/* one cluster, one gap (issue #110): the pin anchors LAST in the same
           container as delete (issue #156) — the same right-edge pixel at
           rest and on hover, so it never dodges the pointer. Its opacity

@@ -41,6 +41,13 @@ export interface AgentInfo {
   protocol?: number;
   bundleHash?: string;
   bundleCurrent?: boolean;
+  /** the server's current build hash, shipped alongside so the host detail
+     can show installed vs current side by side (issue #217 item 4) */
+  currentBundleHash?: string;
+  /** the agent speaks a protocol OLDER than the server's (issue #217):
+     accepted and still working, but worth a reinstall. Never set for an
+     agent newer than the server — that one is refused before it registers. */
+  outdated?: boolean;
   /** directory discovery (issue #123): the remote's home + its one suggested
      cwd, announced at hello. Absent on pre-discovery agents. */
   home?: string;

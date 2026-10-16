@@ -309,3 +309,8 @@ export type ProtoEventType = ProtoEvent["type"];
 /* host vitals collector (Monitor tab; shared by server + node-agent) */
 export { collectMetrics } from "./metrics.js";
 export type { HostMetrics } from "./metrics.js";
+
+/* the node-agent tunnel handshake — ONE protocol level + close-code table
+   both sides import (issue #217) */
+export { TUNNEL_PROTOCOL, TUNNEL_CLOSE, TUNNEL_CLOSE_REASON_MAX, assessTunnelProtocol, tunnelCloseReason } from "./tunnel.js";
+export type { TunnelCloseCode, TunnelProtocolVerdict, TunnelProtocolAssessment } from "./tunnel.js";

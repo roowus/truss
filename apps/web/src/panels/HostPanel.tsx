@@ -18,6 +18,10 @@ export function HostPanel({ params }: IDockviewPanelProps<{ hostId: string }>) {
   const hostPrefs = useDesktops((s) => s.hosts);
   const agent = host?.agent;
   const error = useApp((s) => s.agentsError);
+  /* the server's level, straight from /api/agents (issue #217) — the panel
+     compares it against the agent's; the number lives in @truss/proto, and
+     the server is the one that owns it */
+  const serverProtocol = useApp((s) => s.serverProtocol);
   const harnesses = useApp((s) => s.harnesses);
   const models = useApp((s) => s.models);
   const order = useApp((s) => s.order);
@@ -112,6 +116,33 @@ export function HostPanel({ params }: IDockviewPanelProps<{ hostId: string }>) {
         )}
         {!host && !error && <div className="mt-5 text-[12px] text-[var(--t-amber)]">This host is not registered. Add it from the sidebar's remote hosts section.</div>}
 
+        {agent?.outdated && (
+          /* protocol skew (issue #217): an OLDER agent, deliberately not
+             blocked — installed agents never auto-update, so a hard floor
+             would break every one of them the day the server upgrades. It
+             keeps working; this is the nudge to reinstall it. */
+          <div role="status" className="mt-5 rounded-lg border border-[var(--t-amber)]/40 bg-[var(--t-amber)]/5 px-3 py-2.5 text-[12px] text-[var(--t-mute)] leading-relaxed">
+            <span className="text-[var(--t-amber)]">This agent is running an old bundle.</span>{" "}
+            It speaks tunnel protocol <span className="font-mono text-[var(--t-fg2)]">{agent.protocol ?? 1}</span>; this
+            server speaks <span className="font-mono text-[var(--t-fg2)]">{serverProtocol ?? "a newer protocol"}</span>. It still works — old
+            agents are never blocked — but newer frames may be ignored. Reinstall it on the host:{" "}
+            <span className="font-mono text-[var(--t-fg2)] break-all">{`curl -fsSL '${window.location.origin}/agent/install.sh?host=${hostId}' | sh -s -- <token>`}</span>
+            {" "}(or re-run the add-host wizard, which fills the token in for you).
+          </div>
+        )}
+
+        {agent && serverProtocol !== undefined && agent.protocol !== undefined && agent.protocol > serverProtocol && (
+          /* belt-and-braces: the server refuses a newer agent BEFORE it
+             registers, so this should be unreachable — but if a refactor
+             ever lets one through, the panel must not quietly pretend the
+             tunnel is fine. */
+          <div role="alert" className="mt-5 rounded-lg border border-[var(--t-red)]/40 bg-[var(--t-red)]/5 px-3 py-2.5 text-[12px] text-[var(--t-red)] leading-relaxed">
+            This agent speaks tunnel protocol <span className="font-mono">{agent.protocol}</span>, newer than this
+            server's <span className="font-mono">{serverProtocol}</span>. The server should have refused it — the
+            tunnel may half-understand frames. Upgrade the server.
+          </div>
+        )}
+
         <div className="mt-7 flex items-center gap-3">
           <Btn variant="amber" size="md" icon="plus" onClick={newSession} disabled={remoteHarnesses.length === 0}>New session on {name}</Btn>
           {!remoteHarnesses.length && <span className="text-[11.5px] text-[var(--t-dim)]">No remote harness is available in /api/harnesses.</span>}
@@ -191,7 +222,13 @@ export function HostPanel({ params }: IDockviewPanelProps<{ hostId: string }>) {
               auto-update — the skew must at least be visible */}
           {agent?.bundleHash && (
             <p className="mt-3 text-[11px] leading-relaxed text-[var(--t-dim)]">
-              agent bundle <span className="font-mono">{agent.bundleHash}</span>
+              {/* installed vs current side by side (issue #217 item 4): the
+                  hash skew was already informational, it just never showed
+                  BOTH values — one hash tells you nothing to compare against */}
+              agent bundle <span className="font-mono text-[var(--t-fg2)]">{agent.bundleHash}</span>
+              {agent.currentBundleHash && (
+                <> · server bundle <span className="font-mono text-[var(--t-fg2)]">{agent.currentBundleHash}</span></>
+              )}
               {agent.protocol ? ` · protocol ${agent.protocol}` : ""}
               {agent.bundleCurrent === false && (
                 <span className="text-[var(--t-amber)]"> — older than this server's build; re-run the installer from the add-host wizard to upgrade</span>

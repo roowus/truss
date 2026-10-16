@@ -9,7 +9,10 @@
  * reachability to the host. Adapters run exactly as they would on the server
  * (same code, imported from the monorepo) — pi RPC mode, claude stream-json.
  *
- * Tunnel protocol (JSON lines over WS), level 2 (issue #100):
+ * Tunnel protocol (JSON lines over WS), level TUNNEL_PROTOCOL (@truss/proto)
+ * — issue #100's handshake, floored by issue #217: the server refuses an
+ * agent NEWER than itself (close 4406), and marks an older one `outdated`
+ * without blocking it. Close codes live in packages/proto/src/tunnel.ts:
  *   agent→server  {type:"hello", hostId, hostname, adapters:[{id,capabilities}],
  *                  sessions:[sessionId], protocol, bundleHash,
  *                  home, suggestedCwds}                  ← reattach + version
@@ -42,12 +45,13 @@ import { dialFailureHint } from "./dialHint.js";
 import { applyServerEnv } from "./serverEnv.js";
 import { applyDataDir } from "./dataDir.js";
 import { discoverCwds } from "./discovery.js";
+import { planTunnelClose } from "./tunnelClose.js";
 import type { HarnessAdapter, AdapterHandle, SessionOpts } from "../../../apps/server/src/adapters/types.js";
 import { piAdapter } from "../../../apps/server/src/adapters/pi.js";
 import { claudeAdapter } from "../../../apps/server/src/adapters/claude.js";
 import { dshAdapter } from "../../../apps/server/src/adapters/dsh.js";
 import { hermesAdapter } from "../../../apps/server/src/adapters/hermes.js";
-import { collectMetrics } from "@truss/proto";
+import { TUNNEL_CLOSE, TUNNEL_PROTOCOL, collectMetrics } from "@truss/proto";
 
 /* every adapter Truss ships runs on a node host (all are child processes:
    pi RPC, claude stream-json, dsh/hermes over ACP). The remote host needs the
@@ -97,8 +101,13 @@ let revokedNoted = false;
 /* tunnel protocol level + this bundle's identity (issue #100 version
    handshake): the bundle is this file compiled — hashing our own source at
    startup needs no build-time plumbing and matches the server's hash of the
-   bundle it builds, byte for byte, when the two are in sync */
-const PROTOCOL = 2;
+   bundle it builds, byte for byte, when the two are in sync.
+
+   PROTOCOL is no longer a literal here (issue #217): it is imported from
+   @truss/proto, the ONE place both this agent and the server read it, so the
+   two can never silently drift apart. Bump TUNNEL_PROTOCOL there — and only
+   in the commit that changes the tunnel wire format. */
+const PROTOCOL = TUNNEL_PROTOCOL;
 const BUNDLE_HASH = (() => {
   try {
     return createHash("sha256").update(readFileSync(fileURLToPath(import.meta.url))).digest("hex").slice(0, 12);
@@ -203,6 +212,19 @@ function connect() {
             `[node-agent] this agent (bundle ${BUNDLE_HASH}) is older than the server's current bundle (${serverHash}) — re-run the installer from the add-host wizard to upgrade`,
           );
         }
+        /* the protocol half of the same handshake (issue #217). A server
+           OLDER than this agent refuses the hello outright with 4406 before
+           ever sending a welcome, so reaching here means we agreed — but a
+           server that predates the floor check (or a proxy replaying a stale
+           welcome) can still answer with a lower level, and that skew must
+           not stay silent either. */
+        const serverProtocol = typeof msg.protocol === "number" ? msg.protocol : undefined;
+        if (serverProtocol !== undefined && serverProtocol < PROTOCOL) {
+          console.error(
+            `[node-agent] protocol skew: this agent speaks tunnel protocol ${PROTOCOL}, the server speaks ${serverProtocol}. ` +
+              "The server accepted the connection, but frames this agent sends may be ignored — upgrade the server, or install a matching agent bundle.",
+          );
+        }
         return;
       }
       case "spawn": {
@@ -296,45 +318,46 @@ function connect() {
   ws.on("close", (code: number, reason: Buffer) => {
     clearInterval(watchdog);
     ws = null;
-    /* 4404 = the host was deleted on the server: retrying can never succeed
-       (the id is tombstoned), so say so once and stop instead of spamming
-       "unauthorized" every 15s forever (issue #85, audit round 3). Re-adding
-       the host means a new id + token, which takes a restart anyway. This is
-       the one close that also disposes local harnesses — the host is gone,
-       nothing will ever ask about them again. */
-    if (code === 4404) {
-      for (const [, entry] of live) {
-        try {
-          entry.adapter.dispose(entry.handle);
-        } catch {
-          /* gone */
+    /* WHAT this close MEANS is decided in tunnelClose.ts (issue #217) — a
+       pure function, so every code is pinned by a test instead of living as
+       an untested branch in a socket listener. This block only executes the
+       answer. */
+    const plan = planTunnelClose({
+      code,
+      reason: String(reason ?? ""),
+      protocol: PROTOCOL,
+      liveSessions: live.size,
+      revokedNoted,
+    });
+
+    if (plan.action === "stop") {
+      /* the host is gone (4404) or the server can't speak our protocol
+         (4406): either way retrying is pointless, and for 4404 the local
+         harnesses will never be asked about again — dispose them. */
+      if (code === TUNNEL_CLOSE.HOST_DELETED) {
+        for (const [, entry] of live) {
+          try {
+            entry.adapter.dispose(entry.handle);
+          } catch {
+            /* gone */
+          }
         }
+        live.clear();
+        offlineQueue.length = 0;
       }
-      live.clear();
-      offlineQueue.length = 0;
-      console.log("[node-agent] this host was deleted on the server; not retrying — re-add it (new id + token) and restart the agent");
+      if (plan.message) console.error(plan.message);
+      if (plan.exitCode !== undefined) process.exit(plan.exitCode);
       return;
     }
-    /* every other close is a BLIP, not a death sentence (issue #100, item 7):
-       harnesses keep running locally, their events buffer, and the next
-       hello's session list reattaches them. A 1s flap no longer kills a
-       running turn. */
-    if (live.size) console.log(`[node-agent] tunnel down — keeping ${live.size} session(s) alive locally until reconnect`);
-    /* 4403 = revoked/bad token: retrying at the normal cadence spams a line
-       the user can't act on every 15s (issue #100). Explain once, then keep
-       a slow watch — an admin un-revoking lets it reconnect on its own. */
-    if (code === 4403) {
-      if (!revokedNoted) {
-        revokedNoted = true;
-        console.log(
-          "[node-agent] the server refuses this host's token (revoked or rotated) — fix it in the host panel (rotate/enable), update ~/.truss/agent-*.env, restart the agent. Checking again every 60s.",
-        );
-      } else {
-        console.log("[node-agent] still refused (4403); next check in 60s");
-      }
+
+    if (plan.message) console.log(plan.message);
+
+    if (plan.action === "slow-retry") {
+      if (code === TUNNEL_CLOSE.UNAUTHORIZED) revokedNoted = true;
       setTimeout(connect, 60000);
       return;
     }
+
     console.log(`[node-agent] disconnected (${code} ${reason}); retrying in ${reconnectDelay}ms`);
     setTimeout(connect, reconnectDelay);
     reconnectDelay = Math.min(reconnectDelay * 2, 15000);
