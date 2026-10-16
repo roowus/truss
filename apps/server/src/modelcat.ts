@@ -29,6 +29,8 @@ const ROUTES: RouteSpec[] = [
   { id: "zai", name: "z.ai", port: 45821, modelsPath: "/api/paas/v4/models", endpoint: "http://127.0.0.1:45821/api/paas/v4" },
   { id: "openrouter", name: "OpenRouter", port: 45823, modelsPath: "/api/v1/models", endpoint: "http://127.0.0.1:45823/api/v1" },
   { id: "huggingface", name: "HuggingFace", port: 45824, modelsPath: "/v1/models", endpoint: "http://127.0.0.1:45824/v1" },
+  { id: "deepinfra", name: "DeepInfra", port: 45826, modelsPath: "/v1/models", endpoint: "http://127.0.0.1:45826/v1" },
+  { id: "deepseek", name: "DeepSeek", port: 45827, modelsPath: "/v1/models", endpoint: "http://127.0.0.1:45827/v1" },
 ];
 
 let cache: { at: number; providers: CatalogProvider[] } | null = null;
@@ -49,6 +51,39 @@ function guessContext(id: string): number {
   return 128_000;
 }
 
+/* Routes disagree on field names. OpenAI-style routes (Fireworks, OpenRouter,
+   DeepInfra) report context_length plus a capabilities object; DeepSeek's own
+   API reports context_window and a top-level input_modalities array. Read
+   every known spelling before falling back to a guessed context, or the row
+   shows the wrong window and loses its vision flag. */
+interface RawModel {
+  id: string;
+  context_length?: number;
+  context_window?: number;
+  capabilities?: Record<string, unknown>;
+  input_modalities?: string[];
+  metadata?: { context_length?: number };
+}
+
+function parseModels(j: { data?: RawModel[] }): { id: string; context: number; vision: boolean; reasoning: boolean }[] {
+  return (j.data ?? [])
+    .filter((m) => typeof m.id === "string" && m.id.length > 0)
+    .map((m) => ({
+      id: m.id,
+      context: m.context_length ?? m.context_window ?? m.metadata?.context_length ?? guessContext(m.id),
+      vision: m.capabilities?.vision === true || m.input_modalities?.includes("image") === true,
+      reasoning: m.capabilities?.reasoning === true || /glm|kimi|deepseek|qwen.*think/i.test(m.id),
+    }));
+}
+
+/* Test seams: the picker tables are hand-maintained, and a route missing from
+   one of them is silently invisible (the DeepSeek/DeepInfra gap). Exposing the
+   ids and the spec list lets a test cross-check the tables against each other
+   instead of trusting three lists to stay in sync by hand. */
+export const PROVIDER_ROUTE_SPECS: readonly RouteSpec[] = ROUTES;
+export const PROVIDER_ROUTE_IDS: readonly string[] = ROUTES.map((r) => r.id);
+export const __parseModelsForTest = parseModels;
+
 async function fetchRoute(r: RouteSpec): Promise<CatalogProvider> {
   try {
     const ctl = new AbortController();
@@ -59,16 +94,8 @@ async function fetchRoute(r: RouteSpec): Promise<CatalogProvider> {
     });
     clearTimeout(t);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const j = (await res.json()) as { data?: { id: string; context_length?: number; capabilities?: Record<string, unknown> }[] };
-    const models = (j.data ?? [])
-      .filter((m) => typeof m.id === "string" && m.id.length > 0)
-      .map((m) => ({
-        id: m.id,
-        context: m.context_length ?? guessContext(m.id),
-        vision: m.capabilities?.vision === true,
-        reasoning: m.capabilities?.reasoning === true || /glm|kimi|deepseek|qwen.*think/i.test(m.id),
-      }))
-      .sort((a, b) => a.id.localeCompare(b.id));
+    const j = (await res.json()) as { data?: RawModel[] };
+    const models = parseModels(j).sort((a, b) => a.id.localeCompare(b.id));
     return { id: r.id, name: r.name, port: r.port, endpoint: r.endpoint, models };
   } catch (err) {
     return { id: r.id, name: r.name, port: r.port, endpoint: r.endpoint, models: [], error: String(err) };
