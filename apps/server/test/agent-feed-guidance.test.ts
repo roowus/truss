@@ -72,7 +72,7 @@ test("pi gets its tools via a shipped extension (its tool model — no MCP exist
   }
 });
 
-/* issue #215: the automation rule — agents asked for recurring work keep
+/* issue #222: the automation rule — agents asked for recurring work keep
    reaching for the OS (crontab/systemd timers/launchd) instead of truss's
    own scheduler. The tools exist (#16's schedule_task); nothing told the
    model. Same failure shape as #203. */
@@ -86,20 +86,109 @@ test("the guidance forbids OS-level schedulers and names schedule_task", async (
   assert.match(
     g,
     /never[^.]*crontab|not[^.]*crontab|crontab[^.]*never|OS[- ]level/i,
-    "the guidance explicitly forbids OS-level cron — today it's silent and agents write crontab entries (issue #215)",
+    "the guidance explicitly forbids OS-level cron — today it's silent and agents write crontab entries (issue #222)",
   );
   assert.match(g, /schedule_task/, "and names the truss tool to use instead");
   assert.match(g, /systemd|launchd|timer/i, "naming the other OS schedulers too");
 });
 
+/* audit B1 (PR #240): the guidance rides EVERY harness's bootstrap, but
+   schedule_task is a truss-MCP tool and pi attaches no MCP server
+   (sessions.ts's MCP_ATTACHED; pi's extension registers only
+   post_feed/list_feed — piExtension.ts). Telling pi to call a tool it cannot
+   call is worse than silence: it hallucinates the call or falls back to the
+   OS path the previous test forbids. So the tool name must appear only where
+   the tool exists, while the PROHIBITION stays everywhere (that is #222's
+   actual ask, and it is true on every harness).
+
+   The pin reads the adapters' real wiring rather than a helper's existence:
+   the MCP-attached adapters must carry a paragraph that names schedule_task,
+   and pi's bootstrap (adapter + POSTING_GUIDE_PI) must carry one that does
+   not — while both keep the OS prohibition. */
+test("the guidance names only tools the addressed harness actually exposes", async () => {
+  const { cleanup } = await freshServer("guide-harness");
+  try {
+    const spec = "../src/deliverables.js";
+    const mod: any = await import(spec).catch(() => null);
+    assert.ok(mod, "deliverables.ts must exist (see the #203 tests)");
+    assert.equal(
+      typeof mod.deliverablesGuidanceFor,
+      "function",
+      "deliverables.ts must expose the per-harness selector so a caller cannot send pi the MCP wording",
+    );
+
+    /* harnesses that attach the truss MCP get the tool name */
+    for (const ok of ["claude-code", "dsh", "hermes"]) {
+      const g = mod.deliverablesGuidanceFor(ok);
+      assert.match(g, /schedule_task/, `${ok} attaches the truss MCP, so it can call schedule_task — name it`);
+      assert.match(g, /crontab/i, `${ok} also carries the prohibition`);
+    }
+
+    /* pi cannot: it must get the prohibition WITHOUT the un-callable name,
+       and must be pointed at the surface it does have */
+    for (const no of ["pi", "pi@node1"]) {
+      const g = mod.deliverablesGuidanceFor(no);
+      assert.doesNotMatch(
+        g,
+        /schedule_task/,
+        `${no} has no truss MCP (and its extension registers only post_feed/list_feed) — naming schedule_task would instruct it to call a tool that is not registered`,
+      );
+      assert.match(
+        g,
+        /crontab/i,
+        `${no} still carries the prohibition — #222 asks for it on EVERY harness`,
+      );
+      assert.match(g, /no scheduling tool|user to schedule/i, `${no} is pointed at a surface it actually has`);
+    }
+
+    /* and the wiring actually uses them: each pi surface must carry the
+       no-MCP variant, and the MCP adapters must not carry the pi wording.
+       Checked per file — concatenating them would let one file's correct
+       import mask another file's regression. */
+    for (const piFile of ["../src/adapters/pi.ts", "../src/practices.ts"]) {
+      const src = readFileSync(new URL(piFile, import.meta.url), "utf8");
+      assert.match(
+        src,
+        /deliverablesGuidanceNoMcp/,
+        `${piFile} is a pi bootstrap surface (pi has no schedule_task) — it must use the no-MCP variant`,
+      );
+      assert.doesNotMatch(
+        src,
+        /deliverablesGuidance\(\)/,
+        `${piFile} must not interpolate the MCP variant: it names schedule_task, which pi cannot call`,
+      );
+    }
+    for (const adapter of ["dsh", "hermes", "claude"]) {
+      const src = readFileSync(new URL(`../src/adapters/${adapter}.ts`, import.meta.url), "utf8");
+      assert.match(
+        src,
+        /deliverablesGuidance\(\)/,
+        `${adapter} attaches the truss MCP — it must keep the variant that names schedule_task`,
+      );
+      assert.doesNotMatch(src, /deliverablesGuidanceNoMcp/, `${adapter} CAN call schedule_task; don't send it the pi wording`);
+    }
+  } finally {
+    cleanup();
+  }
+});
+
 test("schedule_task's own description carries the prohibition (the tool-level nudge)", async () => {
-  const mcp: any = await import("../src/mcp-truss.js").catch(() => null);
-  assert.ok(mcp, "mcp-truss.ts loads");
-  const tool = (mcp.TOOLS as any[]).find((t) => t.name === "schedule_task");
-  assert.ok(tool, "schedule_task exists (#16)");
-  assert.match(
-    JSON.stringify(tool.description),
-    /crontab|systemd|launchd|OS[- ]level/i,
-    "the tool description says: recurring automation goes HERE, not into the OS",
-  );
+  /* inside freshServer: mcp-truss.ts imports db.ts, which opens truss.db at
+     module load from TRUSS_DATA_DIR (db.ts:8-13) — a bare import here would
+     hit the real data dir (audit B2, PR #240; it fails outright when that
+     dir isn't writable, e.g. under --test-name-pattern). */
+  const { cleanup } = await freshServer("guide-tool");
+  try {
+    const mcp: any = await import("../src/mcp-truss.js").catch(() => null);
+    assert.ok(mcp, "mcp-truss.ts loads");
+    const tool = (mcp.TOOLS as any[]).find((t) => t.name === "schedule_task");
+    assert.ok(tool, "schedule_task exists (#16)");
+    assert.match(
+      JSON.stringify(tool.description),
+      /crontab|systemd|launchd|OS[- ]level/i,
+      "the tool description says: recurring automation goes HERE, not into the OS",
+    );
+  } finally {
+    cleanup();
+  }
 });

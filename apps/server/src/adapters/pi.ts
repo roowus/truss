@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import type { ProtoEvent } from "@truss/proto";
 import type { AdapterHandle, HarnessAdapter, SessionOpts } from "./types.js";
 import { cwdFallbackNote, resolveCwd } from "./types.js";
-import { deliverablesGuidance } from "../deliverables.js";
+import { deliverablesGuidanceNoMcp } from "../deliverables.js";
 import { syncPiExtension } from "../pi-config.js";
 
 /**
@@ -324,7 +324,7 @@ export const piAdapter: HarnessAdapter = {
        carries the same paragraph — don't make turn one read it twice. */
     const first = !guidanceSent.has(handle);
     if (first) {
-      const g = deliverablesGuidance();
+      const g = deliverablesGuidanceNoMcp(); // pi has no schedule_task — audit B1, PR #240
       if (!text.includes(g)) {
         text = `${text}\n\n[truss bootstrap — deliverables guidance]\n${g}\n[/truss bootstrap]`;
       }

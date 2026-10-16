@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve, sep } from "node:path";
-import { deliverablesGuidance } from "./deliverables.js";
+import { deliverablesGuidanceNoMcp } from "./deliverables.js";
 
 /**
  * Practices — TRUSS.md, Truss's take on CLAUDE.md: markdown files where the
@@ -103,8 +103,9 @@ export const POSTING_GUIDE = `Truss tools you have: file_todo / list_todos / upd
    the MCP route — issue #203), not MCP itself; the practices block still
    rides pi's first prompt because pi never calls the server's initialize.
    The deliverables sentence is the canonical paragraph, interpolated — edit
-   it in deliverables.ts, not here. */
+   it in deliverables.ts, not here. Use the no-MCP variant: pi has no
+   schedule_task, so naming it here would be a lie (audit B1). */
 export const POSTING_GUIDE_PI =
   `Your truss tools come from the truss pi extension (post_feed, list_feed). ` +
-  `${deliverablesGuidance()} ` +
+  `${deliverablesGuidanceNoMcp()} ` +
   `Act on the practices above directly and keep the user's task board honest in plain text.`;
