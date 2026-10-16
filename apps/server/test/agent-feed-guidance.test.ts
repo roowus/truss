@@ -71,3 +71,35 @@ test("pi gets its tools via a shipped extension (its tool model — no MCP exist
     cleanup();
   }
 });
+
+/* issue #215: the automation rule — agents asked for recurring work keep
+   reaching for the OS (crontab/systemd timers/launchd) instead of truss's
+   own scheduler. The tools exist (#16's schedule_task); nothing told the
+   model. Same failure shape as #203. */
+
+test("the guidance forbids OS-level schedulers and names schedule_task", async () => {
+  const spec = "../src/deliverables.js";
+  const mod: any = await import(spec).catch(() => null);
+  assert.ok(mod, "deliverables.ts must exist (see the #203 tests)");
+
+  const g = mod.deliverablesGuidance();
+  assert.match(
+    g,
+    /never[^.]*crontab|not[^.]*crontab|crontab[^.]*never|OS[- ]level/i,
+    "the guidance explicitly forbids OS-level cron — today it's silent and agents write crontab entries (issue #215)",
+  );
+  assert.match(g, /schedule_task/, "and names the truss tool to use instead");
+  assert.match(g, /systemd|launchd|timer/i, "naming the other OS schedulers too");
+});
+
+test("schedule_task's own description carries the prohibition (the tool-level nudge)", async () => {
+  const mcp: any = await import("../src/mcp-truss.js").catch(() => null);
+  assert.ok(mcp, "mcp-truss.ts loads");
+  const tool = (mcp.TOOLS as any[]).find((t) => t.name === "schedule_task");
+  assert.ok(tool, "schedule_task exists (#16)");
+  assert.match(
+    JSON.stringify(tool.description),
+    /crontab|systemd|launchd|OS[- ]level/i,
+    "the tool description says: recurring automation goes HERE, not into the OS",
+  );
+});
