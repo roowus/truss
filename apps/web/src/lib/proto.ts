@@ -385,6 +385,10 @@ export type ProtoEvent =
      review) — refetch hosts (the pendingPair list) and toast the ask */
   | (Base & { type: "pair.changed"; event: "requested" | "resolved"; request?: PairRequestInfo })
   | (Base & { type: "models.updated"; harness: HarnessId })
+  /* the live tunnel queue for a session fell behind and started dropping
+     frames (issue #218). Broadcast-only, never persisted — the dropped events
+     themselves are still in the event log and replay on reconnect. */
+  | (Base & { type: "session.lag"; lagging: boolean; depth?: number; bytes?: number; wedged?: boolean })
   | (Base & { type: "msg.start"; messageId: string; role: "user" | "assistant" | "system"; at: At; attachments?: PromptAttachment[] })
   /* the server sink stamps `at` on every event that lacks one (issue #142
      audit) — optional here only because older payloads and imports predate it */

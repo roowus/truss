@@ -543,3 +543,349 @@ test("pair.changed refetches hosts; only a fresh ask toasts (the Allow click mus
     delete (s as Record<string, unknown>).refreshHosts;
   }
 });
+
+/* issue #218 — the tunnel lag event is visible state, not a silently ignored
+   frame (audit B5: the proto type existed but the reducer's default branch
+   swallowed it, so a degraded live stream looked healthy). */
+test("session.lag sets and clears the view's lag state", () => {
+  let v = emptyView();
+
+  v = reduce(v, { type: "session.lag", sessionId: "s1", lagging: true, depth: 42, bytes: 1234 } as ProtoEvent, T0);
+  assert.deepEqual(v.lag, { depth: 42, bytes: 1234 }, "lagging view records depth + bytes");
+  assert.match(String(v.stateDetail), /lagging/i, "and says so in the session detail");
+
+  /* recovery clears it — a healthy link must not keep showing a stale lag */
+  v = reduce(v, { type: "session.lag", sessionId: "s1", lagging: false } as ProtoEvent, T0);
+  assert.equal(v.lag, null, "cleared on recovery");
+  assert.equal(v.stateDetail, undefined, "and the detail goes away");
+});
+
+test("a wedged session.lag reports the close, not a plain recovery", () => {
+  let v = emptyView();
+  v = reduce(v, { type: "session.lag", sessionId: "s1", lagging: true, depth: 5, bytes: 10 } as ProtoEvent, T0);
+  v = reduce(v, { type: "session.lag", sessionId: "s1", lagging: false, wedged: true } as ProtoEvent, T0);
+  assert.equal(v.lag, null, "no longer lagging — the link is gone");
+  assert.match(String(v.stateDetail), /wedged/i, "the detail names the wedge, not a silent recovery");
+});
+
+/* issue #218 audit round 2, B3 — the drop-recovery property.
+
+   Dropped tunnel frames are the OLDEST in the queue (lowest rowids) while the
+   frames that survive and broadcast are the NEWEST. So after a successful
+   drain the view's `lastSeq` is a rowid ABOVE every dropped frame, and the
+   `seq <= lastSeq` dedupe skips them again on every resync — the gap was only
+   repaired by a full page reload, which makes the PR's stated recovery
+   property false for the exact scenario the feature targets.
+
+   The view below is what REAL event flow produces after a drop: the dropped
+   frames never arrived at all, so they are missing from `items` AND `msgs`
+   (and `lastSeq` has still advanced past them, because the newer frames that
+   DID arrive carry higher rowids). */
+test("a resync after a dropped-frame gap repairs the transcript (B3)", async () => {
+  const { store: s, emptyView } = await import("../src/lib/store");
+
+  /* six frames; 3 and 4 were dropped from the live queue */
+  const allFrames = [1, 2, 3, 4, 5, 6].map((seq) => ({
+    seq,
+    ev: { type: "msg.start", sessionId: "sB3", messageId: `m${seq}`, role: "assistant", at: 1000 + seq },
+  }));
+  const dropped = new Set([3, 4]);
+  const wire = allFrames.filter((f) => !dropped.has(f.seq));
+
+  /* the log is complete; the wire was not */
+  const fakeBackend = {
+    getEvents: async () => ({ events: allFrames }),
+    connectEvents: () => () => {},
+    sessions: async () => ({ sessions: [] }),
+  } as never;
+
+  (s as unknown as { state: { backend: unknown } }).state.backend = fakeBackend;
+  s.set((st) => ({ ...st, sessions: { sB3: { id: "sB3", title: "t" } } as never, views: {} }));
+
+  /* build the view from the DELIVERED frames only — exactly what the browser
+     had after the live queue dropped 3 and 4 */
+  const storeAny = s as unknown as {
+    applyFrames: (v: unknown, f: unknown, replay: boolean) => ReturnType<typeof emptyView>;
+  };
+  let view = emptyView();
+  view = storeAny.applyFrames(view, wire, false);
+  s.set((st) => ({ ...st, views: { ...st.views, sB3: { ...view, hydration: "ready" as const } } }));
+
+  const before = s.state.views["sB3"];
+  assert.equal(before.lastSeq, 6, "lastSeq advanced past the dropped rowids (3 and 4) — the precondition for the bug");
+  assert.equal(before.items.length, 4, "four of six frames arrived live");
+
+  /* reconnect -> resync -> rehydrate: the replay must refill the gap */
+  await (s as unknown as { rehydrate: (id: string) => Promise<void> }).rehydrate("sB3");
+  const after = s.state.views["sB3"];
+  assert.equal(
+    after.items.length,
+    6,
+    `resync must repair the dropped-frame gap (got ${after.items.length} of 6) — otherwise the transcript stays incomplete until a manual reload`,
+  );
+  assert.equal(wire.length, 4, "and the wire really did omit two frames");
+});
+
+/* issue #218 audit round 3, B1 — the lag notice must survive the seq dedupe.
+
+   `session.lag` is broadcast with `seq: 0` (it is a control frame with no log
+   row). The rule `f.seq <= v.lastSeq` discarded it on every view, because
+   lastSeq is always >= 0 — so the "tunnel link lagging/wedged" state never
+   rendered. The earlier tests for it called `reduce(...)` directly, which
+   bypasses the dedupe, so they passed while the live path dropped the frame.
+   This drives the REAL frame path instead. */
+test("a live session.lag frame reaches a hydrated view (round 3, B1)", async () => {
+  const { store: s, emptyView } = await import("../src/lib/store");
+
+  const storeAny = s as unknown as {
+    applyFrames: (v: unknown, f: unknown, replay: boolean) => ReturnType<typeof emptyView>;
+  };
+
+  /* a hydrated view: lastSeq is a real rowid, which is what made seq 0 lose */
+  let v = emptyView();
+  v = storeAny.applyFrames(
+    v,
+    [{ seq: 7, ev: { type: "msg.start", sessionId: "sLag", messageId: "m1", role: "assistant", at: 1000 } }],
+    true,
+  );
+  assert.equal(v.lastSeq, 7, "the view is hydrated past rowid 0");
+
+  /* the live control frame arrives with seq 0 — the LIVE path, not reduce() */
+  v = storeAny.applyFrames(v, [{ seq: 0, ev: { type: "session.lag", sessionId: "sLag", lagging: true, depth: 5, bytes: 99 } }], false);
+  assert.deepEqual(v.lag, { depth: 5, bytes: 99 }, "the lag notice survives the dedupe on a hydrated view");
+  assert.match(String(v.stateDetail), /lagging/i, "and the session detail says so");
+
+  /* recovery clears it the same way */
+  v = storeAny.applyFrames(v, [{ seq: 0, ev: { type: "session.lag", sessionId: "sLag", lagging: false } }], false);
+  assert.equal(v.lag, null, "recovery clears the flag through the live path");
+
+  /* a wedge close also arrives at seq 0 and must render */
+  v = storeAny.applyFrames(v, [{ seq: 0, ev: { type: "session.lag", sessionId: "sLag", lagging: false, wedged: true } }], false);
+  assert.match(String(v.stateDetail), /wedged/i, "the wedge notice renders too");
+});
+
+/* issue #218 audit round 4, B1 — a repair must not duplicate transcript text.
+
+   The round-3 resync fix zeroed `lastSeq` so the replay would refill the gap,
+   but it replayed ON TOP of the populated view. `msg.chunk` concatenates
+   (`text: last.text + ev.text`) with no already-applied guard — unlike
+   `msg.start`, `tool.call`, `perm.request` etc., which all check first. So
+   every reconnect re-appended every chunk: "hello" + " world" became
+   "hello worldhello world", compounding on each blip.
+
+   The round-3 test could not see this because it built its frames from
+   `msg.start` only — the one transcript event that IS idempotent. This one
+   uses the real shape (msg.start + msg.chunk) and asserts the TEXT, not just
+   the item count. */
+test("a resync never duplicates already-rendered message text (round 4, B1)", async () => {
+  const { store: s, emptyView } = await import("../src/lib/store");
+
+  const log = [
+    { seq: 1, ev: { type: "msg.start", sessionId: "sDup", messageId: "m1", role: "assistant", at: 1000 } },
+    { seq: 2, ev: { type: "msg.chunk", sessionId: "sDup", messageId: "m1", text: "hello", at: 1001 } },
+    { seq: 3, ev: { type: "msg.chunk", sessionId: "sDup", messageId: "m1", text: " world", at: 1002 } },
+  ];
+  const fakeBackend = {
+    getEvents: async () => ({ events: log }),
+    connectEvents: () => () => {},
+    sessions: async () => ({ sessions: [] }),
+  } as never;
+
+  (s as unknown as { state: { backend: unknown } }).state.backend = fakeBackend;
+  s.set((st) => ({ ...st, sessions: { sDup: { id: "sDup", title: "t" } } as never, views: {} }));
+
+  /* render the transcript LIVE, as the streaming path does */
+  const storeAny = s as unknown as {
+    applyFrames: (v: unknown, f: unknown, replay: boolean) => ReturnType<typeof emptyView>;
+  };
+  let view = emptyView();
+  view = storeAny.applyFrames(view, log, false);
+  s.set((st) => ({ ...st, views: { ...st.views, sDup: { ...view, hydration: "ready" as const } } }));
+
+  const textOf = () =>
+    (s.state.views["sDup"].msgs["m1"] as unknown as { segments: { text: string }[] }).segments
+      .map((x) => x.text)
+      .join("");
+  assert.equal(textOf(), "hello world", "the live transcript reads correctly before any resync");
+
+  /* a routine WS reconnect triggers resync -> rehydrate */
+  await (s as unknown as { rehydrate: (id: string) => Promise<void> }).rehydrate("sDup");
+  assert.equal(textOf(), "hello world", `a resync must not duplicate text (got ${JSON.stringify(textOf())})`);
+
+  /* and it must stay correct across REPEATED blips, not just the first */
+  await (s as unknown as { rehydrate: (id: string) => Promise<void> }).rehydrate("sDup");
+  await (s as unknown as { rehydrate: (id: string) => Promise<void> }).rehydrate("sDup");
+  assert.equal(textOf(), "hello world", `repeated resyncs must not compound duplicates (got ${JSON.stringify(textOf())})`);
+});
+
+test("a resync preserves the live lag notice while rebuilding the transcript (round 4, B1 x round 3, B1)", async () => {
+  /* The rebuild must not throw away live control state: `lag` has no log row,
+     so a repair that started from a bare emptyView() would clear the tunnel
+     health notice — and the reconnect that triggers the repair is exactly the
+     moment that notice matters. */
+  const { store: s, emptyView } = await import("../src/lib/store");
+
+  const log = [{ seq: 1, ev: { type: "msg.start", sessionId: "sKeep", messageId: "m1", role: "assistant", at: 1000 } }];
+  (s as unknown as { state: { backend: unknown } }).state.backend = {
+    getEvents: async () => ({ events: log }),
+    connectEvents: () => () => {},
+    sessions: async () => ({ sessions: [] }),
+  } as never;
+  s.set((st) => ({ ...st, sessions: { sKeep: { id: "sKeep", title: "t" } } as never, views: {} }));
+
+  const storeAny = s as unknown as {
+    applyFrames: (v: unknown, f: unknown, replay: boolean) => ReturnType<typeof emptyView>;
+  };
+  let view = storeAny.applyFrames(emptyView(), log, false);
+  view = storeAny.applyFrames(view, [{ seq: 0, ev: { type: "session.lag", sessionId: "sKeep", lagging: true, depth: 3, bytes: 40 } }], false);
+  s.set((st) => ({ ...st, views: { ...st.views, sKeep: { ...view, hydration: "ready" as const } } }));
+  assert.deepEqual(s.state.views["sKeep"].lag, { depth: 3, bytes: 40 }, "the lag notice is set before the resync");
+
+  await (s as unknown as { rehydrate: (id: string) => Promise<void> }).rehydrate("sKeep");
+  const after = s.state.views["sKeep"];
+  assert.deepEqual(after.lag, { depth: 3, bytes: 40 }, "the repair preserves the live lag notice");
+  assert.equal(after.hydration, "ready", "and does not flash the view back to a spinner");
+  assert.equal(after.items.length, 1, "while still rebuilding the transcript correctly");
+});
+
+/* issue #218 audit round 5, B1 — the seq-0 exemption must be SYMMETRIC.
+
+   The round-3 fix correctly stopped a seq-0 control frame from being SKIPPED,
+   but left the next line writing `lastSeq = f.seq` — so applying a
+   `session.lag` frame (broadcastRaw, seq 0) reset the view's high-water mark
+   to ZERO. Every later frame in the same batch then looked unseen, and the
+   buffered copies of already-persisted chunks were applied a second time:
+   the round-4 duplication bug, re-armed through a different door.
+
+   A frame that does not participate in the dedupe must not move the watermark
+   either. This drives the REAL mixed batch ensureHydrated produces. */
+test("a seq-0 control frame does not regress lastSeq or duplicate buffered frames (round 5, B1)", async () => {
+  const { store: s, emptyView } = await import("../src/lib/store");
+
+  /* the persisted snapshot already contains chunks 1..3 */
+  const snapshot = [
+    { seq: 1, ev: { type: "msg.start", sessionId: "sMix", messageId: "m1", role: "assistant", at: 1000 } },
+    { seq: 2, ev: { type: "msg.chunk", sessionId: "sMix", messageId: "m1", text: "hello", at: 1001 } },
+    { seq: 3, ev: { type: "msg.chunk", sessionId: "sMix", messageId: "m1", text: " world", at: 1002 } },
+  ];
+  /* the live buffer accumulated while hydrating: a LAG control frame first
+     (seq 0), then live copies of frames the snapshot already covers */
+  const buffer = [
+    { seq: 0, ev: { type: "session.lag", sessionId: "sMix", lagging: true, depth: 2, bytes: 20 } },
+    { seq: 2, ev: { type: "msg.chunk", sessionId: "sMix", messageId: "m1", text: "hello", at: 1001 } },
+    { seq: 3, ev: { type: "msg.chunk", sessionId: "sMix", messageId: "m1", text: " world", at: 1002 } },
+  ];
+
+  const storeAny = s as unknown as {
+    applyFrames: (v: unknown, f: unknown, replay: boolean) => ReturnType<typeof emptyView>;
+  };
+
+  /* exactly what ensureHydrated does: replay the snapshot, then the buffer */
+  let view = storeAny.applyFrames(emptyView(), snapshot, true);
+  assert.equal(view.lastSeq, 3, "the snapshot advanced the watermark to 3");
+
+  view = storeAny.applyFrames(view, buffer, false);
+
+  assert.equal(
+    view.lastSeq,
+    3,
+    `a seq-0 control frame must NOT regress the watermark (got ${view.lastSeq}) — otherwise every later frame looks unseen`,
+  );
+  const text = (view.msgs["m1"] as unknown as { segments: { text: string }[] }).segments.map((x) => x.text).join("");
+  assert.equal(text, "hello world", `buffered frames the snapshot already covered must stay deduped (got ${JSON.stringify(text)})`);
+  assert.deepEqual(view.lag, { depth: 2, bytes: 20 }, "while the control frame's own effect still applies");
+});
+
+/* issue #218 audit round 6, B1 — a session deleted during the fetch.
+   `rehydrate` read the view AFTER its `getEvents` await, so a `session.deleted`
+   landing mid-flight left `prev` undefined, threw into the generic catch, and
+   fired a bogus "Rehydration failed" toast (and would have resurrected the
+   deleted view). */
+test("rehydrate survives a session deleted while its fetch is in flight (round 6, B1)", async () => {
+  const { store: s } = await import("../src/lib/store");
+
+  /* the resolver is captured through an object so TS's control-flow analysis
+     does not narrow `release` to null at the call site below */
+  const gateCtl: { release?: () => void } = {};
+  const gate = new Promise<void>((r) => {
+    gateCtl.release = r;
+  });
+  (s as unknown as { state: { backend: unknown } }).state.backend = {
+    /* the fetch parks until the test deletes the session underneath it */
+    getEvents: async () => {
+      await gate;
+      return { events: [] };
+    },
+    connectEvents: () => () => {},
+    sessions: async () => ({ sessions: [] }),
+  } as never;
+
+  s.set((st) => ({
+    ...st,
+    sessions: { sGone: { id: "sGone", title: "t" } } as never,
+    views: { sGone: { ...(st.views["sGone"] ?? {}), hydration: "ready" } } as never,
+  }));
+
+  const pending = (s as unknown as { rehydrate: (id: string) => Promise<void> }).rehydrate("sGone");
+  /* the session is deleted on another device while getEvents is in flight */
+  s.set((st) => {
+    const views = { ...st.views };
+    delete views["sGone"];
+    return { ...st, views };
+  });
+  gateCtl.release?.();
+  await pending;
+
+  assert.equal(s.state.views["sGone"], undefined, "a deleted session must NOT be resurrected by an in-flight repair");
+  /* The observable symptom: without the guard, `prev.hydration` throws into the
+     generic catch and fires a bogus "Rehydration failed" toast. (The view was
+     never literally resurrected — the throw happens before the write — so the
+     TOAST is the thing to pin, and pinning the view alone would be a test that
+     passes for the wrong reason.) */
+  const errors = s.state.toasts.filter((t) => t.kind === "error");
+  assert.deepEqual(
+    errors,
+    [],
+    `a session deleted mid-fetch must not raise a spurious error toast (got ${JSON.stringify(errors.map((t) => t.title))})`,
+  );
+});
+
+/* issue #218 audit round 6, B2 — the tunnel-health notice must survive the
+   repair. `ChatPanel` renders `stateDetail`, and the rebuild derives it from
+   the log's `session.state` frames, which clobbered the live `session.lag`
+   string. Since a lag event fires once per EPISODE, an ongoing episode showed
+   no notice until it recovered and a new one started. */
+test("a resync preserves the rendered tunnel-health notice (round 6, B2)", async () => {
+  const { store: s, emptyView } = await import("../src/lib/store");
+
+  const log = [{ seq: 1, ev: { type: "msg.start", sessionId: "sNotice", messageId: "m1", role: "assistant", at: 1000 } }];
+  (s as unknown as { state: { backend: unknown } }).state.backend = {
+    getEvents: async () => ({ events: log }),
+    connectEvents: () => () => {},
+    sessions: async () => ({ sessions: [] }),
+  } as never;
+  s.set((st) => ({ ...st, sessions: { sNotice: { id: "sNotice", title: "t" } } as never, views: {} }));
+
+  const storeAny = s as unknown as {
+    applyFrames: (v: unknown, f: unknown, replay: boolean) => ReturnType<typeof emptyView>;
+  };
+  let view = storeAny.applyFrames(emptyView(), log, false);
+  view = storeAny.applyFrames(
+    view,
+    [{ seq: 0, ev: { type: "session.lag", sessionId: "sNotice", lagging: true, depth: 4, bytes: 50 } }],
+    false,
+  );
+  s.set((st) => ({ ...st, views: { ...st.views, sNotice: { ...view, hydration: "ready" as const } } }));
+
+  const before = s.state.views["sNotice"].stateDetail;
+  assert.match(String(before), /lagging/i, "the notice is rendered before the resync");
+
+  await (s as unknown as { rehydrate: (id: string) => Promise<void> }).rehydrate("sNotice");
+
+  /* ChatPanel reads exactly this field */
+  assert.match(
+    String(s.state.views["sNotice"].stateDetail),
+    /lagging/i,
+    "the repair must not clear the notice — a lag event fires once per episode, so it would not come back until the next one",
+  );
+});

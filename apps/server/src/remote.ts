@@ -19,7 +19,7 @@ import type { HarnessId, ProtoEvent } from "@truss/proto";
 interface AgentInfo {
   hostId: string;
   hostname: string;
-  socket: { send: (s: string) => void; close: () => void; readyState?: number };
+  socket: { send: (s: string) => void; close: (code?: number, reason?: string) => void; readyState?: number };
   adapters: { id: string; capabilities: HarnessAdapter["capabilities"] }[];
   /** version handshake (issue #100): the agent reports its protocol level
      and the hash of the bundle it runs — skew against the server's current
@@ -42,7 +42,7 @@ interface RemoteHandle extends AdapterHandle {
 
 const agents = new Map<string, AgentInfo>();
 /** sessionId → queue of proto events arriving over the tunnel */
-const eventQueues = new Map<string, AsyncQueue<ProtoEvent>>();
+const eventQueues = new Map<string, BoundedEventQueue<ProtoEvent>>();
 /** sessionId → hostId owning the queue, so an agent drop only kills ITS sessions */
 const queueHost = new Map<string, string>();
 /** reqId → spawn ack resolver (+ timeout so an answered ack frees the timer) */
@@ -118,30 +118,334 @@ export function wireRemoteRegistry(fns: {
   modelsSink = fns.modelsChanged ?? null;
 }
 
-class AsyncQueue<T> {
+/**
+ * The wedged-link close code (issue #218). Codes 4400-4406 belong to the
+ * tunnel's own range (PR #246, packages/proto/src/tunnel.ts), so 4407 sits
+ * outside it and cannot collide.
+ *
+ * RECONCILIATION: #246 was still open when this landed and tunnel.ts does not
+ * exist on main yet, so the constant lives here. When #246 merges, move it to
+ * that table as `LINK_WEDGED` and re-export it from here — do NOT edit
+ * tunnel.ts while #246 is open.
+ */
+export const LINK_WEDGED = 4407;
+
+/**
+ * Queue bounds (issue #218). Tuned from the measured live event log
+ * (44,288 rows): median 135 B, p90 1.3 KB, p99 9 KB, max 72 KB, mean 655 B.
+ *
+ * Bytes are the real budget because a count cap is unfair across that spread
+ * — 2000 events is ~270 KB typical but ~144 MB worst case. The count ceiling
+ * is a cheap secondary tripwire for a pathological stream of tiny frames
+ * (thousands of 20 B chunks would sit under the byte cap yet still be a real
+ * queue); it is deliberately NOT a tuned knob.
+ *
+ * Sizing: 8 MB is ~115x the p99 frame and ~2800x the median — a normal agent
+ * turn (even a large transcript replay) stays far below it, so the cap only
+ * trips on a genuinely stalled consumer.
+ */
+export const QUEUE_MAX_BYTES = 8 * 1024 * 1024;
+export const QUEUE_MAX_EVENTS = 8192;
+
+/**
+ * How long a queue may stay over budget before the link is declared wedged
+ * and closed with LINK_WEDGED (issue #218) — the issue's suggested window.
+ */
+export const WEDGE_AFTER_MS = 60_000;
+
+/**
+ * Wire size of one frame in BYTES, which is what the budget claims to measure
+ * (audit B6). `String.length` counts UTF-16 code units, so a non-ASCII frame
+ * (tool output, non-English replies — routinely 2-3 bytes per character in
+ * UTF-8) was charged up to ~3x less than it costs, making the 8 MB budget
+ * looser than documented exactly for the frames most likely to be large.
+ * Buffer.byteLength is the same encoding the socket writes.
+ */
+export function frameBytes(ev: unknown): number {
+  try {
+    const json = JSON.stringify(ev);
+    return json === undefined ? 0 : Buffer.byteLength(json, "utf8");
+  } catch {
+    /* an unserializable payload can't reach the socket either; count it as
+       unknown rather than letting the accounting throw in the frame router */
+    return 0;
+  }
+}
+
+/** what the overflow policy did on one push, so the owner can react */
+export interface OverflowOutcome {
+  /** frames dropped from the front of the queue by this push */
+  dropped: number;
+  /** this push started an overflow episode — the lag event fires exactly here */
+  episodeStarted: boolean;
+  /** the queue is back under budget — clears `lagging`, re-arms the lag event */
+  recovered: boolean;
+  /** over budget continuously for the sustained window — kill the link */
+  wedged: boolean;
+}
+
+/**
+ * A bounded async queue (issue #218).
+ *
+ * OVERFLOW POLICY (explicit, never silent): when a push would exceed the byte
+ * budget or the count ceiling, the OLDEST frames are dropped until it fits —
+ * newest frames are the live ones a consumer actually needs. `lagging` is
+ * exposed so the owner sets the session flag and emits ONE `session.lag` per
+ * episode (not per dropped frame, constraint 2), suppressed until the queue
+ * drains back under budget.
+ *
+ * Dropping is SAFE **only because the frame is persisted before it is
+ * enqueued**: `agentFrame`'s event case calls `persistFrame` (wired in
+ * index.ts to `persistInboundEvent`) BEFORE `push`, so an evicted frame is
+ * already in the SQLite event log and a reconnecting consumer replays it —
+ * the log is the recovery path, this queue is not. (Audit B1: the ordering
+ * was originally the other way round, because the goLive pump persists what
+ * it DRAINS — so a dropped frame was never logged and was lost for good. The
+ * queue itself cannot enforce this; the router owns it, and the integration
+ * test drives the real router → queue → pump → store path.)
+ *
+ * The wedge window uses an INJECTABLE clock (`now`): a test that sleeps 60 s
+ * is a test that gets deleted (constraint 1).
+ */
+export class BoundedEventQueue<T> {
   private buf: T[] = [];
+  private bytes = 0;
   private waiters: ((r: IteratorResult<T>) => void)[] = [];
   private done = false;
-  push(item: T) {
-    if (this.done) return;
-    const w = this.waiters.shift();
-    if (w) w({ value: item, done: false });
-    else this.buf.push(item);
+  /** true while over budget — this IS the `lagging` flag */
+  private over = false;
+  /** when the current unbroken overflow episode began; null while healthy */
+  private overSince: number | null = null;
+  private wedged = false;
+
+  constructor(
+    private maxBytes: number = QUEUE_MAX_BYTES,
+    private maxEvents: number = QUEUE_MAX_EVENTS,
+    private wedgeAfterMs: number = WEDGE_AFTER_MS,
+    private now: () => number = Date.now,
+    private sizeOf: (item: T) => number = frameBytes,
+  ) {}
+
+  get depth(): number {
+    return this.buf.length;
   }
+  get pendingBytes(): number {
+    return this.bytes;
+  }
+  /** the `lagging` flag the issue asks for */
+  get lagging(): boolean {
+    return this.over;
+  }
+  get isWedged(): boolean {
+    return this.wedged;
+  }
+  get isClosed(): boolean {
+    return this.done;
+  }
+
+  /** true when the queue is at or over either bound right now */
+  private isOver(): boolean {
+    return this.bytes > this.maxBytes || this.buf.length > this.maxEvents;
+  }
+
+  /**
+   * Push one item, applying the overflow policy. Returns what the policy did
+   * — `dropped: 0` and no episode change on the happy path.
+   */
+  push(item: T): OverflowOutcome {
+    if (this.done) return { dropped: 0, episodeStarted: false, recovered: false, wedged: false };
+
+    /* a waiting consumer takes it directly: nothing is ever queued, so the
+       budget can't be involved — but the queue may have been over budget and
+       this is the moment it catches up */
+    const w = this.waiters.shift();
+    if (w) {
+      w({ value: item, done: false });
+      return this.settle();
+    }
+
+    /* Was the queue ALREADY over budget before this frame landed? That is the
+       question the episode turns on: dropping happens *while* shrinking the
+       queue back to fit, so by the time the loop finishes the queue is
+       legitimately under budget again and a post-hoc isOver() would miss the
+       overflow entirely. Ask before pushing. */
+    const wasOver = this.isOver();
+
+    this.buf.push(item);
+    this.bytes += this.sizeOf(item);
+
+    let dropped = 0;
+    /* drop from the FRONT until both bounds hold — the count ceiling too, or
+       a flood of tiny frames under the byte cap would still grow unbounded.
+       `buf.length > 1` keeps the frame just pushed. */
+    while (this.isOver() && this.buf.length > 1) {
+      const old = this.buf.shift() as T;
+      this.bytes -= this.sizeOf(old);
+      dropped++;
+    }
+    if (this.bytes < 0) this.bytes = 0;
+
+    /* An episode is live while frames are being dropped OR the queue is over
+       budget. Once it starts it stays open until a DRAIN brings the queue
+       back under budget (`settle` from the iterator) — that is what makes the
+       lag event fire once per episode instead of once per frame. */
+    if (dropped > 0 || this.isOver() || wasOver) return this.overflowing_(dropped);
+    return this.healthy(dropped);
+  }
+
+  /** the happy path: at/under budget, and it was not over before either */
+  private healthy(dropped: number): OverflowOutcome {
+    const wasLagging = this.over;
+    const hadTimer = this.overSince !== null;
+    this.over = false;
+    this.overSince = null;
+    return { dropped, episodeStarted: false, recovered: wasLagging || hadTimer, wedged: false };
+  }
+
+  /** the queue is overflowing (dropping or over budget) — open/extend an episode */
+  private overflowing_(dropped = 0): OverflowOutcome {
+    const episodeStarted = !this.over;
+    this.over = true;
+    const t = this.now();
+    /* the window is measured from the START of this unbroken episode, so a
+       queue that keeps overflowing for 60 s is wedged regardless of how many
+       frames passed through */
+    if (this.overSince === null) this.overSince = t;
+    const wedgedNow = !this.wedged && t - this.overSince >= this.wedgeAfterMs;
+    if (wedgedNow) this.wedged = true;
+    return { dropped, episodeStarted, recovered: false, wedged: wedgedNow };
+  }
+
+  /**
+   * Recompute the health flags after a DRAIN. This is the only place an
+   * episode can close: a consumer taking frames is the recovery signal, and
+   * clearing `over` here re-arms the lag event for the next episode.
+   */
+  private settle(): OverflowOutcome {
+    if (!this.isOver() && this.buf.length === 0) {
+      /* fully drained — an empty queue is unambiguously recovered */
+      const wasLagging = this.over || this.overSince !== null;
+      this.over = false;
+      this.overSince = null;
+      return { dropped: 0, episodeStarted: false, recovered: wasLagging && !this.wedged, wedged: false };
+    }
+    if (this.isOver()) return this.overflowing_();
+    /* under budget but frames remain: the consumer is keeping up, so the
+       episode is over even though the queue is not empty */
+    const wasLagging = this.over;
+    this.over = false;
+    this.overSince = null;
+    return { dropped: 0, episodeStarted: false, recovered: wasLagging && !this.wedged, wedged: false };
+  }
+
   close() {
     this.done = true;
+    this.buf = [];
+    this.bytes = 0;
+    this.over = false;
+    this.overSince = null;
     for (const w of this.waiters.splice(0)) w({ value: undefined as never, done: true });
   }
+
   [Symbol.asyncIterator]() {
     return {
       next: (): Promise<IteratorResult<T>> => {
         const head = this.buf.shift();
-        if (head !== undefined) return Promise.resolve({ value: head, done: false });
+        if (head !== undefined) {
+          this.bytes -= this.sizeOf(head);
+          if (this.bytes < 0) this.bytes = 0;
+          notifyQueueHealth(this, this.settle());
+          return Promise.resolve({ value: head, done: false });
+        }
         if (this.done) return Promise.resolve({ value: undefined as never, done: true });
         return new Promise((res) => this.waiters.push(res));
       },
     };
   }
+}
+
+/* ── queue health wiring ──────────────────────────────────────────────────
+   remote.ts owns the policy; index.ts owns the sockets. These hooks let a
+   queue report "I just started lagging / recovered / am wedged" without
+   remote.ts importing the WS layer (which would be a cycle). */
+
+export interface QueueHealth {
+  /** an overflow episode began — emit session.lag once, set `lagging` */
+  onLag: (sessionId: string, info: { depth: number; bytes: number }) => void;
+  /** drained back under budget — clear `lagging`, no event (constraint 2) */
+  onRecovered: (sessionId: string) => void;
+  /** over budget for the sustained window — close the link with LINK_WEDGED */
+  onWedged: (sessionId: string) => void;
+}
+
+let queueHealth: QueueHealth | null = null;
+
+export function wireQueueHealth(h: QueueHealth | null) {
+  queueHealth = h;
+}
+
+/**
+ * Write one tunnelled frame to the durable event log (issue #218, audit B1).
+ * Injected by index.ts and pointed at the session sink's persistence, because
+ * remote.ts must not import the store directly (module cycle). It MUST be set
+ * for the drop-oldest policy to be safe: a frame is persisted here on receipt,
+ * BEFORE the live queue can evict it.
+ */
+let persistFrame: ((sessionId: string, ev: ProtoEvent) => number | null) | null = null;
+
+/** sessions we have already warned about for post-teardown frames (one log line
+    each). Bounded: this is a log-dedup convenience, and an unbounded Set would
+    reintroduce exactly the "grows forever under a misbehaving producer" shape
+    issue #218 exists to remove. Oldest entries fall out first. */
+const warnedNoQueue = new Set<string>();
+const WARNED_NO_QUEUE_MAX = 1000;
+function warnNoQueueOnce(sessionId: string) {
+  if (warnedNoQueue.has(sessionId)) return;
+  if (warnedNoQueue.size >= WARNED_NO_QUEUE_MAX) {
+    const oldest = warnedNoQueue.values().next().value;
+    if (oldest !== undefined) warnedNoQueue.delete(oldest);
+  }
+  warnedNoQueue.add(sessionId);
+  console.warn(
+    `[remote] dropping tunnel frames for ${sessionId}: no live queue (never spawned, disposed, or wedged-closed)`,
+  );
+}
+
+export function wireFramePersistence(fn: ((sessionId: string, ev: ProtoEvent) => number | null) | null) {
+  persistFrame = fn;
+}
+
+/** the queue class is generic and session-agnostic; the id is attached here */
+const queueOwner = new WeakMap<object, string>();
+
+function notifyQueueHealth(q: BoundedEventQueue<any>, outcome: OverflowOutcome) {
+  const sessionId = queueOwner.get(q);
+  if (!sessionId) return;
+  if (outcome.episodeStarted) queueHealth?.onLag(sessionId, { depth: q.depth, bytes: q.pendingBytes });
+  if (outcome.recovered) queueHealth?.onRecovered(sessionId);
+  if (outcome.wedged) queueHealth?.onWedged(sessionId);
+}
+
+/**
+ * Test-only override of the wedge window for queues created from here on.
+ * The window is 60 s in production; a suite cannot sleep that long, and the
+ * only honest way to exercise the REAL onWedged → close(4407) wiring (rather
+ * than hand-calling the teardown) is to shorten it. `null` restores default.
+ */
+let queueWedgeWindowOverride: number | null = null;
+
+export function setQueueWedgeWindowForTest(ms: number | null) {
+  queueWedgeWindowOverride = ms;
+}
+
+/** create a bounded queue already bound to a session's health reporting */
+function sessionQueue(sessionId: string): BoundedEventQueue<ProtoEvent> {
+  const q =
+    queueWedgeWindowOverride === null
+      ? new BoundedEventQueue<ProtoEvent>()
+      : new BoundedEventQueue<ProtoEvent>(QUEUE_MAX_BYTES, QUEUE_MAX_EVENTS, queueWedgeWindowOverride);
+  queueOwner.set(q, sessionId);
+  return q;
 }
 
 class RemoteAdapter implements HarnessAdapter {
@@ -204,7 +508,7 @@ class RemoteAdapter implements HarnessAdapter {
     const socket = this.socketOrThrow();
 
     const reqId = `spawn-${++reqCounter}`;
-    const queue = new AsyncQueue<ProtoEvent>();
+    const queue = sessionQueue(opts.sessionId);
     eventQueues.set(opts.sessionId, queue);
     queueHost.set(opts.sessionId, this.hostId);
 
@@ -273,7 +577,7 @@ class RemoteAdapter implements HarnessAdapter {
   events(handle: AdapterHandle): AsyncIterable<ProtoEvent> {
     let q = eventQueues.get(handle.sessionId);
     if (!q) {
-      q = new AsyncQueue<ProtoEvent>();
+      q = sessionQueue(handle.sessionId);
       eventQueues.set(handle.sessionId, q);
       queueHost.set(handle.sessionId, this.hostId);
     }
@@ -358,7 +662,7 @@ export function agentHello(
 }
 
 /** error + close one host session's event stream (the reverse of reattach) */
-function reapSession(sessionId: string, q: AsyncQueue<ProtoEvent>, detail: string) {
+function reapSession(sessionId: string, q: BoundedEventQueue<ProtoEvent>, detail: string) {
   q.push({ type: "session.state", sessionId, state: "error", detail });
   q.close();
   eventQueues.delete(sessionId);
@@ -461,7 +765,50 @@ export function agentFrame(hostId: string, msg: Record<string, unknown>) {
     }
     case "event": {
       const { sessionId, ev } = msg as { sessionId: string; ev: ProtoEvent };
-      eventQueues.get(sessionId)?.push(ev);
+      const q = eventQueues.get(sessionId);
+      if (!q) {
+        /* No queue means this session is not live here: never spawned, already
+           disposed, or torn down by the wedge close. The frame is DROPPED, and
+           audit B2's point stands — that must not be a silent swallow. It is
+           not persisted either: writing frames for a session this server no
+           longer tracks would resurrect transcript entries for a session the
+           agent was told to dispose. Logged once per session so a chatty
+           post-teardown agent cannot flood the log. */
+        warnNoQueueOnce(sessionId);
+        return;
+      }
+      /* PERSIST FIRST, THEN ENQUEUE (issue #218, audit B1). The whole
+         drop-oldest policy rests on "the event log is the recovery path", and
+         that is only true if the frame is in the log BEFORE the queue can
+         evict it. It was not: persistence happens in the goLive pump
+         (sessions.ts sink()), which DRAINS this queue — so a frame dropped by
+         `push` was never persisted and was lost for good.
+         `persistFrame` is the caller-supplied write into the durable log
+         (wired in index.ts to `persistInboundEvent`, the same store write the
+         pump uses). It returns the assigned rowid, or null on failure. The
+         pump recognises the frame as already-written when it drains it, so it
+         is never logged twice — and it broadcasts with that same rowid, so the
+         client's seq-dedupe accepts it (audit round 2, B1). */
+      /* Enqueue ONLY if the frame is durably logged (audit round 2, B2). A
+         frame that failed to persist must not enter the live queue: when the
+         pump later drained it, the dedupe mark would be absent, the retry
+         would fail again, and the frame would be broadcast to a client whose
+         log has no copy of it — silent loss with no recovery path, which is
+         exactly what the persist-first ordering exists to prevent. */
+      const seq = persistFrame?.(sessionId, ev);
+      if (persistFrame && seq === null) {
+        /* persistence is wired and FAILED: do NOT enqueue. The frame is
+           dropped HERE, where persistInboundEvent already logged the reason,
+           rather than being queued, retried, and then broadcast to a client
+           with no durable copy of it. */
+        return;
+      }
+      /* the overflow policy runs here (issue #218): the queue drops the
+         oldest frames if the consumer is behind, and reports whether that
+         started/ended an episode or wedged the link — the health sink emits
+         the ONE session.lag and owns the close. Push only returns the happy
+         outcome when a consumer was already waiting, so nothing is queued. */
+      notifyQueueHealth(q, q.push(ev));
       return;
     }
     case "metrics": {
@@ -511,6 +858,90 @@ export function requestMetrics(hostId: string, timeoutMs = 3500): Promise<unknow
       },
     });
   });
+}
+
+/**
+ * Queue depth per tunnelled session (issue #218, metrics ask): "is the tunnel
+ * backed up" is answerable from `/api/metrics` without a probe round-trip.
+ * Cheap and synchronous — the queue keeps its own counters.
+ */
+export function queueStats(): {
+  sessionId: string;
+  hostId: string | null;
+  depth: number;
+  bytes: number;
+  lagging: boolean;
+}[] {
+  return [...eventQueues].map(([sessionId, q]) => ({
+    sessionId,
+    hostId: queueHost.get(sessionId) ?? null,
+    depth: q.depth,
+    bytes: q.pendingBytes,
+    lagging: q.lagging,
+  }));
+}
+
+/**
+ * The wedge kill (issue #218): a session's consumer has been behind for the
+ * sustained window, so stop buffering forever and CLOSE THE LINK with the
+ * dedicated code (audit B2 — an earlier revision only deleted the map entry
+ * and logged that it had closed, which was false, and left the agent
+ * streaming into a router that silently discarded every later frame).
+ *
+ * The tunnel is HOST-WIDE, so the close is scoped honestly:
+ *   - the wedged session is disposed on the agent (`dispose` frame) so it
+ *     stops producing for a link nobody is draining;
+ *   - if that host has NO other live session, the whole tunnel is closed with
+ *     LINK_WEDGED — the link itself is the thing that was wedged;
+ *   - if the host has other live sessions, closing the socket would kill
+ *     THEIR links too, which is exactly the "one wedged host must degrade
+ *     that session only" rule. Those siblings keep their tunnel; the wedged
+ *     session is gone and the agent is told to dispose just it.
+ *
+ * Either way the session is not "lost" in the data sense: the frames are in
+ * the SQLite event log (persisted on receipt — see `wireFramePersistence`),
+ * so the transcript replays; the harness is disposed because a producer whose
+ * consumer is gone is the thing that was wedged.
+ */
+export function dropWedgedQueue(sessionId: string) {
+  const q = eventQueues.get(sessionId);
+  if (!q) return;
+  const hostId = queueHost.get(sessionId);
+  eventQueues.delete(sessionId);
+  queueHost.delete(sessionId);
+  q.close();
+
+  const siblings = hostId
+    ? [...queueHost.values()].filter((h) => h === hostId).length
+    : 0;
+  const agent = hostId ? agents.get(hostId) : undefined;
+
+  if (agent) {
+    /* The producer is stopped by the pump, not here (audit round 2, B3):
+       q.close() above ends the goLive for-await, and its `finally` calls
+       adapter.dispose(handle) → the single `{type:"dispose"}` frame. Sending
+       one here too would duplicate it, and made the "the agent was told to
+       dispose" assertion pass on either copy. */
+    if (siblings === 0) {
+      /* no other session needs this tunnel: it is the wedged link, close it
+         with the dedicated code. The blip-tolerant reconnect path (#100)
+         brings the agent back and its next hello reconciles. */
+      try {
+        agent.socket.close(LINK_WEDGED, "session queue wedged: consumer not draining");
+      } catch {
+        /* already closing */
+      }
+      console.warn(
+        `[remote] session ${sessionId} queue wedged (over budget for ${WEDGE_AFTER_MS / 1000}s) — closed tunnel to ${hostId} with ${LINK_WEDGED}`,
+      );
+      return;
+    }
+    console.warn(
+      `[remote] session ${sessionId} queue wedged (over budget for ${WEDGE_AFTER_MS / 1000}s) — disposed on ${hostId}, tunnel kept for ${siblings} sibling session(s)`,
+    );
+    return;
+  }
+  console.warn(`[remote] session ${sessionId} queue wedged — queue torn down (agent already offline)`);
 }
 
 export function listAgents() {

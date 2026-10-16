@@ -51,6 +51,9 @@ export interface SessionView {
   ctx?: { used: number; total: number; by?: Record<string, number> };
   ctxHistory: { t: number; used: number; total: number }[];
   stateDetail?: string;
+  /* the live tunnel link is degraded for this session (issue #218): non-null
+     while the queue is dropping frames, cleared when it catches up */
+  lag?: { depth: number; bytes: number } | null;
 }
 
 export const emptyView = (): SessionView => ({
@@ -214,6 +217,21 @@ export function reduce(v: SessionView, ev: ProtoEvent, frameTime: number): Sessi
       };
     case "session.state":
       return { ...v, stateDetail: ev.detail };
+    /* the live tunnel link fell behind (issue #218). Nothing in the transcript
+       changes — the dropped frames replay from the event log — but the LAG is
+       visible state, so a session whose live stream is degraded says so
+       instead of silently appearing healthy. `wedged` means the link was
+       closed with 4407 and the session will resync on reconnect. */
+    case "session.lag":
+      return {
+        ...v,
+        lag: ev.lagging ? { depth: ev.depth ?? 0, bytes: ev.bytes ?? 0 } : null,
+        stateDetail: ev.wedged
+          ? "tunnel link wedged — the live stream was closed and resyncs from the event log"
+          : ev.lagging
+            ? `tunnel link lagging (${ev.depth ?? 0} frames buffered) — oldest frames dropped, they replay on reconnect`
+            : undefined,
+      };
     default:
       return v;
   }
@@ -444,7 +462,48 @@ class Store {
     if (!v || v.hydration !== "ready") return this.ensureHydrated(id);
     try {
       const { events } = await this.be.getEvents(id);
-      const view = this.applyFrames(this.state.views[id], events, true);
+      /* REPAIR BY REBUILD, not by replaying into what is already rendered
+         (issue #218 audit rounds 2 B3 and 4 B1).
+
+         Why a repair is needed at all: a tunnel queue that overflows drops the
+         OLDEST frames (lowest rowids) while the survivors that broadcast are
+         the NEWEST, so after a drain the view's `lastSeq` sits ABOVE every
+         dropped frame and the `seq <= lastSeq` dedupe skips them again on
+         every reconnect — the transcript stayed short until a page reload.
+
+         Why the first attempt was wrong: it kept the populated view and zeroed
+         `lastSeq`, so the whole log replayed ON TOP of the rendered transcript.
+         Several reducers are idempotent (`msg.start`, `tool.call`,
+         `perm.request`, `llm.call.start`, `subagent.spawn` all guard on an
+         existing entry) but `msg.chunk` is NOT — it concatenates
+         (`text: last.text + ev.text`, :120) — so every reconnect re-appended
+         every chunk and text duplicated, compounding on each blip.
+         "reduce is idempotent" was simply false.
+
+         Rebuilding from `emptyView()` inherits `ensureHydrated`'s proven
+         behaviour: the log is replayed into empty state exactly ONCE, so there
+         is nothing to duplicate. Only the control/UI fields that are NOT
+         derived from the log are carried across — `hydration` (or the view
+         would flash back to a spinner) and `lag` (the tunnel health notice,
+         which is live state with no log row and would otherwise be lost by the
+         very reconnect that triggers this). */
+      /* Re-read AFTER the await (audit round 6, B1): the session can be
+         deleted on another device while getEvents is in flight, in which case
+         `session.deleted` has already removed `views[id]` and there is nothing
+         to repair — writing a rebuilt view here would resurrect a session the
+         user just deleted, and dereferencing the missing view threw a
+         misleading "Rehydration failed" toast. */
+      const prev = this.state.views[id];
+      if (!prev) return;
+      const rebuilt = this.applyFrames(emptyView(), events, true);
+      /* `stateDetail` is carried across too (audit round 6, B2). It is REBUILT
+         from the log's `session.state` frames, so replaying clobbers the
+         tunnel-health string the live `session.lag` reducer set (`:229-233`).
+         Since a lag event fires once per episode (design constraint 2), an
+         ongoing episode would show no notice again until it recovered and a
+         NEW episode started. Carrying it preserves the notice across the very
+         resync that triggers this repair. */
+      const view = { ...rebuilt, hydration: prev.hydration, lag: prev.lag ?? null, stateDetail: prev.stateDetail };
       this.set((s) => ({ views: { ...s.views, [id]: view } }));
     } catch (e: any) {
       this.toast("error", "Rehydration failed", e.message);
@@ -457,9 +516,26 @@ class Store {
     let clock = 0; // during replay, events without `at` inherit the last known timestamp
     for (const f of frames) {
       if ("at" in f.ev) clock = toMs((f.ev as any).at);
-      if (f.seq <= v.lastSeq) continue;
+      /* `seq: 0` means NOT PERSISTED — a broadcast-only control frame with no
+         log row to dedupe against (issue #218 audit rounds 3 B1 and 5 B1).
+
+         Such a frame must not participate in the dedupe (`f.seq <= lastSeq`
+         would discard it on every view, since lastSeq >= 0) — and, just as
+         importantly, it must not MOVE the watermark either. The exemption has
+         to be symmetric: an earlier revision skipped the frame but still wrote
+         `lastSeq = f.seq`, so a `session.lag` frame reset the view's
+         high-water mark to ZERO and every later frame in the same batch looked
+         unseen. In `ensureHydrated` — where a batch mixes replayed log frames
+         with live frames buffered during "loading" — the buffered copies of
+         already-persisted chunks were then applied twice, re-arming the
+         text-duplication corruption fixed in round 4.
+
+         Control frames are idempotent state assignments (set/clear a flag),
+         so re-applying one is harmless; only the watermark write had to go. */
+      const control = f.seq === 0;
+      if (!control && f.seq <= v.lastSeq) continue;
       const t = replay ? clock || Date.now() : Date.now();
-      v = reduce({ ...v, lastSeq: f.seq }, f.ev, t);
+      v = reduce(control ? v : { ...v, lastSeq: f.seq }, f.ev, t);
     }
     return v;
   }
