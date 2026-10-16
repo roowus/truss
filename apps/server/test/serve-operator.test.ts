@@ -7,7 +7,7 @@ import { freshServer } from "./helpers.js";
    `400: sending serve config: Access denied: serve config denied`).
    These FAIL on purpose today: they pin the contract a fix must satisfy.
 
-   Root cause (verified live on rewvis): tailscaled has NO operator set
+   Root cause (verified live on a tailnet node): tailscaled has NO operator set
    (`tailscale debug prefs` → OperatorUser: None) and truss runs as the
    non-root user `ubuntu` — tailscaled's LocalAPI refuses serve-config writes
    from non-root non-operators. The toggle can never work until
