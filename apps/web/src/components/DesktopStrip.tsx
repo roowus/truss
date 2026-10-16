@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { desktops, useDesktops } from "@/lib/desktops";
 import { workspaceTabCloseMode } from "@/lib/workspaceClose";
+import { useMenuCursor } from "@/lib/useMenuCursor";
 import { openPanel } from "@/lib/workspace";
 import { Icon, IconBtn } from "./ui";
 import { TabPicker } from "./TabPicker";
@@ -19,6 +20,8 @@ export function DesktopStrip() {
   const addTabRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLButtonElement | null>(null);
   const editRef = useRef<HTMLInputElement>(null);
+  /* which workspace the open menu belongs to, read when a key opens it */
+  const menuTarget = useRef<string | null>(null);
 
   useEffect(() => {
     if (editing) editRef.current?.select();
@@ -34,6 +37,44 @@ export function DesktopStrip() {
   };
   const showPicker = useCallback(() => setPicker(true), []);
   const live = spaces.filter((sp) => !sp.archived);
+
+  /* issue #227: the ⋯ menu is keyboard-operable through the shared roving
+     focus model. The rendered rows, the arrow order and the typeahead
+     labels all read from this one list, so they cannot drift apart. */
+  const menuItems = useMemo(
+    () =>
+      menu
+        ? menuSpec({
+            canDelete: live.length >= 2,
+            deleteConfirm,
+            onRename: () => beginRename(menu),
+            onDuplicate: () => { desktops.duplicate(menu); setMenu(null); },
+            onArchive: () => { desktops.archive(menu, true); setMenu(null); },
+            onDelete: () => {
+              if (!deleteConfirm) { setDeleteConfirm(true); return; }
+              desktops.remove(menu);
+              setMenu(null);
+            },
+          })
+        : [],
+    [menu, live.length, deleteConfirm],
+  );
+  const menuLabels = useMemo(() => menuItems.map((it) => it.label), [menuItems]);
+  const cursor = useMenuCursor(menuItems.length, {
+    open: !!menu,
+    onOpen: () => { setDeleteConfirm(false); setMenu(menuTarget.current); },
+    onClose: () => setMenu(null),
+    labels: menuLabels,
+    trigger: () => menuRef.current,
+  });
+  const activateRow = useCallback(
+    (i: number) => {
+      const item = menuItems[i];
+      if (!item || item.disabled) return;
+      item.action();
+    },
+    [menuItems],
+  );
 
   useEffect(() => setPicker(false), [activeId]);
 
@@ -97,10 +138,18 @@ export function DesktopStrip() {
               );
             })()}
             <button
+              ref={menu === space.id ? menuRef : undefined}
               aria-label={`Options for ${space.name}`}
+              aria-haspopup="menu"
+              aria-expanded={menu === space.id}
               title={`Options for ${space.name}`}
               className={cn("w-[21px] h-6 mr-0.5 grid place-items-center rounded hover:bg-white/[0.07] text-[var(--t-dim)] hover:text-[var(--t-fg)]", menu === space.id ? "opacity-100" : "opacity-0 group-hover:opacity-100 focus:opacity-100")}
-              onClick={(e) => { menuRef.current = e.currentTarget; setDeleteConfirm(false); setMenu(menu === space.id ? null : space.id); }}
+              onClick={(e) => { menuRef.current = e.currentTarget; menuTarget.current = space.id; setDeleteConfirm(false); setMenu(menu === space.id ? null : space.id); }}
+              onKeyDown={(e) => {
+                menuRef.current = e.currentTarget;
+                menuTarget.current = space.id;
+                cursor.onTriggerKeyDown(e);
+              }}
             >
               <Icon name="dots" size={12} />
             </button>
@@ -127,16 +176,31 @@ export function DesktopStrip() {
       {menu && menuRef.current && createPortal(
         <>
           <div className="fixed inset-0 z-[160]" onPointerDown={() => setMenu(null)} />
-          <div className="fixed z-[161] w-48 rounded-lg bg-[var(--t-bg2)] border border-[var(--t-line2)] shadow-2xl py-1 t-pop" style={menuPosition(menuRef.current)}>
-            <MenuItem icon="edit" onClick={() => beginRename(menu)}>Rename</MenuItem>
-            <MenuItem icon="copy" onClick={() => { desktops.duplicate(menu); setMenu(null); }}>Duplicate layout</MenuItem>
-            <MenuItem icon="archive" onClick={() => { desktops.archive(menu, true); setMenu(null); }}>Archive workspace</MenuItem>
-            <div className="my-1 border-t border-[var(--t-line)]" />
-            <MenuItem icon="trash" dangerous disabled={live.length < 2} onClick={() => {
-              if (!deleteConfirm) { setDeleteConfirm(true); return; }
-              desktops.remove(menu);
-              setMenu(null);
-            }}>{deleteConfirm ? "Confirm delete" : "Delete workspace"}</MenuItem>
+          <div
+            role="menu"
+            aria-label="Workspace options"
+            ref={(el) => { if (el) cursor.reset(); }}
+            onKeyDown={(e) => cursor.onMenuKeyDown(e, activateRow)}
+            className="fixed z-[161] w-48 rounded-lg bg-[var(--t-bg2)] border border-[var(--t-line2)] shadow-2xl py-1 t-pop"
+            style={menuPosition(menuRef.current)}
+          >
+            {menuItems.map((item, i) =>
+              item.separatorBefore ? (
+                <div key={`sep-${i}`} className="my-1 border-t border-[var(--t-line)]" />
+              ) : (
+                <MenuItem
+                  key={item.label}
+                  icon={item.icon}
+                  dangerous={item.dangerous}
+                  disabled={item.disabled}
+                  highlighted={cursor.index === i}
+                  onPointerEnter={() => cursor.setIndex(i)}
+                  onClick={item.action}
+                >
+                  {item.label}
+                </MenuItem>
+              ),
+            )}
             {deleteConfirm && <p className="px-3 pt-1 pb-1.5 text-[10.5px] text-[var(--t-dim)] leading-snug">Closes its tabs, not the sessions. A shell with no other tabs will be stopped.</p>}
           </div>
         </>, document.body,
@@ -153,9 +217,60 @@ function menuPosition(button: HTMLButtonElement) {
   };
 }
 
-function MenuItem({ icon, children, onClick, disabled, dangerous }: { icon: string; children: string; onClick: () => void; disabled?: boolean; dangerous?: boolean }) {
+/** One row of the workspace ⋯ menu. The rendered menu, the arrow order and
+ *  the typeahead labels all read from `menuSpec`, so they cannot drift. */
+interface MenuRow {
+  label: string;
+  icon: string;
+  action: () => void;
+  disabled?: boolean;
+  dangerous?: boolean;
+  separatorBefore?: boolean;
+}
+
+/** The workspace ⋯ menu rows, in render order (issue #227). Pure, so the
+ *  keyboard model and the rendered menu share one source of truth. */
+function menuSpec(opts: {
+  canDelete: boolean;
+  deleteConfirm: boolean;
+  onRename: () => void;
+  onDuplicate: () => void;
+  onArchive: () => void;
+  onDelete: () => void;
+}): MenuRow[] {
+  return [
+    { label: "Rename", icon: "edit", action: opts.onRename },
+    { label: "Duplicate layout", icon: "copy", action: opts.onDuplicate },
+    { label: "Archive workspace", icon: "archive", action: opts.onArchive },
+    {
+      /* the confirm row relabels itself, so the typeahead label is the one
+         currently on screen */
+      label: opts.deleteConfirm ? "Confirm delete" : "Delete workspace",
+      icon: "trash",
+      dangerous: true,
+      disabled: !opts.canDelete,
+      separatorBefore: true,
+      action: opts.onDelete,
+    },
+  ];
+}
+
+function MenuItem({ icon, children, onClick, disabled, dangerous, highlighted, onPointerEnter }: { icon: string; children: string; onClick: () => void; disabled?: boolean; dangerous?: boolean; highlighted?: boolean; onPointerEnter?: () => void }) {
   return (
-    <button disabled={disabled} onClick={onClick} className={cn("w-full flex items-center gap-2 px-3 h-8 text-left text-[12px] hover:bg-white/[0.05] disabled:opacity-35", dangerous ? "text-[var(--t-red)]" : "text-[var(--t-fg2)]")}>
+    <button
+      type="button"
+      role="menuitem"
+      aria-disabled={disabled || undefined}
+      disabled={disabled}
+      onClick={onClick}
+      onPointerEnter={disabled ? undefined : onPointerEnter}
+      className={cn(
+        "w-full flex items-center gap-2 px-3 h-8 text-left text-[12px] disabled:opacity-35",
+        !disabled && "hover:bg-white/[0.05]",
+        highlighted && !disabled && "bg-white/[0.07]",
+        dangerous ? "text-[var(--t-red)]" : "text-[var(--t-fg2)]",
+      )}
+    >
       <Icon name={icon} size={12} />{children}
     </button>
   );

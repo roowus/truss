@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { forwardRef, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { store, useApp, useNow } from "@/lib/store";
 import { desktops, useDesktops } from "@/lib/desktops";
 import { fmtCost, harnessStyle, shortPath } from "@/lib/format";
 import { harnessDisplay, hostAliases } from "@/lib/device";
 import { openDailyDriver, openFreeShell, openPanel } from "@/lib/workspace";
 import { canClose, describeClosed } from "@/lib/workspaceClose";
+import { useMenuCursor } from "@/lib/useMenuCursor";
 import { HarnessMark, Icon, StateDot } from "./ui";
 import { cn } from "@/utils/cn";
 
@@ -30,6 +31,28 @@ export function StatusBar({ onToggleSidebar }: { onToggleSidebar: () => void }) 
   const running = useMemo(() => order.filter((i) => sessions[i]?.state === "running" || sessions[i]?.state === "spawning"), [order, sessions]);
   const [menu, setMenu] = useState(false);
   const now = useNow(1000, conn.kind === "closed");
+  const runningRef = useRef<HTMLButtonElement | null>(null);
+
+  /* issue #227: the running-agents menu drives the shared roving-focus
+     model. Its rows are "open that session", so the typeahead labels are
+     the session titles in render order. */
+  const runningTitles = useMemo(() => running.map((id) => sessions[id]?.title ?? id), [running, sessions]);
+  const cursor = useMenuCursor(running.length, {
+    open: menu,
+    onOpen: () => setMenu(true),
+    onClose: () => setMenu(false),
+    labels: runningTitles,
+    trigger: () => runningRef.current,
+  });
+  const openSession = useCallback(
+    (i: number) => {
+      const id = running[i];
+      if (!id) return;
+      openPanel("chat", { sessionId: id });
+      setMenu(false);
+    },
+    [running],
+  );
 
   const firstPending = () => {
     for (const [id, v] of Object.entries(store.state.views)) if (v.pending.length) return id;
@@ -43,7 +66,7 @@ export function StatusBar({ onToggleSidebar }: { onToggleSidebar: () => void }) 
         {conn.kind === "open" ? "live" : conn.kind === "connecting" ? "connecting…" : `offline · retry ${Math.max(0, Math.ceil((conn.retryAt - now) / 1000))}s`}
       </SBItem>
       {running.length > 0 && (
-        <SBItem onClick={() => setMenu((m) => !m)} title="Running agents">
+        <SBItem ref={runningRef} onClick={() => setMenu((m) => !m)} onKeyDown={cursor.onTriggerKeyDown} expanded={menu} hasPopup title="Running agents">
           <StateDot state="running" size={7} />
           <span className="text-[var(--t-amber)]">{running.length}</span>
         </SBItem>
@@ -75,11 +98,23 @@ export function StatusBar({ onToggleSidebar }: { onToggleSidebar: () => void }) 
       {menu && (
         <>
           <div className="fixed inset-0 z-40" onClick={() => setMenu(false)} />
-          <div className="absolute bottom-[30px] left-16 z-50 w-64 rounded-lg bg-[var(--t-bg2)] border border-[var(--t-line2)] shadow-2xl py-1 t-pop">
-            {running.map((id) => {
+          <div
+            role="menu"
+            aria-label="Running agents"
+            ref={(el) => { if (el) cursor.reset(); }}
+            onKeyDown={(e) => cursor.onMenuKeyDown(e, openSession)}
+            className="absolute bottom-[30px] left-16 z-50 w-64 rounded-lg bg-[var(--t-bg2)] border border-[var(--t-line2)] shadow-2xl py-1 t-pop"
+          >
+            {running.map((id, i) => {
               const s = sessions[id];
               return (
-                <button key={id} onClick={() => { openPanel("chat", { sessionId: id }); setMenu(false); }} className="w-full flex items-center gap-2 px-2.5 h-8 hover:bg-white/5 text-left">
+                <button
+                  key={id}
+                  role="menuitem"
+                  onPointerEnter={() => cursor.setIndex(i)}
+                  onClick={() => openSession(i)}
+                  className={cn("w-full flex items-center gap-2 px-2.5 h-8 text-left", cursor.index === i ? "bg-white/[0.07]" : "hover:bg-white/5")}
+                >
                   <HarnessMark harness={s.harness} size={16} />
                   <span className="flex-1 truncate text-[12px] text-[var(--t-fg)]">{s.title}</span>
                   <StateDot state={s.state} size={7} />
@@ -93,14 +128,28 @@ export function StatusBar({ onToggleSidebar }: { onToggleSidebar: () => void }) 
   );
 }
 
-function SBItem({ children, onClick, title }: { children: ReactNode; onClick?: () => void; title?: string }) {
-  const C: any = onClick ? "button" : "div";
-  return (
-    <C onClick={onClick} title={title} className={cn("h-full inline-flex items-center gap-1.5 px-2", onClick && "hover:bg-white/[0.05] hover:text-[var(--t-fg)]")}>
-      {children}
-    </C>
-  );
-}
+/* The status-bar button slot. It is a real <button> whenever it has an
+   action, so it sits in the tab order and can be operated from the
+   keyboard (issue #227); a display-only slot stays a <div>. */
+const SBItem = forwardRef<HTMLButtonElement, { children: ReactNode; onClick?: () => void; onKeyDown?: (e: React.KeyboardEvent<HTMLButtonElement>) => void; title?: string; expanded?: boolean; hasPopup?: boolean }>(
+  ({ children, onClick, onKeyDown, title, expanded, hasPopup }, ref) => {
+    if (!onClick) return <div title={title} className="h-full inline-flex items-center gap-1.5 px-2">{children}</div>;
+    return (
+      <button
+        ref={ref}
+        type="button"
+        onClick={onClick}
+        onKeyDown={onKeyDown}
+        title={title}
+        aria-haspopup={hasPopup ? "menu" : undefined}
+        aria-expanded={hasPopup ? expanded : undefined}
+        className="h-full inline-flex items-center gap-1.5 px-2 hover:bg-white/[0.05] hover:text-[var(--t-fg)]"
+      >
+        {children}
+      </button>
+    );
+  },
+);
 
 /* ================= Toasts ================= */
 export function Toasts() {
