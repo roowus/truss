@@ -128,6 +128,67 @@ const catalog = lazyCatalog("models:dsh", async () => {
   return parseModelOptions(res.configOptions);
 });
 
+/* QUICK PATCH for the stale-dsh-catalog bug (see
+   docs/reports/2026-10-15-dsh-stale-model-catalog.md for the root cause).
+
+   dsh's picker is fed by whatever the harness reports over ACP, so it is only
+   as good as that report. When the report goes stale or narrow, the picker
+   freezes on old rows and the user sees a fraction of their real providers —
+   observed live as 27 all-Fireworks rows while dsh's own profile configured
+   113 models across 7 providers.
+
+   Two failure modes compound:
+     1. The persisted kv catalog is non-empty but wrong (27 stale rows), and
+        sessions.listModels only re-probes when the cache is EMPTY
+        (`models.length === 0`), so a stale catalog is never repaired.
+     2. Nothing cross-checks the harness's report against the credentials the
+        box actually has, so a narrow report silently wins.
+
+   This widens the picker with the key-proxy catalog (the same source pi uses,
+   which is why pi shows 800+) whenever the harness report looks stale. It is
+   deliberately a fallback, not an override: dsh's own list wins for models it
+   names, because those are the ids its providers are configured to accept.
+   Adding every key-proxy row unconditionally would offer ids dsh cannot
+   route. The real fix is to reconcile the two lists at the source; this patch
+   only stops the user seeing a hard 27. */
+const DSH_MIN_EXPECTED_MODELS = 50;
+
+/** pure: union of the harness report and the credential catalog, deduped, with
+    the harness's own rows first so its labels win. Exported for the regression
+    test — the merge rules (dedupe on provider+model, harness order preserved)
+    are the part worth pinning. */
+export function mergeCatalogRows(reported: CatalogModel[], extra: CatalogModel[]): CatalogModel[] {
+  const seen = new Set(reported.map((m) => `${m.provider}\u0000${m.model}`));
+  const merged = [...reported];
+  for (const e of extra) {
+    const key = `${e.provider}\u0000${e.model}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    merged.push({ provider: e.provider, model: e.model, label: e.label });
+  }
+  return merged;
+}
+
+/** true when the harness report looks too narrow to be the whole truth, so the
+    credential catalog should top it up. Exported for the regression test. */
+export function catalogLooksStale(reported: CatalogModel[], min = DSH_MIN_EXPECTED_MODELS): boolean {
+  return reported.length < min;
+}
+
+async function catalogWithCredentialFallback(): Promise<CatalogModel[]> {
+  const reported = catalog.list();
+  /* a healthy report is used as-is — no cross-provider expansion */
+  if (!catalogLooksStale(reported)) return reported;
+  try {
+    const { catalogForPickers } = await import("../modelcat.js");
+    return mergeCatalogRows(reported, await catalogForPickers());
+  } catch {
+    /* the key-proxy catalog is best-effort: a failure here must never empty a
+       picker that already had rows */
+    return reported;
+  }
+}
+
 /* spawned handles that already sent the deliverables guidance — ACP has no
    system-prompt channel, so the briefing rides the session's first prompt
    (issue #203); WeakSet, dead handles drop out with GC */
@@ -161,7 +222,7 @@ export const dshAdapter: HarnessAdapter = {
   capabilities: { permissions: true, subagents: false, streaming: true, queueWhileRunning: false },
 
   async listModels() {
-    return catalog.list();
+    return catalogWithCredentialFallback();
   },
 
   probeModels: catalog.probe,
