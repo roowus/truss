@@ -1,4 +1,4 @@
-import { readdirSync, realpathSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve, sep } from "node:path";
 
@@ -77,6 +77,78 @@ function confine(input: string): string {
     throw new Error(`not a directory: ${p}`);
   }
   return p;
+}
+
+/** A mkdir failure that already knows its HTTP status — the route maps it
+   straight onto the reply instead of guessing from the message. 403 is "the
+   path is outside the roots" (a permission boundary); 400 is "this is not a
+   valid name or parent"; 409 is "something is already there". */
+export class BrowseError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+  ) {
+    super(message);
+    this.name = "BrowseError";
+  }
+}
+
+/* Control characters (C0 + DEL) and NUL: a name the user cannot see or type
+   back is never a folder the picker should create. */
+const CONTROL = /[\u0000-\u001f\u007f]/;
+
+/** Name hygiene for the picker's "New folder" (issue #233): ONE path
+   segment, or null when the caller should show why. A separator anywhere is
+   malformed input (400) — never a permission problem (403) — so this stays
+   a pure predicate with no filesystem access. */
+export function validDirName(name: string): string | null {
+  if (typeof name !== "string") return null;
+  const trimmed = name.trim();
+  if (!trimmed || trimmed.length > 64) return null;
+  if (trimmed === "." || trimmed === "..") return null;
+  if (trimmed.includes("/") || trimmed.includes("\\")) return null;
+  if (CONTROL.test(trimmed)) return null;
+  return trimmed;
+}
+
+/** Create `name` inside `parent` — the picker's "New folder" (issue #233).
+   `parent` passes the exact same confine() as listDirs, and the CONFINED
+   path is what the child joins onto: the string that cleared the escape
+   check and the string returned to the caller are provably the same one, so
+   no later refactor can validate one path and write another. */
+export function mkdirInRoots(parent: string, name: string): string {
+  const parentPath = confine(parent); // 400/403 for escapes, exactly like listDirs
+  /* `parent` was a symlink: the child must be checked against where the
+     write really lands, not just the lexical join. */
+  let realParent: string;
+  try {
+    realParent = realpathSync(parentPath);
+  } catch {
+    throw new BrowseError(`directory does not exist: ${parentPath}`, 400);
+  }
+  const clean = validDirName(name);
+  if (!clean) throw new BrowseError(`not a valid folder name: ${JSON.stringify(name)}`, 400);
+  const target = join(parentPath, clean);
+  if (!within(target, browseRoots()) && !within(target, realRoots())) {
+    throw new BrowseError(`path is outside the browse roots: ${target}`, 403);
+  }
+  /* A dangling symlink at this name is invisible to statSync but mkdirSync
+     would still fail on it — refuse either way, never write through it. */
+  if (existsSync(target) || existsSync(join(realParent, clean))) {
+    throw new BrowseError(`already exists: ${target}`, 409);
+  }
+  try {
+    /* NOT recursive: the syscall is the authority on the race, and a
+       swallowed EEXIST would silently merge two folders into one. */
+    mkdirSync(target);
+  } catch (e: any) {
+    const code = e?.code;
+    if (code === "EEXIST") throw new BrowseError(`already exists: ${target}`, 409);
+    if (code === "ENOTDIR") throw new BrowseError(`not a directory: ${parentPath}`, 400);
+    if (code === "ENOENT") throw new BrowseError(`directory does not exist: ${parentPath}`, 400);
+    throw e; // EACCES/ENOSPC/EROFS/ENAMETOOLONG — the route reports the OS reason
+  }
+  return target;
 }
 
 export function listDirs(absPath: string, opts?: { showHidden?: boolean }): DirListing {

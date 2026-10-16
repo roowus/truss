@@ -93,6 +93,9 @@ export interface Backend {
   /** New Session cwd picker (issue #106): no path → the browse roots;
      with a path → that directory's subdirectories (names only) */
   browse(path?: string, showHidden?: boolean): Promise<BrowseResp>;
+  /** the picker's "New folder" (issue #233): one directory inside the
+     browse roots; the server owns the confinement and the name rules */
+  browseMkdir(parent: string, name: string): Promise<{ path: string }>;
   readFile(root: string, path: string): Promise<FileRead>;
   writeFile(root: string, path: string, content: string): Promise<FileRead>;
   createFile(root: string, path: string, kind: "file" | "dir"): Promise<FileEntry>;
@@ -253,6 +256,7 @@ export function createLiveBackend(): Backend {
       req("GET", `/api/files?root=${encodeURIComponent(root)}${path ? `&path=${encodeURIComponent(path)}` : ""}${q ? `&q=${encodeURIComponent(q)}` : ""}`),
     browse: (path, showHidden) =>
       req("GET", `/api/browse${path ? `?path=${encodeURIComponent(path)}${showHidden ? "&hidden=1" : ""}` : ""}`),
+    browseMkdir: (parent, name) => req("POST", "/api/browse/mkdir", { parent, name }),
     readFile: (root, path) => req("GET", `/api/file?root=${encodeURIComponent(root)}&path=${encodeURIComponent(path)}`),
     writeFile: (root, path, content) => req("PUT", "/api/file", { root, path, content }),
     createFile: (root, path, kind) => req("POST", "/api/files/create", { root, path, kind }),

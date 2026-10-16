@@ -740,6 +740,22 @@ export function createDemoBackend(): Backend {
       const up = path.slice(0, path.lastIndexOf("/")) || "/";
       return { dirs: entries, parent: path === HOME ? null : up };
     },
+    /* the picker's "New folder" (issue #233): the same rules the live
+       route enforces, against the virtual dir set — a demo that invented
+       the folder without recording it would show an empty listing after
+       navigating into it */
+    async browseMkdir(parent, name) {
+      await net(60);
+      const clean = name.trim();
+      if (!clean || clean.length > 64 || clean === "." || clean === ".." || /[/\\]/.test(clean) || /[\u0000-\u001f\u007f]/.test(clean)) {
+        throw new Error(`not a valid folder name: ${JSON.stringify(name)}`);
+      }
+      if (!dirs.has(parent)) throw new Error(`directory does not exist: ${parent}`);
+      const target = parent === "/" ? `/${clean}` : `${parent}/${clean}`;
+      if (dirs.has(target)) throw new Error(`already exists: ${target}`);
+      dirs.add(target);
+      return { path: target };
+    },
     async readFile(_root, path) {
       await net(60);
       const name = path.split("/").pop() ?? path;
