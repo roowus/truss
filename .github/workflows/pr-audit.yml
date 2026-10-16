@@ -455,9 +455,25 @@ jobs:
             commas, no comments. A clean audit still carries the block:
             {"version": 1, "head": "${{ needs.gate.outputs.head_sha }}",
             "verdict": "approve", "findings": [], "warnings": []}.
+
+      # `continue-on-error: true` makes a failing agent step report
+      # outcome=success, so gating the fallbacks on `outcome == 'failure'`
+      # meant they could NEVER run — the chain was dead by construction, and
+      # an agent that died produced no report and no fallback. Gate on the
+      # only thing that matters instead: did a report actually land?
+      - name: Did the DeepSeek leg produce a report?
+        id: ds-report
+        if: always()
+        run: |
+          if [ -s "${{ runner.temp }}/review-out/review.md" ]; then
+            echo "present=1" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=0" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Agent audit (GLM fallback)
         id: run-glm
-        if: steps.run-ds.outcome == 'failure'
+        if: always() && steps.ds-report.outputs.present == '0'
         uses: anthropics/claude-code-action@v1.0.35
         continue-on-error: true
         env:
@@ -477,12 +493,22 @@ jobs:
             --add-dir ${{ runner.temp }}/build-out
             --allowed-tools "Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh issue view:*),Bash(curl:*),Read,Write,Glob,Grep"
 
-      # Same audit, retried once on Kimi if the GLM run failed (for example the
-      # Z.AI key is out of credits). Not retried when the stagnation rule
-      # already picked Kimi.
+      # Same audit, retried once on Kimi if the GLM run also produced no report
+      # (for example the Z.AI key is out of credits). Not retried when the
+      # stagnation rule already picked Kimi.
+      - name: Did the GLM leg produce a report?
+        id: glm-report
+        if: always()
+        run: |
+          if [ -s "${{ runner.temp }}/review-out/review.md" ]; then
+            echo "present=1" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=0" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Agent audit (Kimi fallback)
         id: run-fb
-        if: steps.run-glm.outcome == 'failure' && steps.run-ds.outcome == 'failure' && needs.gate.outputs.provider == 'zai'
+        if: always() && steps.ds-report.outputs.present == '0' && steps.glm-report.outputs.present == '0' && needs.gate.outputs.provider == 'zai'
         uses: anthropics/claude-code-action@v1.0.35
         env:
           ANTHROPIC_BASE_URL: ${{ env.FW_BASE_URL }}
@@ -575,9 +601,19 @@ jobs:
           EDIT_ID: ${{ needs.gate.outputs.comment_id }}
         run: |
           SHORT="$(echo '${{ needs.gate.outputs.head_sha }}' | cut -c1-7)"
-          MODEL_NOTE="GLM"
-          [ "$PROVIDER" = "fireworks" ] && MODEL_NOTE="Kimi (3 stagnant rounds on GLM)"
-          [ "${{ steps.run-glm.outcome }}" = "failure" ] && [ "$PROVIDER" = "zai" ] && MODEL_NOTE="Kimi (GLM run failed)"
+          # Name the model that ACTUALLY produced the report, derived from the
+          # report's presence rather than from a step outcome (which
+          # continue-on-error pins to success). Labels must never claim a
+          # stronger model audited the change than the one that did.
+          if [ "${{ steps.ds-report.outputs.present }}" = "1" ]; then
+            MODEL_NOTE="DeepSeek Flash"
+          elif [ -s "${{ runner.temp }}/review-out/review.md" ]; then
+            if [ "$PROVIDER" = "zai" ]; then MODEL_NOTE="Kimi (GLM produced no report)"; else MODEL_NOTE="GLM"; fi
+          elif [ "$PROVIDER" = "fireworks" ]; then
+            MODEL_NOTE="Kimi (3 stagnant rounds on GLM)"
+          else
+            MODEL_NOTE="GLM"
+          fi
           MAJORS_HASH="$(cat "$RUNNER_TEMP/majors-hash.txt" 2>/dev/null)"
           if [ -s "$REVIEW" ]; then
             {
@@ -590,22 +626,30 @@ jobs:
               echo
               echo "<!-- truss-audit-state: {\"head\":\"${{ needs.gate.outputs.head_sha }}\",\"majorsHash\":\"$MAJORS_HASH\",\"provider\":\"$PROVIDER\"} -->"
             } > "$RUNNER_TEMP/comment.md"
+            HAD_REPORT=1
           else
             {
               echo "## 🔍 PR audit — no report produced · $MODEL_NOTE"
               echo
               echo "The audit run finished without writing its report. See the [run logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})."
             } > "$RUNNER_TEMP/comment.md"
+            HAD_REPORT=0
           fi
           if [ -n "$EDIT_ID" ]; then
             python3 -c 'import json, sys; print(json.dumps({"body": open(sys.argv[1]).read()}))' "$RUNNER_TEMP/comment.md" \
               | gh api -X PATCH "repos/${{ github.repository }}/issues/comments/$EDIT_ID" --input - > /dev/null
           else
             gh pr comment "$PR_NUMBER" --repo "${{ github.repository }}" --body-file "$RUNNER_TEMP/comment.md"
-            # A missing report is a PIPELINE FAILURE, not a quiet success.
-            # Every agent step is continue-on-error, so without this the job
-            # stays green while no audit actually ran (that masked a
-            # trigger_phrase misconfiguration across ten PRs — #228..#242).
+          fi
+          # A missing report is a PIPELINE FAILURE, not a quiet success.
+          # Every agent step is continue-on-error, so without this the job
+          # stays green while no audit actually ran (that masked a
+          # trigger_phrase misconfiguration across ten PRs — #228..#242).
+          # This check must key off the REPORT, never off the branch that
+          # happened to be taken when posting the comment: an earlier
+          # version sat in the `else` of `[ -n "$EDIT_ID" ]`, so every
+          # fresh run posted a good report and then failed anyway.
+          if [ "$HAD_REPORT" = "0" ]; then
             echo "::error::no audit report was produced — every agent leg failed or skipped; treating this run as failed"
             exit 1
           fi
