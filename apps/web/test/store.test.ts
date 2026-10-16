@@ -625,3 +625,41 @@ test("a resync after a dropped-frame gap repairs the transcript (B3)", async () 
   );
   assert.equal(wire.length, 4, "and the wire really did omit two frames");
 });
+
+/* issue #218 audit round 3, B1 — the lag notice must survive the seq dedupe.
+
+   `session.lag` is broadcast with `seq: 0` (it is a control frame with no log
+   row). The rule `f.seq <= v.lastSeq` discarded it on every view, because
+   lastSeq is always >= 0 — so the "tunnel link lagging/wedged" state never
+   rendered. The earlier tests for it called `reduce(...)` directly, which
+   bypasses the dedupe, so they passed while the live path dropped the frame.
+   This drives the REAL frame path instead. */
+test("a live session.lag frame reaches a hydrated view (round 3, B1)", async () => {
+  const { store: s, emptyView } = await import("../src/lib/store");
+
+  const storeAny = s as unknown as {
+    applyFrames: (v: unknown, f: unknown, replay: boolean) => ReturnType<typeof emptyView>;
+  };
+
+  /* a hydrated view: lastSeq is a real rowid, which is what made seq 0 lose */
+  let v = emptyView();
+  v = storeAny.applyFrames(
+    v,
+    [{ seq: 7, ev: { type: "msg.start", sessionId: "sLag", messageId: "m1", role: "assistant", at: 1000 } }],
+    true,
+  );
+  assert.equal(v.lastSeq, 7, "the view is hydrated past rowid 0");
+
+  /* the live control frame arrives with seq 0 — the LIVE path, not reduce() */
+  v = storeAny.applyFrames(v, [{ seq: 0, ev: { type: "session.lag", sessionId: "sLag", lagging: true, depth: 5, bytes: 99 } }], false);
+  assert.deepEqual(v.lag, { depth: 5, bytes: 99 }, "the lag notice survives the dedupe on a hydrated view");
+  assert.match(String(v.stateDetail), /lagging/i, "and the session detail says so");
+
+  /* recovery clears it the same way */
+  v = storeAny.applyFrames(v, [{ seq: 0, ev: { type: "session.lag", sessionId: "sLag", lagging: false } }], false);
+  assert.equal(v.lag, null, "recovery clears the flag through the live path");
+
+  /* a wedge close also arrives at seq 0 and must render */
+  v = storeAny.applyFrames(v, [{ seq: 0, ev: { type: "session.lag", sessionId: "sLag", lagging: false, wedged: true } }], false);
+  assert.match(String(v.stateDetail), /wedged/i, "the wedge notice renders too");
+});

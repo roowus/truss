@@ -391,7 +391,7 @@ export function wireQueueHealth(h: QueueHealth | null) {
  * for the drop-oldest policy to be safe: a frame is persisted here on receipt,
  * BEFORE the live queue can evict it.
  */
-let persistFrame: ((sessionId: string, ev: ProtoEvent) => void) | null = null;
+let persistFrame: ((sessionId: string, ev: ProtoEvent) => number | null) | null = null;
 
 /** sessions we have already warned about for post-teardown frames (one log line
     each). Bounded: this is a log-dedup convenience, and an unbounded Set would
@@ -411,7 +411,7 @@ function warnNoQueueOnce(sessionId: string) {
   );
 }
 
-export function wireFramePersistence(fn: ((sessionId: string, ev: ProtoEvent) => void) | null) {
+export function wireFramePersistence(fn: ((sessionId: string, ev: ProtoEvent) => number | null) | null) {
   persistFrame = fn;
 }
 

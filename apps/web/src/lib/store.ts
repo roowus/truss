@@ -487,7 +487,15 @@ class Store {
     let clock = 0; // during replay, events without `at` inherit the last known timestamp
     for (const f of frames) {
       if ("at" in f.ev) clock = toMs((f.ev as any).at);
-      if (f.seq <= v.lastSeq) continue;
+      /* `seq: 0` means NOT PERSISTED — a broadcast-only control frame with no
+         log row to dedupe against (issue #218 audit round 3, B1). The rule
+         below is `f.seq <= v.lastSeq`, and since lastSeq is always >= 0, a
+         seq-0 frame fails it on EVERY view and was silently discarded — which
+         killed the tunnel lag/wedged notice the same way seq-0 data frames
+         were killed in round 2. Control frames are idempotent state
+         assignments (set/clear a flag), so re-applying one is harmless and
+         they must NOT participate in replay dedupe. */
+      if (f.seq !== 0 && f.seq <= v.lastSeq) continue;
       const t = replay ? clock || Date.now() : Date.now();
       v = reduce({ ...v, lastSeq: f.seq }, f.ev, t);
     }
