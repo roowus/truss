@@ -462,19 +462,34 @@ class Store {
     if (!v || v.hydration !== "ready") return this.ensureHydrated(id);
     try {
       const { events } = await this.be.getEvents(id);
-      /* REPAIR, not catch-up (issue #218 audit round 2, B3). A tunnel queue
-         that dropped frames loses the OLDEST ones (lowest rowids) while the
-         survivors that broadcast are the NEWEST — so after a drain the view's
-         `lastSeq` sits ABOVE every dropped frame, and the `seq <= lastSeq`
-         dedupe would skip them again on every reconnect. That left the
-         transcript permanently short until a full page reload, which is the
-         exact scenario this feature exists for.
-         Resetting `lastSeq` here makes the replay re-apply the whole log and
-         refill the gap. It is safe because replay frames are applied with
-         `replay = true` (they never mutate session state) and `reduce` is
-         idempotent for transcript frames — the dedupe exists to stop LIVE
-         frames from double-applying, not to stop a repair. */
-      const view = this.applyFrames({ ...this.state.views[id], lastSeq: 0 }, events, true);
+      /* REPAIR BY REBUILD, not by replaying into what is already rendered
+         (issue #218 audit rounds 2 B3 and 4 B1).
+
+         Why a repair is needed at all: a tunnel queue that overflows drops the
+         OLDEST frames (lowest rowids) while the survivors that broadcast are
+         the NEWEST, so after a drain the view's `lastSeq` sits ABOVE every
+         dropped frame and the `seq <= lastSeq` dedupe skips them again on
+         every reconnect — the transcript stayed short until a page reload.
+
+         Why the first attempt was wrong: it kept the populated view and zeroed
+         `lastSeq`, so the whole log replayed ON TOP of the rendered transcript.
+         Several reducers are idempotent (`msg.start`, `tool.call`,
+         `perm.request`, `llm.call.start`, `subagent.spawn` all guard on an
+         existing entry) but `msg.chunk` is NOT — it concatenates
+         (`text: last.text + ev.text`, :120) — so every reconnect re-appended
+         every chunk and text duplicated, compounding on each blip.
+         "reduce is idempotent" was simply false.
+
+         Rebuilding from `emptyView()` inherits `ensureHydrated`'s proven
+         behaviour: the log is replayed into empty state exactly ONCE, so there
+         is nothing to duplicate. Only the control/UI fields that are NOT
+         derived from the log are carried across — `hydration` (or the view
+         would flash back to a spinner) and `lag` (the tunnel health notice,
+         which is live state with no log row and would otherwise be lost by the
+         very reconnect that triggers this). */
+      const prev = this.state.views[id];
+      const rebuilt = this.applyFrames(emptyView(), events, true);
+      const view = { ...rebuilt, hydration: prev.hydration, lag: prev.lag ?? null };
       this.set((s) => ({ views: { ...s.views, [id]: view } }));
     } catch (e: any) {
       this.toast("error", "Rehydration failed", e.message);

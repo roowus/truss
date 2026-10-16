@@ -663,3 +663,87 @@ test("a live session.lag frame reaches a hydrated view (round 3, B1)", async () 
   v = storeAny.applyFrames(v, [{ seq: 0, ev: { type: "session.lag", sessionId: "sLag", lagging: false, wedged: true } }], false);
   assert.match(String(v.stateDetail), /wedged/i, "the wedge notice renders too");
 });
+
+/* issue #218 audit round 4, B1 — a repair must not duplicate transcript text.
+
+   The round-3 resync fix zeroed `lastSeq` so the replay would refill the gap,
+   but it replayed ON TOP of the populated view. `msg.chunk` concatenates
+   (`text: last.text + ev.text`) with no already-applied guard — unlike
+   `msg.start`, `tool.call`, `perm.request` etc., which all check first. So
+   every reconnect re-appended every chunk: "hello" + " world" became
+   "hello worldhello world", compounding on each blip.
+
+   The round-3 test could not see this because it built its frames from
+   `msg.start` only — the one transcript event that IS idempotent. This one
+   uses the real shape (msg.start + msg.chunk) and asserts the TEXT, not just
+   the item count. */
+test("a resync never duplicates already-rendered message text (round 4, B1)", async () => {
+  const { store: s, emptyView } = await import("../src/lib/store");
+
+  const log = [
+    { seq: 1, ev: { type: "msg.start", sessionId: "sDup", messageId: "m1", role: "assistant", at: 1000 } },
+    { seq: 2, ev: { type: "msg.chunk", sessionId: "sDup", messageId: "m1", text: "hello", at: 1001 } },
+    { seq: 3, ev: { type: "msg.chunk", sessionId: "sDup", messageId: "m1", text: " world", at: 1002 } },
+  ];
+  const fakeBackend = {
+    getEvents: async () => ({ events: log }),
+    connectEvents: () => () => {},
+    sessions: async () => ({ sessions: [] }),
+  } as never;
+
+  (s as unknown as { state: { backend: unknown } }).state.backend = fakeBackend;
+  s.set((st) => ({ ...st, sessions: { sDup: { id: "sDup", title: "t" } } as never, views: {} }));
+
+  /* render the transcript LIVE, as the streaming path does */
+  const storeAny = s as unknown as {
+    applyFrames: (v: unknown, f: unknown, replay: boolean) => ReturnType<typeof emptyView>;
+  };
+  let view = emptyView();
+  view = storeAny.applyFrames(view, log, false);
+  s.set((st) => ({ ...st, views: { ...st.views, sDup: { ...view, hydration: "ready" as const } } }));
+
+  const textOf = () =>
+    (s.state.views["sDup"].msgs["m1"] as unknown as { segments: { text: string }[] }).segments
+      .map((x) => x.text)
+      .join("");
+  assert.equal(textOf(), "hello world", "the live transcript reads correctly before any resync");
+
+  /* a routine WS reconnect triggers resync -> rehydrate */
+  await (s as unknown as { rehydrate: (id: string) => Promise<void> }).rehydrate("sDup");
+  assert.equal(textOf(), "hello world", `a resync must not duplicate text (got ${JSON.stringify(textOf())})`);
+
+  /* and it must stay correct across REPEATED blips, not just the first */
+  await (s as unknown as { rehydrate: (id: string) => Promise<void> }).rehydrate("sDup");
+  await (s as unknown as { rehydrate: (id: string) => Promise<void> }).rehydrate("sDup");
+  assert.equal(textOf(), "hello world", `repeated resyncs must not compound duplicates (got ${JSON.stringify(textOf())})`);
+});
+
+test("a resync preserves the live lag notice while rebuilding the transcript (round 4, B1 x round 3, B1)", async () => {
+  /* The rebuild must not throw away live control state: `lag` has no log row,
+     so a repair that started from a bare emptyView() would clear the tunnel
+     health notice — and the reconnect that triggers the repair is exactly the
+     moment that notice matters. */
+  const { store: s, emptyView } = await import("../src/lib/store");
+
+  const log = [{ seq: 1, ev: { type: "msg.start", sessionId: "sKeep", messageId: "m1", role: "assistant", at: 1000 } }];
+  (s as unknown as { state: { backend: unknown } }).state.backend = {
+    getEvents: async () => ({ events: log }),
+    connectEvents: () => () => {},
+    sessions: async () => ({ sessions: [] }),
+  } as never;
+  s.set((st) => ({ ...st, sessions: { sKeep: { id: "sKeep", title: "t" } } as never, views: {} }));
+
+  const storeAny = s as unknown as {
+    applyFrames: (v: unknown, f: unknown, replay: boolean) => ReturnType<typeof emptyView>;
+  };
+  let view = storeAny.applyFrames(emptyView(), log, false);
+  view = storeAny.applyFrames(view, [{ seq: 0, ev: { type: "session.lag", sessionId: "sKeep", lagging: true, depth: 3, bytes: 40 } }], false);
+  s.set((st) => ({ ...st, views: { ...st.views, sKeep: { ...view, hydration: "ready" as const } } }));
+  assert.deepEqual(s.state.views["sKeep"].lag, { depth: 3, bytes: 40 }, "the lag notice is set before the resync");
+
+  await (s as unknown as { rehydrate: (id: string) => Promise<void> }).rehydrate("sKeep");
+  const after = s.state.views["sKeep"];
+  assert.deepEqual(after.lag, { depth: 3, bytes: 40 }, "the repair preserves the live lag notice");
+  assert.equal(after.hydration, "ready", "and does not flash the view back to a spinner");
+  assert.equal(after.items.length, 1, "while still rebuilding the transcript correctly");
+});
