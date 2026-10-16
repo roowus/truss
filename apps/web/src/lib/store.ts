@@ -503,16 +503,25 @@ class Store {
     for (const f of frames) {
       if ("at" in f.ev) clock = toMs((f.ev as any).at);
       /* `seq: 0` means NOT PERSISTED — a broadcast-only control frame with no
-         log row to dedupe against (issue #218 audit round 3, B1). The rule
-         below is `f.seq <= v.lastSeq`, and since lastSeq is always >= 0, a
-         seq-0 frame fails it on EVERY view and was silently discarded — which
-         killed the tunnel lag/wedged notice the same way seq-0 data frames
-         were killed in round 2. Control frames are idempotent state
-         assignments (set/clear a flag), so re-applying one is harmless and
-         they must NOT participate in replay dedupe. */
-      if (f.seq !== 0 && f.seq <= v.lastSeq) continue;
+         log row to dedupe against (issue #218 audit rounds 3 B1 and 5 B1).
+
+         Such a frame must not participate in the dedupe (`f.seq <= lastSeq`
+         would discard it on every view, since lastSeq >= 0) — and, just as
+         importantly, it must not MOVE the watermark either. The exemption has
+         to be symmetric: an earlier revision skipped the frame but still wrote
+         `lastSeq = f.seq`, so a `session.lag` frame reset the view's
+         high-water mark to ZERO and every later frame in the same batch looked
+         unseen. In `ensureHydrated` — where a batch mixes replayed log frames
+         with live frames buffered during "loading" — the buffered copies of
+         already-persisted chunks were then applied twice, re-arming the
+         text-duplication corruption fixed in round 4.
+
+         Control frames are idempotent state assignments (set/clear a flag),
+         so re-applying one is harmless; only the watermark write had to go. */
+      const control = f.seq === 0;
+      if (!control && f.seq <= v.lastSeq) continue;
       const t = replay ? clock || Date.now() : Date.now();
-      v = reduce({ ...v, lastSeq: f.seq }, f.ev, t);
+      v = reduce(control ? v : { ...v, lastSeq: f.seq }, f.ev, t);
     }
     return v;
   }

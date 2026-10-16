@@ -747,3 +747,51 @@ test("a resync preserves the live lag notice while rebuilding the transcript (ro
   assert.equal(after.hydration, "ready", "and does not flash the view back to a spinner");
   assert.equal(after.items.length, 1, "while still rebuilding the transcript correctly");
 });
+
+/* issue #218 audit round 5, B1 — the seq-0 exemption must be SYMMETRIC.
+
+   The round-3 fix correctly stopped a seq-0 control frame from being SKIPPED,
+   but left the next line writing `lastSeq = f.seq` — so applying a
+   `session.lag` frame (broadcastRaw, seq 0) reset the view's high-water mark
+   to ZERO. Every later frame in the same batch then looked unseen, and the
+   buffered copies of already-persisted chunks were applied a second time:
+   the round-4 duplication bug, re-armed through a different door.
+
+   A frame that does not participate in the dedupe must not move the watermark
+   either. This drives the REAL mixed batch ensureHydrated produces. */
+test("a seq-0 control frame does not regress lastSeq or duplicate buffered frames (round 5, B1)", async () => {
+  const { store: s, emptyView } = await import("../src/lib/store");
+
+  /* the persisted snapshot already contains chunks 1..3 */
+  const snapshot = [
+    { seq: 1, ev: { type: "msg.start", sessionId: "sMix", messageId: "m1", role: "assistant", at: 1000 } },
+    { seq: 2, ev: { type: "msg.chunk", sessionId: "sMix", messageId: "m1", text: "hello", at: 1001 } },
+    { seq: 3, ev: { type: "msg.chunk", sessionId: "sMix", messageId: "m1", text: " world", at: 1002 } },
+  ];
+  /* the live buffer accumulated while hydrating: a LAG control frame first
+     (seq 0), then live copies of frames the snapshot already covers */
+  const buffer = [
+    { seq: 0, ev: { type: "session.lag", sessionId: "sMix", lagging: true, depth: 2, bytes: 20 } },
+    { seq: 2, ev: { type: "msg.chunk", sessionId: "sMix", messageId: "m1", text: "hello", at: 1001 } },
+    { seq: 3, ev: { type: "msg.chunk", sessionId: "sMix", messageId: "m1", text: " world", at: 1002 } },
+  ];
+
+  const storeAny = s as unknown as {
+    applyFrames: (v: unknown, f: unknown, replay: boolean) => ReturnType<typeof emptyView>;
+  };
+
+  /* exactly what ensureHydrated does: replay the snapshot, then the buffer */
+  let view = storeAny.applyFrames(emptyView(), snapshot, true);
+  assert.equal(view.lastSeq, 3, "the snapshot advanced the watermark to 3");
+
+  view = storeAny.applyFrames(view, buffer, false);
+
+  assert.equal(
+    view.lastSeq,
+    3,
+    `a seq-0 control frame must NOT regress the watermark (got ${view.lastSeq}) — otherwise every later frame looks unseen`,
+  );
+  const text = (view.msgs["m1"] as unknown as { segments: { text: string }[] }).segments.map((x) => x.text).join("");
+  assert.equal(text, "hello world", `buffered frames the snapshot already covered must stay deduped (got ${JSON.stringify(text)})`);
+  assert.deepEqual(view.lag, { depth: 2, bytes: 20 }, "while the control frame's own effect still applies");
+});
