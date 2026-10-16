@@ -1,5 +1,6 @@
 import { useSyncExternalStore, useRef, useCallback, useEffect, useState } from "react";
 import type { Backend, ConnStatus } from "./backend";
+import { healthFramePatch } from "./health";
 import type {
   AgentInfo,
   CreateSessionBody,
@@ -224,8 +225,7 @@ export function reduce(v: SessionView, ev: ProtoEvent, frameTime: number): Sessi
 }
 
 /* ---------------- store ---------------- */
-class Store {
-  state: AppState = {
+class Store {  state: AppState = {
     backend: null,
     conn: { kind: "connecting", attempt: 0 },
     everConnected: false,
@@ -521,9 +521,12 @@ class Store {
     /* the server's readiness picture (issue #219): replace the whole snapshot.
        It is server-authoritative and already rolled up, so the client stores
        it verbatim — recomputing the tri-state here would let the status bar
-       disagree with /api/health. */
+       disagree with /api/health. The mapping itself lives in the exported
+       pure reducer below so it is testable without instantiating the store
+       (audit round 3, B3). */
     if (ev.type === "health.snapshot") {
-      this.set({ health: ev.health });
+      const patch = healthFramePatch(ev);
+      if (patch) this.set(patch);
       return;
     }
     if (ev.type === "models.updated") {

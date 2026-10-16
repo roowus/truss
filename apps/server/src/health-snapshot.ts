@@ -66,47 +66,54 @@ function probeAgentListener(bind: string): SubsystemHealth {
 
 /** Model catalog / key proxy (issue #219, audit round 1 B2).
  *
- * Round 1 correctly called out that this row was hardcoded `ok` on both
- * branches — permanently green even when the catalog is dead, while the
- * issue names "a model catalog fails to load" as a scenario the report must
- * surface. It now reads the lazy adapters' IN-MEMORY catalog state, which
- * costs nothing and spawns nothing (the whole point of the no-spawn rule):
+ * Round 1 called out that this row was hardcoded `ok` on both branches —
+ * permanently green even when the catalog is dead, while the issue names "a
+ * model catalog fails to load" as a scenario the report must surface.
  *
- *   - a lazy adapter (dsh, hermes) whose catalog is still empty has not
- *     discovered anything yet. That is honestly `degraded` — the picker
- *     shows only "harness default" — and NOT `ok`.
- *   - if every lazy catalog is empty AND the router gate is off, nothing
- *     supplied models at all.
+ * Round 3 (B1) correctly called out that the first fix overcorrected. The
+ * dsh and hermes lazy catalogs are registered at MODULE LOAD and both
+ * modules are imported by the server's startup graph, so `lazy.length` is
+ * always 2 and their caches are empty until someone opens the New Session
+ * dialog (their probe is opt-in). Reporting `degraded` whenever those caches
+ * were cold meant a perfectly healthy install showed a permanently AMBER dot
+ * and printed `degraded` at boot — noise that trains people to ignore the
+ * list, which is the same failure the transcribe row avoids.
  *
- * A populated catalog is `ok`. This is still a cheap in-memory read, so the
- * live re-probe contract holds; it is not a claim that any given model is
- * reachable, and the detail says so. */
+ * So: `ok` once ANYTHING was discovered (a populated lazy cache, or the
+ * router gate on, which supplies models regardless of the lazy caches), and
+ * `degraded` only when nothing has loaded at all. Still a cheap in-memory
+ * read — no network call, no spawn — so the live re-probe contract holds.
+ * The detail states plainly what was observed, including how many lazy
+ * adapters have not discovered anything yet, so the row never overstates
+ * what it knows. */
 function probeCatalog(): SubsystemHealth {
-  const gate = modelRouterEnabled()
+  const gateOn = modelRouterEnabled();
+  const gate = gateOn
     ? `model router gate ON → 127.0.0.1:${modelRouterPort()}`
     : "model router gate off (direct provider routes)";
   try {
     const lazy = lazyCatalogStates();
-    if (!lazy.length) return { name: "model-catalog", state: "ok", detail: gate };
-    const empty = lazy.filter((l) => l.count === 0);
-    if (empty.length === lazy.length) {
-      /* nothing discovered from any lazy adapter: works with less — the
-         picker falls back to "harness default" (issue #101) */
-      return {
-        name: "model-catalog",
-        state: "degraded",
-        detail: `${gate}; no catalog discovered yet from ${empty.map((l) => l.harness).join(", ")}`,
-      };
+    const discovered = lazy.reduce((n, l) => n + l.count, 0);
+    const undecided = lazy.filter((l) => l.count === 0).map((l) => l.harness);
+
+    /* anything loaded — or the gate serving models independently of the lazy
+       caches — means the catalog is up */
+    if (discovered > 0) {
+      const pending = undecided.length ? `; not yet discovered from ${undecided.join(", ")}` : "";
+      return { name: "model-catalog", state: "ok", detail: `${gate}; ${discovered} models discovered${pending}` };
     }
-    if (empty.length) {
-      return {
-        name: "model-catalog",
-        state: "degraded",
-        detail: `${gate}; no catalog from ${empty.map((l) => l.harness).join(", ")}`,
-      };
+    if (gateOn) {
+      return { name: "model-catalog", state: "ok", detail: `${gate}; models served by the router` };
     }
-    const total = lazy.reduce((n, l) => n + l.count, 0);
-    return { name: "model-catalog", state: "ok", detail: `${gate}; ${total} models discovered` };
+    /* nothing has loaded from any source: the picker falls back to "harness
+       default" (issue #101) — works with less, so degraded, never down */
+    return {
+      name: "model-catalog",
+      state: "degraded",
+      detail: lazy.length
+        ? `${gate}; no catalog discovered yet from ${undecided.join(", ")}`
+        : `${gate}; no catalog discovered yet`,
+    };
   } catch (err) {
     return { name: "model-catalog", state: "degraded", detail: `catalog state unreadable: ${String(err)}` };
   }
@@ -121,10 +128,31 @@ function probeScheduler(): SubsystemHealth {
 
 /** transcribe is OMITTED entirely when unconfigured — an `ok` row for a
     feature that is not on is noise that trains people to ignore the list. */
+/** transcribe is OMITTED entirely when unconfigured — an `ok` row for a
+    feature that is not on is noise that trains people to ignore the list.
+
+    The reported URL is reduced to scheme+host+path (audit round 3, B4):
+    /api/health has no auth and the same snapshot is broadcast to every
+    connected client, so a credential or token embedded in the configured URL
+    (userinfo, or a `?token=…` query) must never ride into the payload. We
+    still report WHICH endpoint is configured, which is the diagnostic value;
+    the secrets are not. */
 function probeTranscribe(env: NodeJS.ProcessEnv): SubsystemHealth[] {
   const cfg = transcribeConfigFromEnv(env);
   if (!cfg.url) return [];
-  return [{ name: "transcribe", state: "ok", detail: cfg.url }];
+  return [{ name: "transcribe", state: "ok", detail: redactUrl(cfg.url) }];
+}
+
+/** reduce a URL to scheme://host/path, dropping userinfo, query and fragment.
+    Falls back to a non-URL-safe placeholder when the value will not parse —
+    never echo the raw string, since the unparsed form is the risky one. */
+export function redactUrl(raw: string): string {
+  try {
+    const u = new URL(raw);
+    return `${u.protocol}//${u.host}${u.pathname}`;
+  } catch {
+    return "<configured endpoint (unparseable — value withheld)>";
+  }
 }
 
 /**

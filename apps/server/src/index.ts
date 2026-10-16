@@ -177,17 +177,24 @@ if (modelRouterEnabled()) {
    squatter (issue #135); "unknown" when the deploy has no git.
 
    ── DO NOT TIDY THIS INTO AN ALIAS OF /api/health (issue #219) ──
-   This is the LIVENESS/IDENTITY endpoint and its flat shape is a published
-   contract with a sed-parsing production consumer: scripts/mainline-watch.sh
-   extracts the "commit" field with a sed regex that requires that key at the
-   TOP LEVEL of a flat object (see the script around line 16 — the pattern is
-   a greedy .* up to the literal quoted key, so it only matches un-nested).
-   Nesting this payload, reordering its keys, or changing a value type makes
-   the mainline updater's staleness check silently return empty — and it
-   would then believe the service is never current. /api/health below is the
-   RICH readiness endpoint; the UI consumes that one. Both read from one
-   builder. (This comment deliberately does not quote the sed expression: its
-   terminator sequence would close this block comment early.) */
+   This is the LIVENESS/IDENTITY endpoint with live consumers:
+     - scripts/mainline-watch.sh extracts the commit from this response with
+       an UNANCHORED sed match for a quoted "commit" whose value is 7-40 hex
+       characters. Because the pattern demands hex, a value that is not
+       sha-like — notably "unknown", which this route legitimately returns on
+       a deploy without git — extracts as EMPTY, and the watcher then cannot
+       tell "stale" from "unreadable" and believes the service is never
+       current. That is the real fragility, and it is about the VALUE, not
+       the nesting or key order: the unanchored greedy match finds the key
+       whether nested or not, in any position (verified against the script
+       itself).
+     - apps/web/src/lib/backend.ts probes it for `ok` to pick live vs demo.
+   So: keep this route's `commit` a plain sha-or-"unknown" string, keep the
+   flat shape, and do NOT alias it to the rich readiness route. The rich
+   `/api/health` is a separate endpoint and the UI consumes that one; both
+   read from one snapshot builder. (This comment deliberately does not quote
+   the sed expression: its terminator sequence would close this block
+   comment early.) */
 app.get("/health", async () => ({ ok: true, service: "truss", time: Date.now(), commit: COMMIT }));
 
 /* rich readiness report (issue #219): server identity + a row per subsystem,

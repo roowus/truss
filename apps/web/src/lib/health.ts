@@ -80,3 +80,15 @@ export function healthSummary(snapshot: HealthSnapshot | null): string {
   if (n("down")) parts.push(`${n("down")} down`);
   return parts.join(" · ");
 }
+
+/* The health frame's whole effect on app state (issue #219), as a PURE
+   reducer. It lives here rather than in store.ts because store.ts touches
+   `window` at module scope, which makes the frame path untestable in a node
+   test — the gap audit round 3 (B3) called out. Returns null when a frame
+   carries nothing usable, so a malformed payload can never blank a good
+   snapshot (the dot would otherwise be stuck on "unknown"). */
+export function healthFramePatch(ev: { health?: HealthSnapshot } | undefined): { health: HealthSnapshot } | null {
+  if (!ev?.health || typeof ev.health !== "object") return null;
+  if (!Array.isArray(ev.health.subsystems)) return null;
+  return { health: ev.health };
+}

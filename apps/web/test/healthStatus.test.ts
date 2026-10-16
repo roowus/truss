@@ -100,3 +100,45 @@ test("an unrecognized state from the server does not render as healthy", () => {
   assert.equal(rows.length, 1, "the row is still rendered — we do not hide what we do not understand");
   assert.notEqual(rows[0].label, HEALTH_META.ok.label, "and it does not wear the healthy label");
 });
+
+/* ── audit round 3, B3: the STORE branch, not just the pure helpers ──────
+ *
+ * The report was right that nothing drove a `health.snapshot` FRAME — a
+ * regression in the store's handling would have shipped green. These feed a
+ * real frame through the store's exported pure reducer and then assert the
+ * rendered result, closing the loop the issue's fourth test asks for. */
+test("a health.snapshot frame reaches app state and renders", async () => {
+  const { healthFramePatch } = await import("../src/lib/health");
+
+  const payload: HealthSnapshot = {
+    commit: "abc1234",
+    version: "0.1.0",
+    bind: "0.0.0.0:4040",
+    dataDir: "/var/lib/truss",
+    state: "degraded",
+    time: 1_700_000_000_000,
+    subsystems: [
+      { name: "store", state: "ok", detail: "sqlite open" },
+      { name: "adapter:hermes", state: "degraded", detail: "not found on PATH: hermes-acp" },
+    ],
+  };
+
+  const patch = healthFramePatch({ health: payload });
+  assert.ok(patch, "a well-formed frame produces a patch");
+  assert.deepEqual(patch!.health, payload, "the client stores the server-authoritative snapshot VERBATIM");
+
+  /* the dot and the rows render from exactly what the frame carried */
+  assert.equal(healthDotState(patch!.health), "degraded", "the status bar dot reflects the frame");
+  const rows = healthRows(patch!.health);
+  assert.deepEqual(rows.map((r) => r.name).sort(), ["adapter:hermes", "store"], "every subsystem in the frame renders");
+  assert.equal(rows[0].name, "adapter:hermes", "the degraded row sorts first so the reason is read first");
+});
+
+test("a malformed health frame never blanks a good snapshot", async () => {
+  const { healthFramePatch } = await import("../src/lib/health");
+  /* dropping a good snapshot because a bad frame arrived would leave the dot
+     stuck on "unknown" — the client keeps what it has instead */
+  assert.equal(healthFramePatch({}), null, "no health field → no patch");
+  assert.equal(healthFramePatch({ health: undefined }), null, "undefined → no patch");
+  assert.equal(healthFramePatch({ health: { subsystems: "nope" } as never }), null, "non-array subsystems → no patch");
+});

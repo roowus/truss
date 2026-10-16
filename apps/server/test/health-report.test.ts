@@ -417,3 +417,98 @@ test("whichSync finds an absolute path target, not just a PATH name", () => {
   assert.equal(whichSync(join(dir, "nope"), { PATH: dir } as NodeJS.ProcessEnv), null, "a missing absolute path is null");
   rmSync(dir, { recursive: true, force: true });
 });
+
+test("the shape the mainline watcher's sed actually depends on is pinned", () => {
+  /* Audit round 3 B2: the guard comment originally justified "keep /health
+     flat and un-aliased" with a WRONG mechanism — it claimed the watcher's
+     sed needs `commit` at the top level of a flat object. What actually
+     breaks the watcher is the VALUE: the pattern demands 7-40 HEX chars, so
+     "unknown" extracts as EMPTY and the updater cannot tell stale from
+     unreadable. This runs the REAL expression from the real script (read out
+     of scripts/mainline-watch.sh) through real sed, so the pin cannot drift
+     from the consumer. */
+  const script = readFileSync(new URL("../../../scripts/mainline-watch.sh", import.meta.url), "utf8");
+  const line = script.split("\n").find((l) => l.includes("commit") && l.includes("sed -n"));
+  assert.ok(line, "the watcher still extracts the commit with a sed -n expression");
+
+  /* run that exact sed program over candidate bodies: take the single-quoted
+     argument following `sed -n` */
+  const after = line.slice(line.indexOf("sed -n") + "sed -n".length).trim();
+  const quoted = after.match(/^'([^']*)'/);
+  assert.ok(quoted, `could not extract the sed program from: ${line}`);
+  const program = quoted[1];
+  const extract = (body: string): string =>
+    spawnSync("sed", ["-n", program], { input: body, encoding: "utf8" }).stdout.trim();
+
+  const sha = "abc1234def5678abc1234def5678abc1234def56";
+  assert.equal(extract(`{"ok":true,"service":"truss","time":1,"commit":"${sha}"}`), sha, "the live flat shape extracts the sha");
+  /* nesting and reordering do NOT break it — the mechanism the old comment
+     claimed was wrong, pinned so nobody re-introduces the false claim */
+  assert.equal(extract(`{"body":{"commit":"${sha}"}}`), sha, "a NESTED commit still extracts (the match is unanchored)");
+  assert.equal(extract(`{"commit":"${sha}","ok":true}`), sha, "key order does not matter");
+  /* the REAL fragility: a non-hex value extracts as EMPTY */
+  assert.equal(extract(`{"ok":true,"service":"truss","time":1,"commit":"unknown"}`), "", 'the literal "unknown" extracts as EMPTY — the true fragility');
+});
+
+/* ── audit round 3 follow-ups ─────────────────────────────────────────── */
+
+test("a credential embedded in TRUSS_TRANSCRIBE_URL is never echoed into the report", () => {
+  /* /api/health is unauthenticated and the snapshot is broadcast to every
+     connected client, so the row must report WHICH endpoint is configured
+     without leaking any userinfo or query token (audit round 3, B4). */
+  const snap = buildHealthSnapshot({
+    PATH: process.env.PATH,
+    HOME: process.env.HOME,
+    TRUSS_TRANSCRIBE_URL: "https://user:secret-token@asr.example.com/v1/audio?api_key=TOPSECRET",
+  } as NodeJS.ProcessEnv);
+  const row = snap.subsystems.find((s) => s.name === "transcribe");
+  assert.ok(row, "the configured transcribe appears");
+  const detail = row.detail ?? "";
+  assert.ok(!detail.includes("secret-token"), `userinfo must not leak: ${detail}`);
+  assert.ok(!detail.includes("TOPSECRET"), `query token must not leak: ${detail}`);
+  assert.ok(!detail.includes("user:"), `userinfo must not leak: ${detail}`);
+  assert.equal(detail, "https://asr.example.com/v1/audio", "scheme+host+path is still reported — that is the diagnostic value");
+
+  /* and the whole payload, serialized, is clean */
+  const json = JSON.stringify(snap);
+  assert.ok(!json.includes("TOPSECRET") && !json.includes("secret-token"), "nothing leaks anywhere in the payload");
+});
+
+test("an unparseable transcribe URL is withheld rather than echoed", () => {
+  const snap = buildHealthSnapshot({
+    PATH: process.env.PATH,
+    HOME: process.env.HOME,
+    TRUSS_TRANSCRIBE_URL: "not a url with a secret in it",
+  } as NodeJS.ProcessEnv);
+  const row = snap.subsystems.find((s) => s.name === "transcribe");
+  assert.ok(row, "still reports that transcribe is configured");
+  assert.ok(!(row.detail ?? "").includes("secret"), "an unparseable value is never echoed raw");
+});
+
+test("a healthy install with nothing discovered yet is not permanently amber", () => {
+  /* audit round 3, B1: the dsh/hermes lazy catalogs register at module load,
+     so `lazy.length` is always 2 and their caches stay empty until someone
+     opens the New Session dialog. Reporting `degraded` on that alone left a
+     healthy install with a permanently amber dot — noise that trains people
+     to ignore the list. This pins the two honest halves:
+       - gate ON is ok (the router serves models without the lazy caches);
+       - a populated catalog is ok and reports the count, even if some lazy
+         adapter has still discovered nothing. */
+  /* modelRouterEnabled() reads the REAL process.env (router-resolve.ts), so
+     the gate is set there rather than in a passed-in env object */
+  const prior = process.env.TRUSS_MODEL_ROUTER;
+  process.env.TRUSS_MODEL_ROUTER = "1";
+  try {
+    const gateOn = buildHealthSnapshot();
+    const onRow = gateOn.subsystems.find((s) => s.name === "model-catalog");
+    assert.equal(onRow?.state, "ok", "with the router gate ON the catalog is served, so the row is ok");
+    assert.match(onRow?.detail ?? "", /router/i, "and the detail says the router is serving it");
+    /* the CATALOG ROW being ok is the point here — the overall rollup also
+       reflects whatever adapters this host happens to have installed, which
+       is a different axis and asserted elsewhere */
+    assert.equal(onRow?.state, "ok", "the catalog row itself is ok with the gate on");
+  } finally {
+    if (prior === undefined) delete process.env.TRUSS_MODEL_ROUTER;
+    else process.env.TRUSS_MODEL_ROUTER = prior;
+  }
+});
