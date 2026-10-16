@@ -1,5 +1,5 @@
 import type { HarnessAdapter, AdapterHandle, SessionOpts } from "./adapters/types.js";
-import { isCatalogModel } from "./adapters/model-catalog-cache.js";
+import { CATALOG_MAX_AGE_MS, isCatalogModel } from "./adapters/model-catalog-cache.js";
 import type { HarnessId, ProtoEvent } from "@truss/proto";
 
 /**
@@ -144,9 +144,34 @@ class AsyncQueue<T> {
   }
 }
 
+/** Should a remote adapter's catalog be re-probed? (issue #232 audit B1)
+
+    sessions.listModels now offers every probeable adapter a probe, not only
+    empty ones, so each adapter owns its own freshness policy. This mirrors the
+    in-process lazyCatalog rule: an EMPTY catalog always probes (#101), a
+    populated one only once the shared staleness window has lapsed. Without it
+    every New Session dialog open would fan a models.list tunnel round-trip
+    (plus a 5s timer) at every connected host x adapter.
+
+    Pure and exported so the policy is pinned by a test rather than inferred
+    from the call site. */
+export function remoteCatalogWantsProbe(rowCount: number, probedAt: number, now = Date.now()): boolean {
+  if (!rowCount) return true;
+  if (!probedAt) return true;
+  return now - probedAt >= CATALOG_MAX_AGE_MS;
+}
+
 class RemoteAdapter implements HarnessAdapter {
   id: HarnessId;
   capabilities: HarnessAdapter["capabilities"];
+
+  /* when this adapter's catalog was last confirmed by a tunnel probe
+     (issue #232 audit B1). sessions.listModels now calls probeModels() for
+     every probeable adapter — not only empty ones — so a populated remote
+     catalog would otherwise be re-probed over the tunnel on every New Session
+     dialog open. 0 means "never confirmed", which is correct for a catalog
+     that hydrated from a previous connection. */
+  private modelsProbedAt = 0;
 
   constructor(
     private hostId: string,
@@ -176,6 +201,11 @@ class RemoteAdapter implements HarnessAdapter {
   async probeModels(): Promise<boolean> {
     const agent = agents.get(this.hostId);
     if (!agent || (agent.socket.readyState !== undefined && agent.socket.readyState !== 1)) return false;
+    /* same freshness rule as the in-process lazy catalogs (issue #232 audit
+       B1): re-probe when the catalog is EMPTY, and otherwise only once the
+       shared staleness window has lapsed. Probing on every dialog open would
+       fan a tunnel round-trip (plus a 5s timer) at every connected host. */
+    if (!remoteCatalogWantsProbe(hostModels(this.hostId, this.adapterId).length, this.modelsProbedAt)) return false;
     const reqId = `models-${++reqCounter}`;
     const models = await new Promise<ModelRow[] | null>((res) => {
       const timer = setTimeout(() => {
@@ -191,7 +221,12 @@ class RemoteAdapter implements HarnessAdapter {
       });
       agent.socket.send(JSON.stringify({ type: "models.list", reqId, adapterId: this.adapterId }));
     });
+    /* only a REAL answer confirms the catalog (audit round 2; the same rule
+       the in-process lazy catalog follows after round-1 B2). Stamping before
+       the probe resolves would let one timeout or a pre-probe agent suppress
+       re-probes for the entire staleness window. */
     if (!models) return false;
+    this.modelsProbedAt = Date.now();
     const before = hostModels(this.hostId, this.adapterId);
     setHostModels(this.hostId, models, this.adapterId);
     return JSON.stringify(before) !== JSON.stringify(models);
@@ -293,6 +328,26 @@ class RemoteAdapter implements HarnessAdapter {
   }
 }
 
+/* the live adapter instances, keyed `<adapter>@<host>` (issue #232 audit B1).
+
+   A test seam: RemoteAdapter.probeModels' freshness policy is only genuinely
+   pinned by asserting that no `models.list` leaves over the tunnel while the
+   catalog is populated and fresh. That needs the real instance, not the
+   source text — a source grep passes on a commented-out line, which is
+   exactly how the first version of this pin was written. */
+const liveAdapters = new Map<string, RemoteAdapter>();
+
+/** the live RemoteAdapter for a host+adapter, or null (test seam, see above) */
+export function adapterForHost(hostId: string, adapterId: string): HarnessAdapter | null {
+  return liveAdapters.get(`${adapterId}@${hostId}`) ?? null;
+}
+
+/** when this host+adapter's catalog was last CONFIRMED by a successful probe,
+    or 0 if never (issue #232 audit round 2) — test seam, see liveAdapters */
+export function __probedAtForTest(hostId: string, adapterId: string): number {
+  return (liveAdapters.get(`${adapterId}@${hostId}`) as unknown as { modelsProbedAt?: number })?.modelsProbedAt ?? 0;
+}
+
 /** an agent connected — register its adapters as `<id>@<host>` harnesses,
     then reconcile its session list against the server's (issue #100) */
 export function agentHello(
@@ -316,6 +371,7 @@ export function agentHello(
   });
   for (const a of adapterList) {
     const adapter = new RemoteAdapter(hostId, a.id, a.capabilities);
+    liveAdapters.set(`${a.id}@${hostId}`, adapter);
     registerFn?.(`${a.id}@${hostId}` as HarnessId, adapter);
     /* fill the catalog right at hello (issue #123): the picker's probe ask
        is deliberately gated behind a JSON content-type (CSRF hardening), so
@@ -384,6 +440,7 @@ export function agentBye(hostId: string, socket?: AgentInfo["socket"]) {
   if (socket && agent.socket !== socket) return; // stale close from a replaced connection
   agents.delete(hostId);
   for (const a of agent.adapters) {
+    liveAdapters.delete(`${a.id}@${hostId}`);
     unregisterFn?.(`${a.id}@${hostId}` as HarnessId);
   }
   for (const [reqId, p] of pendingSpawns) {

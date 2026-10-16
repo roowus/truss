@@ -65,6 +65,8 @@ import { modelRouterBaseUrl, modelRouterEnabled, modelRouterPort } from "./route
 import { routerPickerModels, startModelRouter } from "./model-router.js";
 import { COMMIT } from "./version.js";
 import { syncPiExtension, syncPiModelsJson } from "./pi-config.js";
+import { syncDshCatalogPatch } from "./dsh-catalog-gen.js";
+import { markGenerationSettled, useGeneratedCatalogPatch } from "./adapters/dsh.js";
 import { transcribeAudio, transcribeConfigFromEnv } from "./transcribe.js";
 import { setClaudeModels } from "./adapters/claude.js";
 import {
@@ -127,6 +129,29 @@ void ensureAgentBundle()
 void syncPiModelsJson()
   .then((r) => app.log.info(`pi models.json synced: ${r.providers} providers, ${r.models} models`))
   .catch((err) => app.log.warn(`pi models.json sync failed: ${err}`));
+
+/* dsh's model list is whatever the harness reports over ACP, and the harness
+   only reports what its --patch tells it (issue #232). Generate that patch
+   from the same key-proxy catalog and point dsh at it, so the picker can only
+   ever offer models the harness can actually route. On failure dsh keeps its
+   static list — never a narrower or empty picker. */
+const dshCatalogSync = syncDshCatalogPatch();
+/* the dsh harvest awaits this so the first picker probe cannot boot the
+   harness before the generated patch is known (issue #232) */
+markGenerationSettled(dshCatalogSync.then(() => undefined));
+void dshCatalogSync
+  .then((r) => {
+    if (!r.ok) {
+      app.log.warn("dsh model catalog generation failed — dsh keeps its static catalog");
+      return;
+    }
+    useGeneratedCatalogPatch(r.patchPath);
+    app.log.info(`dsh catalog patch generated: ${r.providers} providers, ${r.models} models -> ${r.patchPath}`);
+    /* "make it loud": a route with credentials but no rows is a reportable
+       condition, not a silent absence (the class of bug this issue is about) */
+    for (const g of r.gaps) app.log.warn(`dsh catalog gap: provider ${g.provider} has credentials but ${g.reason}`);
+  })
+  .catch((err) => app.log.warn(`dsh catalog patch generation failed: ${err}`));
 
 /* pi's truss tools are a generated extension pi auto-loads from its agent
    dir — install/refresh it on boot (the adapter re-ensures at spawn) */

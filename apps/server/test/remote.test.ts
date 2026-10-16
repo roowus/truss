@@ -257,3 +257,132 @@ test("spawn through a half-open socket fails fast, not after a 30s ack-timeout l
     cleanup();
   }
 });
+
+test("the remote catalog freshness policy: empty always probes, populated only when stale (audit B1)", async () => {
+  /* sessions.listModels now offers probeModels() to every probeable adapter,
+     not only empty ones (issue #232). RemoteAdapter has no in-process
+     lazyCatalog in front of it, so it needs its own guard — otherwise every
+     New Session dialog open fans a models.list tunnel round-trip (plus a 5s
+     timer) at every connected remote host × adapter. The policy is a pure
+     function so it can be pinned here directly. */
+  const { cleanup } = await freshServer("rem-probe-fresh");
+  try {
+    const remote = await import("../src/remote.js");
+    const { CATALOG_MAX_AGE_MS } = await import("../src/adapters/model-catalog-cache.js");
+    const now = Date.now();
+
+    assert.equal(remote.remoteCatalogWantsProbe(0, 0, now), true, "an empty catalog always probes (#101)");
+    assert.equal(
+      remote.remoteCatalogWantsProbe(5, now, now),
+      false,
+      "a populated, just-probed catalog must NOT be re-probed on every dialog open",
+    );
+    assert.equal(
+      remote.remoteCatalogWantsProbe(5, now - CATALOG_MAX_AGE_MS - 1, now),
+      true,
+      "a populated catalog past the staleness window probes again (#232)",
+    );
+    assert.equal(
+      remote.remoteCatalogWantsProbe(5, 0, now),
+      true,
+      "never-probed counts as stale, so a catalog hydrated from an earlier connection still fills",
+    );
+  } finally {
+    cleanup();
+  }
+});
+
+test("a POPULATED remote catalog sends no models.list over the tunnel until stale (audit B1)", async () => {
+  /* The behavioural half of the B1 pin: the pure policy function above proves
+     the rule, this proves RemoteAdapter.probeModels actually applies it and
+     skips the tunnel round-trip. Before #232 a populated catalog was never
+     re-probed by the dialog; after it, probeModels is called for every
+     probeable adapter on each POST /api/harnesses/probe — so without this
+     guard every New Session open would fan a models.list (plus a 5s timer) at
+     every connected remote host × adapter. */
+  const { cleanup } = await freshServer("rem-probe-populated");
+  try {
+    const remote = await import("../src/remote.js");
+    remote.wireRemoteRegistry({ register: () => {}, unregister: () => {}, sessionGone: () => {} });
+
+    const sent: string[] = [];
+    remote.agentHello("h-pop", "pop-host", [{ id: "pi", capabilities: CAPS }], fakeSocket(sent));
+
+    const found = remote.adapterForHost("h-pop", "pi");
+    assert.ok(found, "the live adapter is reachable through the test seam");
+    const adapter = found as { probeModels: () => Promise<boolean> };
+
+    /* the hello fires its own background probe (#123) — let it land so we
+       start from a known state */
+    await new Promise((r) => setTimeout(r, 50));
+    const lists = () => sent.filter((s) => s.includes("models.list")).length;
+
+    /* answer whatever the hello probe asked for, so the catalog is populated */
+    for (const raw of sent.filter((s) => s.includes("models.list"))) {
+      const req = JSON.parse(raw) as { reqId: string };
+      remote.agentFrame("h-pop", {
+        type: "models.result",
+        reqId: req.reqId,
+        models: [{ provider: "p", model: "m", label: "M" }],
+      });
+    }
+    await new Promise((r) => setTimeout(r, 50));
+
+    /* now drive a probe explicitly; potentially several times, as the dialog
+       does on every open */
+    const before = lists();
+    for (let i = 0; i < 3; i += 1) await adapter.probeModels();
+    assert.equal(
+      lists(),
+      before,
+      "a populated, fresh catalog must NOT send another models.list — every dialog open would otherwise fan a tunnel probe (audit B1)",
+    );
+  } finally {
+    cleanup();
+  }
+});
+
+test("only a REAL answer confirms the remote catalog — a timeout is retried (audit round 2)", async () => {
+  /* Round-2 edge finding: modelsProbedAt was stamped BEFORE the tunnel probe
+     resolved, so one timeout (or a pre-probe agent that never answers) marked
+     the catalog as freshly probed and suppressed re-probes for the whole
+     staleness window. Same shape as round-1 B2, which was fixed for the
+     in-process catalog — the remote adapter now follows the same rule.
+
+     Asserted directly on the stamp via a narrow test seam, because inferring
+     it through layered probe state gives false passes: the hello probe's own
+     success already stamps the clock, which masks a later failed probe. */
+  const { cleanup } = await freshServer("rem-probe-failed");
+  try {
+    const remote = await import("../src/remote.js");
+    remote.wireRemoteRegistry({ register: () => {}, unregister: () => {}, sessionGone: () => {} });
+
+    const sent: string[] = [];
+    /* a socket that never answers models.list — the pre-probe-agent case */
+    remote.agentHello("h-fail", "fail-host", [{ id: "pi", capabilities: CAPS }], fakeSocket(sent));
+
+    const found = remote.adapterForHost("h-fail", "pi");
+    assert.ok(found, "adapter reachable through the seam");
+    const adapter = found as { probeModels: () => Promise<boolean> };
+
+    /* the hello's own background probe is in flight; wait it out (5s timeout)
+       so we start from an unanswered, never-confirmed state */
+    await new Promise((r) => setTimeout(r, 5600));
+    assert.equal(
+      remote.__probedAtForTest("h-fail", "pi"),
+      0,
+      "an unanswered probe must leave the catalog UNCONFIRMED (stamp unset) — stamping at probe start is the bug",
+    );
+
+    /* and the adapter must therefore still want to probe */
+    sent.length = 0;
+    const inFlight = adapter.probeModels();
+    assert.ok(
+      sent.filter((s) => s.includes("models.list")).length > 0,
+      "a never-confirmed catalog must still send models.list on the next ask (audit round 2)",
+    );
+    await Promise.race([inFlight, new Promise((r) => setTimeout(r, 600))]);
+  } finally {
+    cleanup();
+  }
+});
