@@ -372,3 +372,44 @@ test("#216: a refused interrupt leaves the op id free even when the session is n
     cleanup();
   }
 });
+
+test("#216/B2: the user msg.start frame carries the op id (the secondary ack)", async () => {
+  /* the HTTP reply can be the thing that was lost; the frame proves the
+     server acted, so it must carry the same key the client queued */
+  const { sessions, rec, session, cleanup } = await rig("op-frame");
+  try {
+    await sessions.sendPrompt(session.id, "hello", undefined, "op-frame");
+    const start = rec.events.find((e) => e.type === "msg.start" && e.role === "user") as
+      | { clientOpId?: string; messageId: string }
+      | undefined;
+    assert.ok(start, "the user bubble was emitted");
+    assert.equal(start!.clientOpId, "op-frame", "the frame names the op");
+
+    /* and an op-id-less send emits no such field (back-compat) */
+    rec.events.length = 0;
+    await sessions.sendPrompt(session.id, "legacy");
+    const legacy = rec.events.find((e) => e.type === "msg.start" && e.role === "user") as
+      | { clientOpId?: string }
+      | undefined;
+    assert.equal(legacy?.clientOpId, undefined, "no key without an op id");
+  } finally {
+    cleanup();
+  }
+});
+
+test("#216/B2: a replayed prompt does NOT emit a duplicate user bubble", async () => {
+  const { sessions, rec, session, cleanup } = await rig("op-frame-dedupe");
+  try {
+    await sessions.sendPrompt(session.id, "hello", undefined, "op-x");
+    rec.events.length = 0;
+    const replay = await sessions.sendPrompt(session.id, "hello", undefined, "op-x");
+    assert.equal(replay.deduped, true);
+    assert.equal(
+      rec.events.filter((e) => e.type === "msg.start" && e.role === "user").length,
+      0,
+      "a replay emits no second bubble frame",
+    );
+  } finally {
+    cleanup();
+  }
+});

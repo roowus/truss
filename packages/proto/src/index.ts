@@ -157,6 +157,11 @@ export interface MsgStart {
   at: number;
   /** user prompts only: attached files (transcript chips survive reload) */
   attachments?: PromptAttachment[];
+  /** user prompts only, and only when the client sent one (issue #216): the
+      idempotency key this turn belongs to. It rides the frame as well as the
+      HTTP reply so a client whose response was lost can still retire its
+      outbox entry — the frame proves the server acted. */
+  clientOpId?: string;
 }
 export interface MsgChunk {
   type: "msg.chunk";

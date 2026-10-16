@@ -8,6 +8,7 @@ import {
   retire as outboxRetire,
   RETRY_NOTE,
   type OpKind,
+  type OutboxEntry,
   type OutboxState,
 } from "./outbox";
 import type {
@@ -272,7 +273,7 @@ class Store {
    * is otherwise invisible from outside the class. Read-only: the queue is
    * still driven only by op()/replayOutbox().
    */
-  pendingOps(): readonly { opId: string; kind: OpKind; sessionId: string }[] {
+  pendingOps(): readonly OutboxEntry[] {
     return this.outbox.entries;
   }
 
@@ -492,7 +493,10 @@ class Store {
     return v;
   }
 
-  private onFrame(f: Frame) {
+  /** public so a test can drive the bus without a websocket (see
+      apps/web/test/storeOutbox.test.ts) — the frame path is where the
+      secondary ack retires the outbox */
+  onFrame(f: Frame) {
     const ev = f.ev;
     /* global channels: todos + feed upserts (not tied to a session view) */
     if (ev.type === "todo.upsert") {
@@ -506,6 +510,15 @@ class Store {
         this.toast("info", ev.item.type === "permission" ? "Decision needed" : "Feed", ev.item.title);
       }
       return;
+    }
+    /* the secondary ack (issue #216): the user bubble a prompt created can
+       arrive on the event bus even when the HTTP reply that created it was
+       lost. Retiring here means such a prompt is never replayed, so it cannot
+       print a spurious "Retried after reconnect" for a message already on
+       screen (audit round 2, B2). Retirement is idempotent: the normal path
+       has usually retired it already, and `retire` is a no-op then. */
+    if (ev.type === "msg.start" && ev.role === "user" && ev.clientOpId) {
+      this.outbox = outboxRetire(this.outbox, ev.clientOpId);
     }
     /* an agent hello'd or went away: the hosts/harnesses rosters are stale
        the moment it happens (issue #100 manual test — the host panel read a
@@ -645,13 +658,14 @@ class Store {
    * The entry is queued BEFORE the request, so a response lost after the
    * server acted still leaves the op id in the outbox for the reconnect
    * replay (that is the whole point — ack-arrival is not the same fact as
-   * work-happened). A reply retires it: the HTTP 200 is the ack.
+   * work-happened). Two things retire it: the HTTP reply, and the user's
+   * `msg.start` frame on the event bus (see onFrame) for the case where the
+   * reply itself was what got lost.
    *
-   * `rethrow` controls only whether the FIRST-attempt failure is passed to
-   * the caller so the composer can show it. It does NOT decide whether the
-   * op is queued: queueing is what makes the lost-ack case recoverable, and
-   * dropping the entry on failure would take the prompt ledger out of reach
-   * of the one path that needs it.
+   * A failure is always rethrown, so the caller reports it exactly as it did
+   * before this feature. Rethrowing does NOT dequeue: queueing is what makes
+   * the lost-ack case recoverable, and dropping the entry on failure would
+   * take the prompt ledger out of reach of the one path that needs it.
    */
   private async op<K extends OpKind>(
     kind: K,

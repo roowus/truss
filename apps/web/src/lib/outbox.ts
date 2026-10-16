@@ -57,19 +57,33 @@ export function newOpId(): string {
   return `op-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
-/** queue an op. Returns a new state; the caller sends it immediately. */
+/**
+ * Queue an op. Returns a new state; the caller sends it immediately.
+ *
+ * Re-enqueueing an op id that is ALREADY queued keeps its original `at` and
+ * its attempt count. That matters because every replay re-enters here: if the
+ * clock restarted each time, an op the server keeps refusing would never age
+ * out (audit round 2, B1) — the 10-minute cap would be unreachable, the entry
+ * would keep sliding to the tail so the cap evicted live sends ahead of it,
+ * and the window in which the server may have forgotten the op would reopen
+ * indefinitely, which is the duplicate this whole file exists to prevent.
+ */
 export function enqueue(
   state: OutboxState,
-  entry: { opId: string; kind: OpKind; sessionId: string; body: Record<string, unknown>; at?: number; replayed?: boolean },
+  entry: { opId: string; kind: OpKind; sessionId: string; body: Record<string, unknown>; at?: number; attempts?: number; replayed?: boolean },
 ): OutboxState {
+  const prev = state.entries.find((e) => e.opId === entry.opId);
   const next: OutboxEntry = {
     opId: entry.opId,
     kind: entry.kind,
     sessionId: entry.sessionId,
-    at: entry.at ?? Date.now(),
-    attempts: 1,
+    /* first queue: now. Re-queue (a replay): keep the original stamp, so the
+       age cap measures the op's real lifetime, not the last attempt's */
+    at: prev?.at ?? entry.at ?? Date.now(),
+    /* each enqueue is one more real fire of this op */
+    attempts: (prev?.attempts ?? 0) + 1,
     body: entry.body,
-    ...(entry.replayed ? { replayed: true } : {}),
+    ...(prev?.replayed || entry.replayed ? { replayed: true } : {}),
   };
   const entries = [...state.entries.filter((e) => e.opId !== next.opId), next];
   /* cap by oldest first — the newest sends are the ones a user is waiting on */
@@ -86,15 +100,16 @@ export function retire(state: OutboxState, opId: string): OutboxState {
 /**
  * What to replay now: every entry still queued, marked as a replay and with
  * its attempt count bumped. Entries past the age cap are dropped instead —
- * see OUTBOX_MAX_AGE_MS for why replaying them would be wrong.
+ * see OUTBOX_MAX_AGE_MS for why replaying them would be wrong. The attempt
+ * count is left for `enqueue` to settle, so a replay does not inflate it.
  */
 export function pending(state: OutboxState, now = Date.now()): { replay: OutboxEntry[]; state: OutboxState } {
   const keep: OutboxEntry[] = [];
   const replay: OutboxEntry[] = [];
   for (const e of state.entries) {
     if (now - e.at > OUTBOX_MAX_AGE_MS) continue; // abandoned, not retried
-    replay.push({ ...e, attempts: e.attempts + 1, replayed: true });
-    keep.push({ ...e, attempts: e.attempts + 1, replayed: true });
+    replay.push({ ...e, replayed: true });
+    keep.push({ ...e, replayed: true });
   }
   return { replay, state: { entries: keep } };
 }
@@ -102,6 +117,11 @@ export function pending(state: OutboxState, now = Date.now()): { replay: OutboxE
 /** does this op id still need an ack? */
 export function has(state: OutboxState, opId: string): boolean {
   return state.entries.some((e) => e.opId === opId);
+}
+
+/** how many times this op id has been fired, 0 when it is not queued */
+export function attempts(state: OutboxState, opId: string): number {
+  return state.entries.find((e) => e.opId === opId)?.attempts ?? 0;
 }
 
 /**

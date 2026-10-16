@@ -494,7 +494,18 @@ export async function sendPrompt(
       return { ok: true, clientOpId: opId, messageId: prev?.messageId, deduped: true };
     }
   }
-  sink({ type: "msg.start", sessionId, messageId, role: "user", at: Date.now(), ...(atts ? { attachments: atts } : {}) });
+  sink({
+    type: "msg.start",
+    sessionId,
+    messageId,
+    role: "user",
+    at: Date.now(),
+    ...(atts ? { attachments: atts } : {}),
+    /* the secondary ack (issue #216): the frame carries the same op id the
+       HTTP reply does, so a client whose response was lost still learns the
+       server acted and can retire its outbox entry */
+    ...(opId ? { clientOpId: opId } : {}),
+  });
   sink({ type: "msg.chunk", sessionId, messageId, text });
   sink({ type: "msg.done", sessionId, messageId });
   // auto-title from the first prompt

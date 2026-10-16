@@ -119,3 +119,44 @@ test("#216: interrupt and permission are queued too, and retire on ack", async (
   for (const c of calls) assert.ok(c.opId, `${c.kind} carried an op id`);
   assert.equal(store.pendingOps().length, 0, "both acked and retired");
 });
+
+test("#216/B2: the user msg.start frame is a secondary ack", async () => {
+  /* audit round 2 B2: the HTTP reply can be the thing that was lost. The
+     server echoes the op id on the user's msg.start frame, and that frame
+     arriving is proof the server acted — so the entry must retire from it,
+     or the next reconnect replays a message already on screen. */
+  const { store, failPrompt, calls } = await freshStore();
+  failPrompt(1);
+  await assert.rejects(() => store.prompt("s1", "hello"));
+  const opId = calls[0]!.opId;
+  assert.equal(store.pendingOps().length, 1, "queued after the lost ack");
+
+  /* the frame that prompt created arrives over the bus */
+  store.onFrame({
+    seq: 1,
+    ev: { type: "msg.start", sessionId: "s1", messageId: "u-1", role: "user", at: Date.now(), clientOpId: opId },
+  } as never);
+  assert.equal(store.pendingOps().length, 0, "retired by the frame, not replayed");
+});
+
+test("#216: a msg.start frame for an unknown op id changes nothing", async () => {
+  const { store } = await freshStore();
+  store.onFrame({
+    seq: 1,
+    ev: { type: "msg.start", sessionId: "s1", messageId: "u-1", role: "user", at: Date.now(), clientOpId: "not-mine" },
+  } as never);
+  assert.equal(store.pendingOps().length, 0, "no spurious entries");
+});
+
+test("#216/B1: repeated replays keep the original age stamp, so the cap can fire", async () => {
+  const { store, failPrompt } = await freshStore();
+  failPrompt(10); // every attempt fails
+  await assert.rejects(() => store.prompt("s1", "hello"));
+  const first = store.pendingOps()[0] as unknown as { at: number };
+  const stamp = first.at;
+
+  await store.replayOutbox();
+  await store.replayOutbox();
+  const after = store.pendingOps()[0] as unknown as { at: number };
+  assert.equal(after.at, stamp, "the clock did not restart — the cap can still abandon it");
+});

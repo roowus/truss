@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
+  attempts,
   emptyOutbox,
   enqueue,
   has,
@@ -30,7 +31,11 @@ const op = (over: Partial<Parameters<typeof enqueue>[1]> = {}) => ({
   kind: over.kind ?? ("prompt" as const),
   sessionId: over.sessionId ?? "s1",
   body: over.body ?? { text: "hello" },
+  /* pass the optionals through — silently dropping one is how a test ends up
+     asserting against a flag the helper swallowed */
   ...(over.at !== undefined ? { at: over.at } : {}),
+  ...(over.replayed !== undefined ? { replayed: over.replayed } : {}),
+  ...(over.attempts !== undefined ? { attempts: over.attempts } : {}),
 });
 
 test("an enqueued op is queued until it is retired", () => {
@@ -54,13 +59,46 @@ test("re-enqueueing the same op id replaces rather than duplicates", () => {
   assert.deepEqual(s.entries[0]!.body, { text: "changed" });
 });
 
+test("#216/B1: a replay does NOT restart the age clock", () => {
+  /* audit round 2 B1: op() re-enqueues on every replay, so if the stamp were
+     refreshed the 10-minute cap could never fire and a never-landing op would
+     be retried forever. The stamp must measure the op's real lifetime. */
+  const t0 = Date.now() - 9 * 60 * 1000; // 9 minutes ago: inside the cap
+  let s = enqueue(emptyOutbox, op({ at: t0 }));
+  s = enqueue(s, op({ replayed: true })); // the replay re-enqueue
+  assert.equal(s.entries[0]!.at, t0, "the original stamp is kept");
+  assert.equal(s.entries[0]!.replayed, true, "and it is still marked a replay");
+
+  /* 2 more minutes: past the cap counted from the ORIGINAL stamp */
+  const { replay, state } = pending(s, t0 + OUTBOX_MAX_AGE_MS + 60_000);
+  assert.equal(replay.length, 0, "the cap now actually fires");
+  assert.equal(state.entries.length, 0);
+});
+
+test("#216/B1: the attempt count accumulates across replays", () => {
+  let s = enqueue(emptyOutbox, op());
+  assert.equal(attempts(s, "op-1"), 1, "queued once");
+  s = enqueue(s, op({ replayed: true }));
+  s = enqueue(s, op({ replayed: true }));
+  assert.equal(attempts(s, "op-1"), 3, "three real fires, not reset to 1");
+});
+
+test("#216/B1: a repeated replay keeps the dead op at the head, so it ages out first", () => {
+  const old = Date.now() - (OUTBOX_MAX_AGE_MS - 1000);
+  let s = enqueue(emptyOutbox, op({ opId: "dead", at: old }));
+  for (let i = 0; i < 3; i++) s = enqueue(s, op({ opId: "dead", replayed: true }));
+  assert.equal(s.entries[0]!.at, old, "not slid to the tail by its own replays");
+});
+
 test("pending() replays unacked ops with the same op id and marks them", () => {
   const s = enqueue(emptyOutbox, op());
   const { replay, state } = pending(s, Date.now());
   assert.equal(replay.length, 1);
   assert.equal(replay[0]!.opId, "op-1", "same id — this is the whole mechanism");
   assert.equal(replay[0]!.replayed, true, "marked as a replay");
-  assert.equal(replay[0]!.attempts, 2, "attempt count bumped");
+  /* the count is settled by enqueue, not here, so it is still the one fire
+     this entry has actually had */
+  assert.equal(replay[0]!.attempts, 1, "pending() does not inflate the count");
   assert.equal(state.entries.length, 1, "still queued: it is not acked yet");
 });
 

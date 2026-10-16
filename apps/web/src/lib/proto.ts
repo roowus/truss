@@ -385,7 +385,7 @@ export type ProtoEvent =
      review) — refetch hosts (the pendingPair list) and toast the ask */
   | (Base & { type: "pair.changed"; event: "requested" | "resolved"; request?: PairRequestInfo })
   | (Base & { type: "models.updated"; harness: HarnessId })
-  | (Base & { type: "msg.start"; messageId: string; role: "user" | "assistant" | "system"; at: At; attachments?: PromptAttachment[] })
+  | (Base & { type: "msg.start"; messageId: string; role: "user" | "assistant" | "system"; at: At; attachments?: PromptAttachment[]; clientOpId?: string })
   /* the server sink stamps `at` on every event that lacks one (issue #142
      audit) — optional here only because older payloads and imports predate it */
   | (Base & { type: "msg.chunk"; messageId: string; text: string; channel?: string; at?: At })
