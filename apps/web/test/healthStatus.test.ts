@@ -144,39 +144,22 @@ test("a malformed health frame never blanks a good snapshot", async () => {
   assert.equal(healthFramePatch({ health: { subsystems: "nope" } as never }), null, "non-array subsystems → no patch");
 });
 
-/* ── audit round 5, B1: the dot must populate on a NORMAL page load ──────
+/* ── audit round 5, B1 → round 9, B2: the dot must populate on a NORMAL
+ * page load ─────────────────────────────────────────────────────────────
  *
  * The bug: refreshHealth() existed but its only caller was resync(), which
- * is gated behind a RECONNECT (onConn skips it on the first open). So a tab
- * opened against an already-running server showed a grey "unknown" dot and
- * "No snapshot yet" until some remote host happened to drop — forever, on a
- * single-host setup with no agents at all. The event push cannot cover this:
- * the server broadcasts health.snapshot at boot (before any client can
- * connect) and only thereafter on the agents.changed edge.
+ * is gated behind a RECONNECT, so a tab opened against an already-running
+ * server showed a grey "unknown" dot until some remote host happened to
+ * drop — forever on a single-host setup. The server cannot cover it: the
+ * snapshot goes out at boot (before any client can connect) and thereafter
+ * only on the agents.changed edge.
  *
- * These are source-level pins, because the store's boot batch needs the full
- * backend + window to run for real. They assert the structural property the
- * fix establishes, in the same spirit as the no-spawn probe pin. */
-test("the store's init batch actually fetches health (B1 regression pin)", () => {
-  const src = readFileSync(new URL("../src/lib/store.ts", import.meta.url), "utf8");
-  const initBody = src.slice(src.indexOf("async init("), src.indexOf("async resync()"));
-  assert.ok(initBody.length > 0, "found the init method");
-  assert.match(
-    initBody,
-    /refreshHealth\(\)/,
-    "init() must fetch the readiness report — otherwise the dot stays 'unknown' on a normal page load (audit round 5 B1)",
-  );
-});
-
-test("the demo backend PUSHES a health frame, so demo mode is not stuck grey", () => {
-  const src = readFileSync(new URL("../src/lib/demo.ts", import.meta.url), "utf8");
-  const conn = src.slice(src.indexOf("connectEvents(onFrame"), src.indexOf("connectTerminal"));
-  assert.match(
-    conn,
-    /health\.snapshot/,
-    "demo mode emits no agents.changed edge, so connectEvents must push a health frame itself (audit round 5 B1)",
-  );
-});
+ * Round 9 replaced the original readFileSync/regex pins with the REAL
+ * behavioural test at the bottom of this file ("init() fetches health
+ * through the backend seam, and a frame drives the dot"), which exercises
+ * init()'s boot batch and the store's own onFrame dispatch. The source
+ * scans were narrower than they claimed (a moved call stayed green), so
+ * they are gone rather than kept alongside. */
 
 /* ── audit round 6: formatting hygiene guards ────────────────────────────
  *
@@ -261,4 +244,73 @@ test("no em dashes in this feature's user-facing copy (TRUSS.md)", () => {
       }
     }
   }
+});
+
+/* ── audit round 9, B2: drive the REAL store, not a source scan ──────────
+ *
+ * The earlier pins for "init() fetches health" and "the demo pushes a frame"
+ * were readFileSync + regex assertions, so a moved call or an emitted-but-
+ * ineffective frame would stay green. The store is importable in node with a
+ * small window shim, so the whole path can be exercised for real: a fake
+ * backend whose connectEvents emits a health.snapshot frame drives the
+ * store's own onFrame dispatch, and init()'s boot batch is asserted through
+ * the backend seam rather than by grepping source. */
+async function loadStore() {
+  (globalThis as any).window = globalThis;
+  (globalThis as any).requestAnimationFrame = (fn: () => void) => setTimeout(fn, 0);
+  return await import("../src/lib/store");
+}
+
+function fakeBackend(overrides: Record<string, unknown> = {}) {
+  const calls: string[] = [];
+  let emit: ((f: unknown) => void) | undefined;
+  const backend: any = {
+    mode: "live",
+    health: async () => {
+      calls.push("health");
+      return { commit: "x", version: "0.1.0", bind: "b", dataDir: "d", state: "ok", time: 1, subsystems: [{ name: "store", state: "ok" }] };
+    },
+    connectEvents: (onFrame: (f: unknown) => void) => {
+      emit = onFrame;
+      return () => undefined;
+    },
+    ...Object.fromEntries(
+      ["harnesses", "agents", "listSessions", "listTerminals", "todos", "feed", "hosts", "trash"]
+        .map((m) => [m, async () => { calls.push(m); return m === "harnesses" ? { harnesses: [], models: [] } : {}; }]),
+    ),
+    ...overrides,
+  };
+  return { backend, calls, emitFrame: (f: unknown) => emit?.(f) };
+}
+
+test("init() fetches health through the backend seam, and a frame drives the dot", async () => {
+  const { store } = await loadStore();
+  const { backend, calls, emitFrame } = fakeBackend();
+
+  await store.init(backend);
+  assert.ok(calls.includes("health"), "init() must ask the backend for the readiness report");
+
+  /* the frame path, exercised for real: emit through connectEvents and let
+     the store's own onFrame dispatch it */
+  emitFrame({
+    seq: 999,
+    ev: {
+      type: "health.snapshot",
+      sessionId: "",
+      health: {
+        commit: "abc1234", version: "0.1.0", bind: "0.0.0.0:4040", dataDir: "/tmp", state: "degraded", time: 2,
+        subsystems: [
+          { name: "store", state: "ok", detail: "sqlite open" },
+          { name: "adapter:hermes", state: "degraded", detail: "not found on PATH: hermes-acp" },
+        ],
+      },
+    },
+  });
+  assert.equal(store.state.health?.state, "degraded", "the emitted frame reached app state");
+  assert.equal(healthDotState(store.state.health), "degraded", "and the dot reflects it");
+  assert.deepEqual(
+    healthRows(store.state.health).map((r) => r.name).sort(),
+    ["adapter:hermes", "store"],
+    "and the popover rows match the frame",
+  );
 });
