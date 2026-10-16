@@ -1004,6 +1004,15 @@ export function createDemoBackend(): Backend {
       statusListeners.add(onStatus);
       onStatus({ kind: "connecting", attempt: 0 });
       const t = setTimeout(() => onStatus({ kind: "open", since: Date.now() }), 250);
+      /* the demo's readiness picture has to be PUSHED like the real server's
+         (issue #219, audit round 5 B1): demo mode emits no agents.changed
+         edge, so without this frame the status-bar dot would sit on
+         "unknown" forever. The live backend broadcasts at boot and on the
+         agent edge; this is the demo's equivalent of the boot broadcast. */
+      void this.health().then((health) => {
+        const frame: Frame = { seq: ++seq, ev: { type: "health.snapshot", sessionId: "", health } };
+        for (const l of listeners) l(frame);
+      });
       return () => {
         clearTimeout(t);
         listeners.delete(onFrame);

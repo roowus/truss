@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { HEALTH_META, healthDotState, healthRollup, healthRows, healthSummary } from "../src/lib/health";
 import type { HealthSnapshot, SubsystemHealth } from "../src/lib/proto";
 
@@ -141,4 +142,38 @@ test("a malformed health frame never blanks a good snapshot", async () => {
   assert.equal(healthFramePatch({}), null, "no health field → no patch");
   assert.equal(healthFramePatch({ health: undefined }), null, "undefined → no patch");
   assert.equal(healthFramePatch({ health: { subsystems: "nope" } as never }), null, "non-array subsystems → no patch");
+});
+
+/* ── audit round 5, B1: the dot must populate on a NORMAL page load ──────
+ *
+ * The bug: refreshHealth() existed but its only caller was resync(), which
+ * is gated behind a RECONNECT (onConn skips it on the first open). So a tab
+ * opened against an already-running server showed a grey "unknown" dot and
+ * "No snapshot yet" until some remote host happened to drop — forever, on a
+ * single-host setup with no agents at all. The event push cannot cover this:
+ * the server broadcasts health.snapshot at boot (before any client can
+ * connect) and only thereafter on the agents.changed edge.
+ *
+ * These are source-level pins, because the store's boot batch needs the full
+ * backend + window to run for real. They assert the structural property the
+ * fix establishes, in the same spirit as the no-spawn probe pin. */
+test("the store's init batch actually fetches health (B1 regression pin)", () => {
+  const src = readFileSync(new URL("../src/lib/store.ts", import.meta.url), "utf8");
+  const initBody = src.slice(src.indexOf("async init("), src.indexOf("async resync()"));
+  assert.ok(initBody.length > 0, "found the init method");
+  assert.match(
+    initBody,
+    /refreshHealth\(\)/,
+    "init() must fetch the readiness report — otherwise the dot stays 'unknown' on a normal page load (audit round 5 B1)",
+  );
+});
+
+test("the demo backend PUSHES a health frame, so demo mode is not stuck grey", () => {
+  const src = readFileSync(new URL("../src/lib/demo.ts", import.meta.url), "utf8");
+  const conn = src.slice(src.indexOf("connectEvents(onFrame"), src.indexOf("connectTerminal"));
+  assert.match(
+    conn,
+    /health\.snapshot/,
+    "demo mode emits no agents.changed edge, so connectEvents must push a health frame itself (audit round 5 B1)",
+  );
 });

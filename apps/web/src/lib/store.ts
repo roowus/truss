@@ -295,6 +295,13 @@ class Store {  state: AppState = {
       this.refreshTodos(),
       this.refreshFeed(),
       this.refreshHosts(),
+      /* the readiness report (issue #219, audit round 5 B1). Without this the
+         dot only ever filled in on an agents.changed edge, so a tab opened
+         against an already-running server — the normal case, and every
+         single-host setup with no remote agents — showed a grey "unknown"
+         dot and "No snapshot yet" forever. The event push stays the live
+         path; this is the initial read. */
+      this.refreshHealth(),
     ]);
     // Active sessions may have pending permission cards — hydrate them eagerly.
     for (const id of this.state.order) {

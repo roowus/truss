@@ -139,8 +139,6 @@ function probeScheduler(): SubsystemHealth {
 }
 
 /** transcribe is OMITTED entirely when unconfigured — an `ok` row for a
-    feature that is not on is noise that trains people to ignore the list. */
-/** transcribe is OMITTED entirely when unconfigured — an `ok` row for a
     feature that is not on is noise that trains people to ignore the list.
 
     The reported URL is reduced to scheme+host+path (audit round 3, B4):
