@@ -22,10 +22,17 @@
  * ## Where it is written, and why there
  *
  * The generated patch goes to the runtime data dir (`dataDir`, i.e.
- * `apps/server/data/` or `$TRUSS_DATA_DIR`) — deliberately OUTSIDE the repo
- * tree. A boot-time write inside the checkout would dirty `git status` for
- * every worker and for the audit, which is a self-inflicted version of the
- * shared-checkout problem the work-session rules exist to prevent. The
+ * `apps/server/data/` by default, or `$TRUSS_DATA_DIR`). That path is NOT
+ * outside the checkout — it is `apps/server/data/`, kept clean only by
+ * `.gitignore` (audit round 4 corrected an earlier comment here that claimed
+ * otherwise). The guarantee that actually matters, and is tested, is that the
+ * path is always ABSOLUTE and lands somewhere gitignored: a relative
+ * `$TRUSS_DATA_DIR` resolved against an unexpected cwd is the one way this
+ * could write into a tracked path, and resolving it absolutely is what
+ * prevents that. A boot-time write into tracked files would dirty
+ * `git status` for every worker and for the audit, which is a self-inflicted
+ * version of the shared-checkout problem the work-session rules exist to
+ * prevent. The
  * hand-written `config/truss-dsh-acp.yml` is never modified either: the
  * Config panel reads it (`router.ts`), and silently changing what that panel
  * reports would be a regression in a different feature.

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
 import { isAbsolute } from "node:path";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -113,12 +113,37 @@ test("a RELATIVE TRUSS_DATA_DIR resolves to an absolute path, never a tracked on
   assert.ok(out.includes("/apps/server/w/"), `nested path must land in the ignored apps/server/w/: ${out}`);
 });
 
-test("the generated file is written OUTSIDE the repo tree", () => {
-  /* Q3 constraint: a boot-time write inside the repo would dirty git status
-     for every worker and the audit. It lands in the runtime data dir. */
+test("the generated path is absolute and lands somewhere gitignored — not merely 'outside the tree'", () => {
+  /* The Q3 constraint is that a boot-time write must not dirty `git status`.
+     The previous version of this test asserted `!p.startsWith(process.cwd())`
+     while ALSO overriding TRUSS_DATA_DIR to a tmpdir, so it passed by
+     construction and would have passed even if the default pointed into the
+     checkout (audit round 4, Minor B1).
+
+     The honest guarantee is narrower than "outside the repo tree" — the
+     production default `apps/server/data/` IS inside it and is kept clean by
+     .gitignore. So assert what is actually true and load-bearing:
+       1. the path is always ABSOLUTE (a relative one resolved from an
+          unexpected cwd is the real hazard), and
+       2. it is gitignored. */
   const p = dshgen.generatedPatchPath();
-  assert.ok(!p.startsWith(process.cwd()), `generated patch must not live in the repo tree: ${p}`);
-  assert.ok(p.includes(DATA_DIR), `generated patch belongs in the runtime data dir: ${p}`);
+  assert.ok(isAbsolute(p), `generated patch path must be absolute: ${p}`);
+  assert.ok(p.endsWith("truss-dsh-acp-models.yml"), `unexpected filename: ${p}`);
+
+  /* the DEFAULT path (no TRUSS_DATA_DIR override) must also be gitignored —
+     this is the assertion the old test could not make. `git check-ignore` is
+     unavailable here (partly root-owned checkouts make git unreliable), so
+     read .gitignore and confirm the production default is covered. */
+  const repoRoot = join(process.cwd(), "..", "..");
+  const ignored = readFileSync(join(repoRoot, ".gitignore"), "utf8")
+    .split("\n")
+    .map((l) => l.trim())
+    .filter((l) => l && !l.startsWith("#"));
+  const defaultRel = "apps/server/data/truss-dsh-acp-models.yml";
+  assert.ok(
+    ignored.some((rule) => defaultRel.startsWith(rule.replace(/\*+$/, ""))),
+    `the DEFAULT generated path must be gitignored, else a boot dirties git status: ${defaultRel} vs ${JSON.stringify(ignored)}`,
+  );
 });
 
 test("generation failure degrades to the static 27, never an empty catalog", async () => {
