@@ -47,6 +47,28 @@ interface SessionRefModule {
   parseSessionRef(text: string): ParsedRef | null;
 }
 
+/* SPEC-TESTS for the FULL identity block — https://github.com/roowus/truss/issues/132
+   ("Copy reference should carry the full identity: truss id + harness uuid +
+   host id + full cwd (one-liner stays first, byte-identical)"). These FAIL on
+   purpose today: they pin the contract a fix must satisfy.
+
+   The one-liner (#13) is pinned separately above and must not move; the full
+   block puts it on line 1 UNCHANGED, then labels every id we hold — including
+   the harness's own uuid (harness_ref) — plus the unshortened cwd. Missing
+   fields are simply absent; undefined/null never leak into the text. */
+
+interface SessionMetaFull {
+  id: string;
+  harness: string;
+  cwd: string;
+  harness_ref?: string | null;
+}
+interface SessionRefFullModule {
+  formatSessionRef(meta: SessionMetaLike, hosts?: HostLike[]): string;
+  formatSessionRefFull(meta: SessionMetaFull, hosts?: HostLike[]): string;
+  parseSessionRef(text: string): ParsedRef | null;
+}
+
 async function load(): Promise<SessionRefModule | null> {
   const spec = "../src/lib/sessionRef"; // variable specifier: typechecks even before the module exists
   return import(spec).catch(() => null);
@@ -106,6 +128,76 @@ test("parseSessionRef finds a reference embedded in prose — that's the whole p
   assert.ok(ref, "sessionRef module must exist (see module test)");
   const sentence = `can you pick up where ${ref.formatSessionRef(REMOTE, HOSTS)} left off?`;
   assert.equal(ref.parseSessionRef(sentence)?.sessionId, "aa07c1d9");
+});
+
+async function loadFull(): Promise<SessionRefFullModule | null> {
+  const spec = "../src/lib/sessionRef"; // variable specifier: typechecks even before the module exists
+  return import(spec).catch(() => null);
+}
+
+const FULL: SessionMetaFull = {
+  id: "aa07c1d9",
+  harness: "pi@525b9cd4",
+  cwd: "/Users/alice/projects/doubletake",
+  harness_ref: "01a0edfd-6598-727a-99ee-15ab86352a3c",
+};
+const FULL_HOSTS: HostLike[] = [{ id: "525b9cd4", label: "devbox" }];
+
+test("formatSessionRefFull: line 1 is the #13 one-liner BYTE-IDENTICAL; every id labeled; full cwd; parses back", async () => {
+  const ref = await loadFull();
+  assert.ok(ref, "sessionRef module must export formatSessionRefFull — see issue #132");
+  assert.equal(typeof ref.formatSessionRefFull, "function");
+
+  const one = ref.formatSessionRef(FULL, FULL_HOSTS);
+  const full = ref.formatSessionRefFull(FULL, FULL_HOSTS);
+  const lines = full.split("\n");
+
+  assert.equal(lines[0], one, "line 1 must be formatSessionRef() byte-for-byte — the #13 contract is frozen");
+  assert.ok(full.startsWith(`${one}\n`), "the detail block starts on line 2");
+
+  /* every id we hold, labeled */
+  assert.ok(/^truss: aa07c1d9$/m.test(full), "truss id labeled");
+  assert.ok(/^pi session: 01a0edfd-6598-727a-99ee-15ab86352a3c$/m.test(full), "harness's own uuid labeled");
+  assert.ok(/^host: 525b9cd4$/m.test(full), "host ID (not the human label) labeled — the resolvable one");
+  assert.ok(/^cwd: \/Users\/alice\/projects\/doubletake$/m.test(full), "cwd is FULL — no ~ shortening in the detail block");
+  assert.equal(lines.filter((l) => l.includes("~")).length, 1, "the ~-shortened path lives on line 1 only");
+  assert.equal(lines[1], "truss: aa07c1d9", "the home-shortened path never reappears in the block");
+
+  /* the block still parses back to the session id (and keeps the #13 fields) */
+  const back = ref.parseSessionRef(full);
+  assert.equal(back?.sessionId, "aa07c1d9");
+  assert.equal(back?.harness, "pi");
+  assert.equal(back?.host, "devbox");
+  assert.equal(back?.cwd, "~/projects/doubletake");
+  assert.ok(full.includes("01a0edfd-6598-727a-99ee-15ab86352a3c"), "the harness uuid survives the round trip as text");
+});
+
+test("formatSessionRefFull: never fabricates — a missing field is absent, not undefined/null", async () => {
+  const ref = await loadFull();
+  assert.ok(ref, "sessionRef module must export formatSessionRefFull — see issue #132");
+
+  /* local session, no harness_ref: no host line (local sessions have no host
+     id) and no harness line — and no literal "undefined"/"null" anywhere */
+  const bare = ref.formatSessionRefFull({ id: "3f9a1c2e", harness: "hermes", cwd: "/home/ubuntu/projects/truss" });
+  assert.equal(bare.split("\n")[0], ref.formatSessionRef({ id: "3f9a1c2e", harness: "hermes", cwd: "/home/ubuntu/projects/truss" }));
+  assert.ok(!/^(host|hermes session):/m.test(bare), "no host/harness lines when we hold neither id");
+  assert.ok(/^truss: 3f9a1c2e$/m.test(bare), "the truss id is always there — it's the identity");
+  assert.ok(/^cwd: \/home\/ubuntu\/projects\/truss$/m.test(bare));
+  assert.ok(!/\b(undefined|null)\b/.test(bare), "missing fields are absent, never rendered as undefined/null");
+
+  /* null and empty-string refs are missing too — same rule, no exception */
+  for (const missing of [null, undefined, ""]) {
+    const s = ref.formatSessionRefFull({ ...FULL, harness_ref: missing });
+    assert.ok(!/^pi session:/m.test(s), `${JSON.stringify(missing)} harness_ref → no harness line`);
+    assert.ok(!/\b(undefined|null)\b/.test(s), `${JSON.stringify(missing)} harness_ref → no undefined/null leak`);
+  }
+
+  /* a host id with no registry entry still prints (raw id is resolvable) —
+     the block never silently drops an id just because its label is unknown */
+  const unknown = ref.formatSessionRefFull(FULL, []);
+  assert.ok(/^host: 525b9cd4$/m.test(unknown), "unknown host keeps the raw id we hold");
+
+  assert.ok(!ref.formatSessionRefFull({ id: "3f9a1c2e", harness: "hermes", cwd: "" }).includes("cwd:"), "no cwd, no cwd line");
 });
 
 test("parseSessionRef: bare #id works, junk is null, never throws", async () => {
