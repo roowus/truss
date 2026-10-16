@@ -1,6 +1,6 @@
 /**
  * Dial failure guidance (issue #100). The agent's retry loop used to print
- * the raw syscall (`ws error: connect ECONNREFUSED 100.107.125.118:4040`)
+ * the raw syscall (`ws error: connect ECONNREFUSED 100.64.0.10:4040`)
  * forever — the user had to decode it themselves while the real cause was
  * almost always one of two: the server only listens on loopback, or the
  * tailnet path to it is dead.

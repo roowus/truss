@@ -43,7 +43,7 @@ async function load(): Promise<InstallCommandModule | null> {
   return import(spec).catch(() => null);
 }
 
-const ADDR = "http://rewvis.tail208cbf.ts.net:4040";
+const ADDR = "http://devbox.example.ts.net:4040";
 const HOST = "9cc3290f";
 const TOKEN = "truss_agent_21d4681fe39cb592f896bd16132b9650da7e1917e9b36f80";
 const URL = `${ADDR}/agent/install.sh?host=${HOST}`;

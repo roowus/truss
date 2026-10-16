@@ -42,7 +42,7 @@ async function load(): Promise<InstallerModule | null> {
   return import(spec).catch(() => null);
 }
 
-const CAPS = { taildropOk: true, sshOk: false, serverUrl: "http://rewvis.tail208cbf.ts.net:4040" };
+const CAPS = { taildropOk: true, sshOk: false, serverUrl: "http://devbox.example.ts.net:4040" };
 
 test("src/installer.ts exists", async () => {
   const { cleanup } = await freshServer("lastmile-mod");

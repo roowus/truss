@@ -17,16 +17,16 @@ const NET = (bind: string, serveOn = false) => ({
   bind,
   tailscale: {
     installed: true,
-    ip4: "100.107.125.118",
-    dnsName: "rewvis.tail208cbf.ts.net",
+    ip4: "100.64.0.10",
+    dnsName: "devbox.example.ts.net",
     serveOn,
-    serveUrl: serveOn ? "https://rewvis.tail208cbf.ts.net" : undefined,
+    serveUrl: serveOn ? "https://devbox.example.ts.net" : undefined,
   },
   lan: ["192.168.1.10"],
 });
 
 test("wildcard bind: the tailnet name is implied (it answers)", () => {
-  assert.equal(reachableTailscaleReturn(NET("0.0.0.0")), "http://rewvis.tail208cbf.ts.net:4040");
+  assert.equal(reachableTailscaleReturn(NET("0.0.0.0")), "http://devbox.example.ts.net:4040");
 });
 
 test("THE HOLE: bound to the LAN ip, the tailnet return is dead — imply nothing", () => {
@@ -35,12 +35,12 @@ test("THE HOLE: bound to the LAN ip, the tailnet return is dead — imply nothin
 });
 
 test("bound to the tailnet ip itself: the tailnet name aliases it, implied", () => {
-  assert.equal(reachableTailscaleReturn(NET("100.107.125.118")), "http://rewvis.tail208cbf.ts.net:4040");
+  assert.equal(reachableTailscaleReturn(NET("100.64.0.10")), "http://devbox.example.ts.net:4040");
 });
 
 test("loopback bind: implied only when tailscale serve is on (it proxies in)", () => {
   assert.equal(reachableTailscaleReturn(NET("127.0.0.1", false)), null);
-  assert.equal(reachableTailscaleReturn(NET("127.0.0.1", true)), "https://rewvis.tail208cbf.ts.net");
+  assert.equal(reachableTailscaleReturn(NET("127.0.0.1", true)), "https://devbox.example.ts.net");
 });
 
 test("no tailscale on the server: nothing to imply", () => {

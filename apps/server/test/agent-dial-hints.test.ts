@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 /* SPEC-TESTS for agent dial failure guidance —
    https://github.com/roowus/truss/issues/100
    (The remote-host rework issue — user evidence: their agent looped
-   `[node-agent] ws error: connect ECONNREFUSED 100.107.125.118:4040`
+   `[node-agent] ws error: connect ECONNREFUSED 100.64.0.10:4040`
    forever with zero guidance). These FAIL on purpose today.
 
    The contract: packages/node-agent gains a pure diagnostic builder
@@ -31,7 +31,7 @@ async function load(): Promise<DialHintModule | null> {
   return import(spec).catch(() => null);
 }
 
-const URL = "ws://rewvis.tail208cbf.ts.net:4040";
+const URL = "ws://devbox.example.ts.net:4040";
 
 test("packages/node-agent/src/dialHint.ts exists", async () => {
   const mod = await load();

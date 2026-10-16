@@ -20,13 +20,13 @@ async function load(): Promise<ServerEnvModule> {
 
 test("the management + key-proxy bases follow --server, not loopback", async () => {
   const { deriveServerEnv } = await load();
-  const d = deriveServerEnv("ws://rewvis.tail208cbf.ts.net:4040");
-  assert.equal(d.TRUSS_MCP_BASE, "http://rewvis.tail208cbf.ts.net:4040");
-  assert.equal(d.TRUSS_CLAUDE_BASE_URL, "http://rewvis.tail208cbf.ts.net:45821/api/anthropic");
+  const d = deriveServerEnv("ws://devbox.example.ts.net:4040");
+  assert.equal(d.TRUSS_MCP_BASE, "http://devbox.example.ts.net:4040");
+  assert.equal(d.TRUSS_CLAUDE_BASE_URL, "http://devbox.example.ts.net:45821/api/anthropic");
 
-  const tls = deriveServerEnv("wss://rewvis.tail208cbf.ts.net");
-  assert.equal(tls.TRUSS_MCP_BASE, "https://rewvis.tail208cbf.ts.net");
-  assert.equal(tls.TRUSS_CLAUDE_BASE_URL, "https://rewvis.tail208cbf.ts.net:45821/api/anthropic");
+  const tls = deriveServerEnv("wss://devbox.example.ts.net");
+  assert.equal(tls.TRUSS_MCP_BASE, "https://devbox.example.ts.net");
+  assert.equal(tls.TRUSS_CLAUDE_BASE_URL, "https://devbox.example.ts.net:45821/api/anthropic");
 });
 
 test("explicit env wins over the derivation; gaps get filled", async () => {
@@ -53,13 +53,13 @@ test("the agent defaults TRUSS_DATA_DIR to the install home, never escaping it",
   const { applyDataDir } = (await import(spec)) as DataDirModule;
 
   const env: Record<string, string | undefined> = {};
-  const dir = applyDataDir(env, "/Users/rewis");
-  assert.equal(dir, "/Users/rewis/.truss", "the bundle's home is the install dir");
+  const dir = applyDataDir(env, "/Users/you");
+  assert.equal(dir, "/Users/you/.truss", "the bundle's home is the install dir");
   assert.ok(!dir.startsWith("/Users/data"), "regression: the repo-relative fallback escaped to /Users/data → EACCES");
   assert.equal(env.TRUSS_DATA_DIR, dir, "the env is set so every adapter spawn inherits it");
 
   const explicit: Record<string, string | undefined> = { TRUSS_DATA_DIR: "/srv/agent-data" };
-  assert.equal(applyDataDir(explicit, "/Users/rewis"), "/srv/agent-data", "an explicit TRUSS_DATA_DIR always wins");
+  assert.equal(applyDataDir(explicit, "/Users/you"), "/srv/agent-data", "an explicit TRUSS_DATA_DIR always wins");
 });
 
 test("claude.ts has no module-scope env reads left (the ESM-hoisting bug)", async () => {
