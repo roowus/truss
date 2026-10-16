@@ -41,16 +41,28 @@ function probeStore(): SubsystemHealth {
 /** remote hosts carry the real fleet signal: how many configured hosts are
     dialed in right now. Any configured host offline is `degraded` — the
     server works, with less. No hosts configured is `ok` (nothing to lose). */
+/** PURE: the remote-hosts row for a given set of configured hosts and the
+    ids currently connected. Exported so the degraded/logic branches can be
+    tested with no store state at all — driving this through the live store
+    makes tests race each other, since node --test runs cases concurrently
+    (audit round 4 review). */
+export function hostsRow(
+  hosts: { id: string; revoked?: boolean }[],
+  onlineIds: Iterable<string>,
+): SubsystemHealth {
+  const configured = hosts.filter((h) => !h.revoked);
+  if (!configured.length) return { name: "remote-hosts", state: "ok", detail: "none configured" };
+  const online = new Set(onlineIds);
+  const up = configured.filter((h) => online.has(h.id)).length;
+  const detail = `${up}/${configured.length} online`;
+  return up === configured.length
+    ? { name: "remote-hosts", state: "ok", detail }
+    : { name: "remote-hosts", state: "degraded", detail };
+}
+
 function probeHosts(): SubsystemHealth {
   try {
-    const hosts = listHosts().filter((h) => !h.revoked);
-    if (!hosts.length) return { name: "remote-hosts", state: "ok", detail: "none configured" };
-    const online = new Set(listAgents().map((a) => a.hostId));
-    const up = hosts.filter((h) => online.has(h.id)).length;
-    const detail = `${up}/${hosts.length} online`;
-    return up === hosts.length
-      ? { name: "remote-hosts", state: "ok", detail }
-      : { name: "remote-hosts", state: "degraded", detail };
+    return hostsRow(listHosts(), listAgents().map((a) => a.hostId));
   } catch (err) {
     return { name: "remote-hosts", state: "degraded", detail: `host registry unreadable: ${String(err)}` };
   }

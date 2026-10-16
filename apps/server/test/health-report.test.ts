@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { bootServer, fakeAdapterEnv, installFakeAdapters, type TestServer } from "./server-harness.js";
 import { healthRollup, probeAdapters, startupLine, whichSync } from "../src/health.js";
-import { buildHealthSnapshot, healthDiagnostics } from "../src/health-snapshot.js";
+import { buildHealthSnapshot, healthDiagnostics, hostsRow } from "../src/health-snapshot.js";
 
 /* SPEC-TESTS for the startup health report — issue #219
    https://github.com/roowus/truss/issues/219
@@ -127,32 +127,28 @@ test("hiding a harness binary degrades ONLY that adapter, with detail, others st
   rmSync(dir, { recursive: true, force: true });
 });
 
-test("a host with no harnesses installed degrades every adapter but stays up", () => {
+/* ALL adapters missing is STILL degraded — a server with zero harnesses
+   serves its UI, history, and event log. That is "works with less".
+   (Audit round 4, Minor B2: this was previously a second, redundant test
+   asserting a strict subset of the bare-host case above; merged into it so
+   there is one place to change if the rule ever moves.) */
+test("a host with no harnesses installed still reports degraded, never down", () => {
   /* This is the CI reality (audit round 1, B1): claude and dsh are simply
      not installed on the runner. The server must come up, report each
      adapter degraded with a reason, and be `degraded` — never `down`. */
   const dir = mkdtempSync(join(tmpdir(), "truss-health-bare-"));
   const rows = probeAdapters({ PATH: dir, HOME: dir } as NodeJS.ProcessEnv);
-  assert.equal(rows.length, 4);
+  assert.equal(rows.length, 4, "one row per adapter");
   for (const r of rows) {
     assert.equal(r.state, "degraded", `${r.name} reports degraded on a bare host`);
     assert.ok(r.detail, `${r.name} explains why`);
   }
-  assert.equal(healthRollup(rows), "degraded", "a bare host is degraded, NOT down — it still serves UI/history/events");
+  assert.equal(healthRollup(rows), "degraded", "zero harnesses is degraded, NOT down — it still serves UI/history/events");
   rmSync(dir, { recursive: true, force: true });
 });
 
 /* ALL adapters missing is STILL degraded — a server with zero harnesses
    serves its UI, history, and event log. That is "works with less". */
-test("even with every adapter missing the rollup is degraded, never down", () => {
-  const dir = mkdtempSync(join(tmpdir(), "truss-health-empty-"));
-  const rows = probeAdapters({ PATH: dir, HOME: dir } as NodeJS.ProcessEnv);
-  assert.equal(rows.length, 4);
-  assert.ok(rows.every((r) => r.state === "degraded"), "all four report degraded");
-  assert.equal(healthRollup(rows), "degraded", "zero harnesses is degraded, NOT down");
-  rmSync(dir, { recursive: true, force: true });
-});
-
 test("the catalog row is never a hardcoded ok when nothing has loaded", () => {
   /* audit round 1, B2: probeCatalog returned "ok" on both branches, so the
      row was permanently green even when no catalog had ever loaded — while
@@ -381,19 +377,40 @@ test("transcribe is reported only when configured", () => {
   assert.equal(row.detail, "http://127.0.0.1:9/transcribe", "the row names the endpoint");
 });
 
-test("remote hosts: none configured is ok, an offline host degrades and says n/m", () => {
-  /* no hosts configured is ok — there is nothing to be missing */
-  const none = buildHealthSnapshot({ PATH: process.env.PATH, HOME: process.env.HOME } as NodeJS.ProcessEnv);
-  const row = none.subsystems.find((s) => s.name === "remote-hosts");
-  assert.ok(row, "the remote-hosts row is always present");
-  assert.ok(["ok", "degraded"].includes(row.state), "never down — a missing remote host is not fatal");
-  assert.ok(row.detail, "the row always explains itself");
-  if (row.state === "ok") {
-    assert.match(row.detail, /none configured|\d+\/\d+ online/, "ok means either nothing to lose or all online");
-  } else {
-    assert.equal(row.state, "degraded");
-    assert.match(row.detail, /\d+\/\d+ online/, "a degraded row reports how many of how many are online");
-  }
+test("remote hosts: none configured is ok, and never down", () => {
+  /* PURE: hostsRow takes its inputs, so this needs no store state and cannot
+     race another case (node --test runs cases concurrently). */
+  const row = hostsRow([], []);
+  assert.equal(row.state, "ok", "no configured hosts is ok — there is nothing to be missing");
+  assert.match(row.detail ?? "", /none configured/, "and the detail says so rather than implying a fleet");
+});
+
+test("an offline remote host degrades the row and reports n/m", () => {
+  /* Audit round 4 (Important): the previous version of this test was titled
+     for the degraded branch but only ever ran against a store with NO hosts
+     configured, so its `else` never executed and the branch it advertised
+     was still untested — it merely LOOKED covered. Driving the pure helper
+     exercises it deterministically. */
+  const offline = hostsRow([{ id: "h1" }], []);
+  assert.equal(offline.state, "degraded", "a configured host that is not connected degrades the row");
+  assert.equal(offline.detail, "0/1 online", "the row reports how many of how many are online");
+
+  const partial = hostsRow([{ id: "h1" }, { id: "h2" }], ["h1"]);
+  assert.equal(partial.state, "degraded", "one of two online is still degraded");
+  assert.equal(partial.detail, "1/2 online", "and says exactly which count");
+
+  const all = hostsRow([{ id: "h1" }, { id: "h2" }], ["h1", "h2"]);
+  assert.equal(all.state, "ok", "every configured host online is ok");
+  assert.equal(all.detail, "2/2 online");
+
+  /* a revoked host is not part of the fleet (it is not expected to dial in),
+     so it must not drag the row to degraded */
+  const revoked = hostsRow([{ id: "h1" }, { id: "h2", revoked: true }], ["h1"]);
+  assert.equal(revoked.state, "ok", "a revoked host is not counted as offline");
+  assert.equal(revoked.detail, "1/1 online");
+
+  /* an offline remote host is NEVER fatal — the server works, with less */
+  assert.notEqual(offline.state, "down");
 });
 
 test("the diagnostics block details every subsystem for stderr", () => {
