@@ -79,6 +79,24 @@ export function writeCatalogCache(key: string, models: CatalogModel[]) {
 /* a failed probe isn't retried on every picker fetch */
 const PROBE_COOLDOWN_MS = 30_000;
 
+/* How long a catalog is trusted before it is re-probed (issue #232).
+
+   The original guard was `models.length === 0`: only an EMPTY catalog was
+   ever repaired, so a non-empty but wrong one was permanent. dsh made that
+   worse than permanent — it calls catalog.set() on every spawn, continuously
+   rewriting the narrow 27-row report, so nothing ever re-asked the harness.
+
+   Six hours is the compromise: long enough that a healthy box does not boot
+   a harness process on every picker fetch, short enough that a profile or
+   credential change shows up the same working day. Exported so the
+   cross-check test can pin that a bounded window exists. */
+export const CATALOG_MAX_AGE_MS = 6 * 60 * 60 * 1000;
+
+export interface ProbeOpts {
+  /** override the staleness window (tests); defaults to CATALOG_MAX_AGE_MS */
+  maxAgeMs?: number;
+}
+
 export interface LazyCatalog {
   /** the catalog as known right now (hydrated from kv at creation) */
   list(): CatalogModel[];
@@ -89,10 +107,11 @@ export interface LazyCatalog {
    * session/new responses): `harvest` opens a throwaway session, reads its
    * catalog, closes it again. sessions.listModels calls probe() in the
    * background when the catalog is empty (first boot on a fresh server —
-   * issue #101). Resolves true when the catalog changed; never rejects.
-   * Concurrent calls share one in-flight harvest; failures cool down.
+   * issue #101) or older than the staleness window (issue #232). Resolves
+   * true when the catalog changed; never rejects. Concurrent calls share one
+   * in-flight harvest; failures cool down.
    */
-  probe(): Promise<boolean>;
+  probe(opts?: ProbeOpts): Promise<boolean>;
 }
 
 /**
@@ -113,20 +132,33 @@ export function lazyCatalog(key: string, harvest: () => Promise<CatalogModel[]>)
   }
   let inflight: Promise<boolean> | null = null;
   let lastProbeAt = 0;
+  /* when the CURRENT contents were last confirmed against the harness.
+
+     Deliberately NOT updated by set(): dsh records the catalog on every
+     spawn, so treating a spawn as "fresh discovery" would reset the clock
+     forever and reproduce the very staleness this fixes (issue #232). Only a
+     probe — an actual re-ask — refreshes it. A hydrated-from-kv catalog
+     starts at 0, i.e. immediately stale, which is correct: it is the
+     previous process's answer. */
+  let discoveredAt = 0;
   return {
     list: () => models,
     set(m) {
       models = m;
       writeCatalogCache(key, m);
     },
-    probe() {
-      if (models.length) return Promise.resolve(false);
+    probe(opts: ProbeOpts = {}) {
+      const maxAge = opts.maxAgeMs ?? CATALOG_MAX_AGE_MS;
+      /* an empty catalog always probes (#101); a non-empty one probes once it
+         is older than the window (#232 — the fix) */
+      if (models.length && Date.now() - discoveredAt < maxAge) return Promise.resolve(false);
       if (inflight) return inflight;
       if (Date.now() - lastProbeAt < PROBE_COOLDOWN_MS) return Promise.resolve(false);
       lastProbeAt = Date.now();
       inflight = (async () => {
         try {
           const found = await harvest();
+          discoveredAt = Date.now();
           if (!found.length) return false;
           models = found;
           writeCatalogCache(key, found);

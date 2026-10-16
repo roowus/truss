@@ -65,17 +65,45 @@ function loadDshEnv(): Record<string, string> {
   return out;
 }
 
-/** the shared dsh ACP client — exported so tests can pin how this adapter
-    calls it (the turn call's budget wiring); TRUSS_DSH_BIN lets tests/ops
-    point at a different dsh binary */
-export const client = new AcpClient({
+/** dsh's ACP launch spec.
+
+    `--patch` is applied in order, so the second patch (the generated catalog,
+    issue #232) layers over the hand-written one and replaces its `llm-pi-ai`
+    providers map. The generated file lives in the runtime data dir, NOT in
+    the repo tree: a boot-time write inside the checkout would dirty
+    `git status` for every worker and for the audit.
+
+    `args` is mutated in place rather than replaced, because AcpClient reads
+    `this.launch.args` at each spawn (acp.ts) — so a patch generated after
+    this module loaded is picked up by the next process start. The static
+    patch stays FIRST and stays authoritative for everything except the model
+    list: on a generation failure dsh simply keeps reporting its static
+    models, which is the #232 degradation rule. */
+const launch = {
   command: process.env.TRUSS_DSH_BIN ?? "dsh",
-  args: ["--profile", "acp", "--patch", PATCH],
+  args: ["--profile", "acp", "--patch", PATCH] as string[],
   /* DSH_HOME pins the session store — without it a systemd-launched server
      lands dsh-acp on ~/.dsh while the real sessions live in /opt/dsh, and
      imports become unresumable ghosts ("not resumable" from stat misses) */
   env: { DSH_HOME: process.env.DSH_HOME ?? "/opt/dsh", ...loadDshEnv() },
-});
+};
+
+/** point dsh at the generated catalog patch (idempotent) */
+export function useGeneratedCatalogPatch(path: string) {
+  if (!path) return;
+  if (launch.args[launch.args.length - 1] === path) return;
+  launch.args = ["--profile", "acp", "--patch", PATCH, "--patch", path];
+}
+
+/* Test seams for the launch wiring (the static-then-generated --patch order
+   is a contract, not an implementation detail) */
+export const __launchArgs = (): string[] => [...launch.args];
+export const __staticPatchPath = (): string => PATCH;
+
+/** the shared dsh ACP client — exported so tests can pin how this adapter
+    calls it (the turn call's budget wiring); TRUSS_DSH_BIN lets tests/ops
+    point at a different dsh binary */
+export const client = new AcpClient(launch);
 
 /* ── model discovery from session/new configOptions ── */
 
@@ -128,65 +156,47 @@ const catalog = lazyCatalog("models:dsh", async () => {
   return parseModelOptions(res.configOptions);
 });
 
-/* QUICK PATCH for the stale-dsh-catalog bug (see
-   docs/reports/2026-10-15-dsh-stale-model-catalog.md for the root cause).
+/* THE REAL FIX for the stale/narrow dsh catalog (issue #232).
 
-   dsh's picker is fed by whatever the harness reports over ACP, so it is only
-   as good as that report. When the report goes stale or narrow, the picker
-   freezes on old rows and the user sees a fraction of their real providers —
-   observed live as 27 all-Fireworks rows while dsh's own profile configured
-   113 models across 7 providers.
+   The #231 patch here widened the PICKER with the key-proxy catalog whenever
+   the harness report looked stale. That was a symptom fix, and it introduced a
+   worse bug than it cured: the picker offered ~825 rows while the harness
+   could only ROUTE 27, so ~798 rows rendered and then silently failed to apply
+   (the set_config_option gate in spawn() below checks the harness report).
+   Production confirmed both halves at once — `models:dsh` = 27 rows while the
+   picker served 825.
 
-   Two failure modes compound:
-     1. The persisted kv catalog is non-empty but wrong (27 stale rows), and
-        sessions.listModels only re-probes when the cache is EMPTY
-        (`models.length === 0`), so a stale catalog is never repaired.
-     2. Nothing cross-checks the harness's report against the credentials the
-        box actually has, so a narrow report silently wins.
+   The decisive experiment (raw session/new configOptions over ACP) showed why
+   the report was 27, and it was none of the four candidates in the issue:
 
-   This widens the picker with the key-proxy catalog (the same source pi uses,
-   which is why pi shows 800+) whenever the harness report looks stale. It is
-   deliberately a fallback, not an override: dsh's own list wins for models it
-   names, because those are the ids its providers are configured to accept.
-   Adding every key-proxy row unconditionally would offer ids dsh cannot
-   route. The real fix is to reconcile the two lists at the source; this patch
-   only stops the user seeing a hard 27. */
-const DSH_MIN_EXPECTED_MODELS = 50;
+     dsh --profile acp --patch config/truss-dsh-acp.yml  -> 27 leaves, fireworks
+     dsh --profile acp                                   ->  3 leaves, deepseek
 
-/** pure: union of the harness report and the credential catalog, deduped, with
-    the harness's own rows first so its labels win. Exported for the regression
-    test — the merge rules (dedupe on provider+model, harness order preserved)
-    are the part worth pinning. */
-export function mergeCatalogRows(reported: CatalogModel[], extra: CatalogModel[]): CatalogModel[] {
-  const seen = new Set(reported.map((m) => `${m.provider}\u0000${m.model}`));
-  const merged = [...reported];
-  for (const e of extra) {
-    const key = `${e.provider}\u0000${e.model}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    merged.push({ provider: e.provider, model: e.model, label: e.label });
-  }
-  return merged;
-}
+   The harness reports its configuration faithfully, and TRUSS is that
+   configuration: the --patch flag. config/truss-dsh-acp.yml listed exactly 27
+   hand-written fireworks models, and the acp profile never loads the web
+   profile's cordis.patch.yml (the 113-model file) — a different profile in a
+   different process. "27 vs 113" compared two unrelated things.
 
-/** true when the harness report looks too narrow to be the whole truth, so the
-    credential catalog should top it up. Exported for the regression test. */
-export function catalogLooksStale(reported: CatalogModel[], min = DSH_MIN_EXPECTED_MODELS): boolean {
-  return reported.length < min;
-}
+   So the fix is to stop hand-maintaining the list inside the profile and
+   GENERATE it from the live key-proxy catalog — the same source pi-config.ts
+   already uses, which is why pi was always rich and correct. The generated
+   patch is a second --patch (dsh-catalog-gen.ts), so the harness now routes
+   every row the picker offers and the two lists cannot disagree.
 
-async function catalogWithCredentialFallback(): Promise<CatalogModel[]> {
-  const reported = catalog.list();
-  /* a healthy report is used as-is — no cross-provider expansion */
-  if (!catalogLooksStale(reported)) return reported;
-  try {
-    const { catalogForPickers } = await import("../modelcat.js");
-    return mergeCatalogRows(reported, await catalogForPickers());
-  } catch {
-    /* the key-proxy catalog is best-effort: a failure here must never empty a
-       picker that already had rows */
-    return reported;
-  }
+   That makes the #231 fallback unnecessary rather than merely redundant, so it
+   is deleted here (the issue itself said a fixed report should mean deleting
+   it, not tuning it). With both lists equal, listModels() is just the report —
+   keeping a merge function around would only invite someone to re-widen the
+   picker past what the harness can route. */
+
+/** the rows the HARNESS can actually route — the authority for what a session
+    may select. spawn() validates opts.model against this same list, so
+    offering anything outside it is what produced the render-but-cannot-apply
+    bug. Exported so the routability test can pin that the picker and the
+    router agree. */
+export async function routableModels(): Promise<CatalogModel[]> {
+  return catalog.list();
 }
 
 /* spawned handles that already sent the deliverables guidance — ACP has no
@@ -222,7 +232,9 @@ export const dshAdapter: HarnessAdapter = {
   capabilities: { permissions: true, subagents: false, streaming: true, queueWhileRunning: false },
 
   async listModels() {
-    return catalogWithCredentialFallback();
+    /* the harness report IS the picker list (issue #232): keeping a second,
+       wider list here is what made ~798 rows selectable-but-unroutable */
+    return catalog.list();
   },
 
   probeModels: catalog.probe,

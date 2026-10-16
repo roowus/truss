@@ -696,8 +696,17 @@ export async function listModels(opts: { probe?: boolean } = {}) {
        via POST /api/harnesses/probe): an unconditional probe would boot real
        harness processes from any fetch, tests included. It runs in the
        background — never in this request's path — and a filled catalog is
-       announced so open pickers refetch. */
-    if (opts.probe && models.length === 0 && a.probeModels) {
+       announced so open pickers refetch.
+
+       The adapter decides WHETHER to probe: an empty catalog always does
+       (#101), and since #232 a non-empty but stale one does too. The old
+       `models.length === 0` guard here made a wrong-but-non-empty catalog
+       permanent — dsh served 27 rows for weeks while its profile and the
+       credentials covered far more. Keeping the policy inside each catalog
+       (which owns its own timing) also means hermes is covered by the same
+       rule without a hermes-specific branch. The adapter's probe() is a
+       no-op when the catalog is fresh, so this cannot storm. */
+    if (opts.probe && a.probeModels) {
       void a.probeModels().then(
         (changed) => {
           if (changed) broadcastRaw({ type: "models.updated", sessionId: "", harness: a.id });
