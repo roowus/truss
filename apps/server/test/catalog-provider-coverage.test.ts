@@ -95,3 +95,58 @@ test("the parser understands DeepSeek's own field shape (context_window, input_m
   assert.equal(oa[0].context, 32_768, "context_length still wins for OpenAI-style routes");
   assert.equal(oa[0].vision, true, "capabilities.vision still honored");
 });
+
+test("the parser reads HuggingFace's providers[] windows instead of guessing", () => {
+  /* HF returns only id/object/created/owned_by/architecture/providers — no
+     top-level context field at all. Its window lives per-backend under
+     `providers[]`, so without this the whole HF catalog (134 rows) fell back
+     to the guess table. Take the largest LIVE window: a model is served by
+     several backends with different limits, and offering the biggest is the
+     useful reading. */
+  const parse = modelcat.__parseModelsForTest;
+  const hfShaped = {
+    data: [
+      {
+        id: "Qwen/Qwen3.8-27B",
+        architecture: { input_modalities: ["text", "image"] },
+        providers: [
+          { provider: "novita", status: "live", context_length: 1_000_000 },
+          { provider: "cerebras", status: "live", context_length: 65_536 },
+          { provider: "dead", status: "staging", context_length: 9_999_999 },
+        ],
+      },
+      { id: "no/providers", providers: [] },
+    ],
+  };
+  const rows = parse(hfShaped);
+  assert.equal(rows[0].context, 1_000_000, "largest live provider window wins (not the larger non-live one)");
+  assert.equal(rows[0].vision, true, "architecture.input_modalities image → vision");
+  assert.ok(rows[1].context > 0, "a model with no providers still yields a usable number");
+});
+
+test("the fallback guess table matches the models it actually stands in for", () => {
+  /* z.ai publishes no context metadata, so its 11 rows ride the guess table.
+     These pin the values that were wrong before (DeepSeek was guessed at
+     160k while the real models are 1M) so a future edit has to be deliberate.
+     Real provider metadata always wins over these — see the tests above. */
+  const guess = modelcat.__guessContextForTest;
+  assert.ok(guess, "modelcat must expose its guess table for this test");
+
+  assert.equal(guess("deepseek-flash"), 1_048_576, "DeepSeek V4.x is 1M, not the old 160k guess");
+  assert.equal(guess("deepseek-v4-pro"), 1_048_576);
+  assert.equal(guess("glm-5"), 200_000);
+  assert.equal(guess("glm-4.7"), 128_000, "z.ai glm-4.x family, distinct from glm-5");
+  assert.equal(guess("kimi-k3"), 1_048_576, "matches Fireworks' reported 1048576");
+  assert.equal(guess("minimax-m3"), 512_000, "matches Fireworks' reported 512000");
+  assert.equal(guess("nemotron-3-ultra-nvfp4"), 262_144, "matches Fireworks' reported 262144");
+  assert.equal(guess("gpt-oss-120b"), 131_072);
+  assert.equal(guess("some-unknown-model"), 128_000, "unknown ids get the conservative default");
+});
+
+test("a real provider field always beats the guess table", () => {
+  /* The whole point of the fallback ordering: a guess must never override
+     what the provider actually told us. */
+  const parse = modelcat.__parseModelsForTest;
+  const rows = parse({ data: [{ id: "deepseek-flash", context_length: 12_345 }] });
+  assert.equal(rows[0].context, 12_345, "provider metadata wins over the 1M guess for the same id");
+});
