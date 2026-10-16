@@ -52,26 +52,66 @@ test("fresh server: the readiness report comes up, with every required row", asy
     assert.ok(["ok", "degraded", "down"].includes(s.state), `bad state ${s.state} on ${s.name}`);
   }
 
-  /* the local subsystems that do not depend on a harness binary are all ok.
-     (hermes is EXCLUDED on purpose: the test harness fakes HOME, so the
-     hermes venv binary genuinely is not there — and reporting it degraded is
-     the CORRECT behavior, which the next test pins.) */
-  const local = body.subsystems.filter(
-    (s: { name: string }) => !s.name.startsWith("adapter:hermes"),
+  /* The NON-adapter, NON-catalog subsystems do not depend on any harness
+     binary or on a catalog having been discovered, so they are the ones that
+     must be ok on any host. The adapter rows are asserted INDIVIDUALLY
+     below: they resolve against the host PATH (claude/dsh may legitimately
+     be absent on CI) plus the fake HOME (hermes), so asserting the whole
+     remainder is ok would be a green-locally / red-in-CI test — exactly what
+     audit round 1 caught. Never let a test depend on what happens to be
+     installed. */
+  const stable = body.subsystems.filter(
+    (s: { name: string }) => !s.name.startsWith("adapter:") && s.name !== "model-catalog",
   );
   assert.equal(
-    healthRollup(local),
+    healthRollup(stable),
     "ok",
-    `expected every non-hermes subsystem ok, got ${JSON.stringify(local.filter((s: { state: string }) => s.state !== "ok"))}`,
+    `expected every host-independent subsystem ok, got ${JSON.stringify(stable.filter((s: { state: string }) => s.state !== "ok"))}`,
   );
 
-  /* hermes is absent in the fake HOME → degraded with a detail, and that
-     alone must roll the server up to degraded, never down */
-  const hermes = body.subsystems.find((s: { name: string }) => s.name === "adapter:hermes");
+  /* the catalog row is honest, not permanently green (audit round 1, B2): a
+     fresh test server has discovered no lazy catalog, so it reports degraded
+     with a reason instead of a hardcoded ok. */
+  const catalog = body.subsystems.find((s: { name: string }) => s.name === "model-catalog");
+  assert.ok(catalog, "the model-catalog row is present");
+  assert.ok(["ok", "degraded"].includes(catalog.state), `catalog is ok or degraded, never down (got ${catalog.state})`);
+  assert.ok(catalog.detail, "the catalog row always carries a detail naming the gate");
+
+  /* each adapter row is present and individually honest. `pi` is guaranteed
+     by the harness (installFakePi puts a fake `pi` first on PATH); the rest
+     may be ok or degraded depending on the host — but NEVER down, and a
+     degraded one must always explain itself. */
+  const adapterRows = body.subsystems.filter((s: { name: string }) => s.name.startsWith("adapter:"));
+  assert.equal(adapterRows.length, 4, "one row per adapter");
+  const pi = adapterRows.find((s: { name: string }) => s.name === "adapter:pi");
+  assert.equal(pi.state, "ok", "the harness guarantees a fake `pi` on PATH, so this row is deterministically ok");
+  for (const row of adapterRows) {
+    assert.notEqual(row.state, "down", `${row.name}: a missing adapter is degraded, NEVER down (issue #219)`);
+    if (row.state === "degraded") assert.ok(row.detail, `${row.name}: a degraded adapter must say why`);
+  }
+
+  /* hermes is absent in the fake HOME → degraded with a detail. That alone
+     rolls the server to degraded, never down. */
+  const hermes = adapterRows.find((s: { name: string }) => s.name === "adapter:hermes");
   assert.equal(hermes.state, "degraded", "a missing adapter is degraded");
   assert.ok(hermes.detail, "with a detail explaining why");
   assert.notEqual(body.state, "down", "a missing adapter must never report the server as down");
   assert.equal(body.state, healthRollup(body.subsystems), "the reported rollup matches its own rows");
+});
+
+test("a host with no harnesses installed degrades every adapter but stays up", () => {
+  /* This is the CI reality (audit round 1, B1): claude and dsh are simply
+     not installed on the runner. The server must come up, report each
+     adapter degraded with a reason, and be `degraded` — never `down`. */
+  const dir = mkdtempSync(join(tmpdir(), "truss-health-bare-"));
+  const rows = probeAdapters({ PATH: dir, HOME: dir } as NodeJS.ProcessEnv);
+  assert.equal(rows.length, 4);
+  for (const r of rows) {
+    assert.equal(r.state, "degraded", `${r.name} reports degraded on a bare host`);
+    assert.ok(r.detail, `${r.name} explains why`);
+  }
+  assert.equal(healthRollup(rows), "degraded", "a bare host is degraded, NOT down — it still serves UI/history/events");
+  rmSync(dir, { recursive: true, force: true });
 });
 
 /* ── 2. hide a harness binary from PATH → degraded with detail, others ok ── */
@@ -110,6 +150,35 @@ test("even with every adapter missing the rollup is degraded, never down", () =>
   assert.ok(rows.every((r) => r.state === "degraded"), "all four report degraded");
   assert.equal(healthRollup(rows), "degraded", "zero harnesses is degraded, NOT down");
   rmSync(dir, { recursive: true, force: true });
+});
+
+test("the catalog row is never a hardcoded ok when nothing has loaded", () => {
+  /* audit round 1, B2: probeCatalog returned "ok" on both branches, so the
+     row was permanently green even when no catalog had ever loaded — while
+     issue #219 names "a model catalog fails to load" as a thing the report
+     must surface. On a fresh server no lazy adapter has discovered anything,
+     so the row must be degraded and say so. */
+  const snap = buildHealthSnapshot();
+  const catalog = snap.subsystems.find((s) => s.name === "model-catalog");
+  assert.ok(catalog, "the model-catalog row exists");
+  assert.notEqual(catalog.state, "down", "a cold catalog is not fatal — the server still runs");
+  if (catalog.state === "ok") {
+    /* ok is only legitimate when a catalog really was discovered */
+    assert.match(catalog.detail ?? "", /\d+ models discovered/, "an ok row must justify itself with a real count");
+  } else {
+    assert.equal(catalog.state, "degraded");
+    assert.match(catalog.detail ?? "", /no catalog discovered|no catalog from/, "a degraded row says which adapter has none");
+  }
+});
+
+test("the readiness report's version is this server's real version, not a literal", () => {
+  /* audit round 1, B3: version was the literal "0.2.0" while
+     apps/server/package.json says 0.1.0 — the report stated a version this
+     server is not. Read it from the manifest. */
+  const snap = buildHealthSnapshot();
+  const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { version: string };
+  assert.equal(snap.version, pkg.version, "the report must state the version the server actually is");
+  assert.notEqual(snap.version, "unknown", "the manifest is readable in-repo");
 });
 
 /* ── 3. unreadable data dir: startup fails LOUDLY (down, not degraded) ── */

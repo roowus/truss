@@ -1,9 +1,10 @@
-import { COMMIT } from "./version.js";
+import { COMMIT, VERSION } from "./version.js";
 import { store } from "./db.js";
 import { listAgents } from "./remote.js";
 import { listHosts } from "./hosts.js";
 import { transcribeConfigFromEnv } from "./transcribe.js";
 import { modelRouterEnabled, modelRouterPort } from "./router-resolve.js";
+import { lazyCatalogStates } from "./adapters/model-catalog-cache.js";
 import {
   healthRollup,
   identity,
@@ -63,14 +64,52 @@ function probeAgentListener(bind: string): SubsystemHealth {
   return { name: "node-agent-listener", state: "ok", detail: `listening on ${bind}` };
 }
 
-/** model catalog / key proxy: report the routing gate that is actually
-    configured, without a network call. The full catalog lives behind
-    routerStatus() (which fetches) — too heavy for a live health probe. */
+/** Model catalog / key proxy (issue #219, audit round 1 B2).
+ *
+ * Round 1 correctly called out that this row was hardcoded `ok` on both
+ * branches — permanently green even when the catalog is dead, while the
+ * issue names "a model catalog fails to load" as a scenario the report must
+ * surface. It now reads the lazy adapters' IN-MEMORY catalog state, which
+ * costs nothing and spawns nothing (the whole point of the no-spawn rule):
+ *
+ *   - a lazy adapter (dsh, hermes) whose catalog is still empty has not
+ *     discovered anything yet. That is honestly `degraded` — the picker
+ *     shows only "harness default" — and NOT `ok`.
+ *   - if every lazy catalog is empty AND the router gate is off, nothing
+ *     supplied models at all.
+ *
+ * A populated catalog is `ok`. This is still a cheap in-memory read, so the
+ * live re-probe contract holds; it is not a claim that any given model is
+ * reachable, and the detail says so. */
 function probeCatalog(): SubsystemHealth {
-  if (modelRouterEnabled()) {
-    return { name: "model-catalog", state: "ok", detail: `model router gate ON → 127.0.0.1:${modelRouterPort()}` };
+  const gate = modelRouterEnabled()
+    ? `model router gate ON → 127.0.0.1:${modelRouterPort()}`
+    : "model router gate off (direct provider routes)";
+  try {
+    const lazy = lazyCatalogStates();
+    if (!lazy.length) return { name: "model-catalog", state: "ok", detail: gate };
+    const empty = lazy.filter((l) => l.count === 0);
+    if (empty.length === lazy.length) {
+      /* nothing discovered from any lazy adapter: works with less — the
+         picker falls back to "harness default" (issue #101) */
+      return {
+        name: "model-catalog",
+        state: "degraded",
+        detail: `${gate}; no catalog discovered yet from ${empty.map((l) => l.harness).join(", ")}`,
+      };
+    }
+    if (empty.length) {
+      return {
+        name: "model-catalog",
+        state: "degraded",
+        detail: `${gate}; no catalog from ${empty.map((l) => l.harness).join(", ")}`,
+      };
+    }
+    const total = lazy.reduce((n, l) => n + l.count, 0);
+    return { name: "model-catalog", state: "ok", detail: `${gate}; ${total} models discovered` };
+  } catch (err) {
+    return { name: "model-catalog", state: "degraded", detail: `catalog state unreadable: ${String(err)}` };
   }
-  return { name: "model-catalog", state: "ok", detail: "direct provider routes (model router gate off)" };
 }
 
 /** the cron scheduler is started at boot and is always running by the time
@@ -104,7 +143,7 @@ export function buildHealthSnapshot(env: NodeJS.ProcessEnv = process.env): Healt
   ];
   return {
     commit: COMMIT,
-    version: "0.2.0",
+    version: VERSION,
     bind,
     dataDir,
     state: healthRollup(subsystems),
