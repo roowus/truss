@@ -25,17 +25,19 @@ set -uo pipefail
 REAL_TAILNET='tail208cbf\.ts\.net'
 
 # Real tailnet IPs observed on this tailnet (CGNAT 100.64/10).
-REAL_IPS='100\.107\.125\.118|100\.78\.180\.43|100\.121\.74\.109|100\.76\.136\.77|100\.101\.193\.72|100\.71\.154\.2|100\.72\.223\.32|100\.80\.142\.92|100\.83\.217\.120|100\.93\.'
-# Newly minted tailnet IPv6 ULA prefix for this tailnet.
+REAL_IPS='100\.107\.125\.118|100\.78\.180\.43|100\.121\.74\.109|100\.76\.136\.77|100\.101\.193\.72|100\.71\.154\.2|100\.72\.223\.32|100\.80\.142\.92|100\.83\.217\.120'
+# Real tailnet IPv6 ULA.
 REAL_V6='fd7a:115c:a1e0::1'
 
-# Real machine hostnames (short forms, as they appear in fixtures/docs).
+# Real machine hostnames. These are FULL or distinctive names only — a bare
+# `pixel` or `exit-node` would fire on the word "pixel" in CSS comments and on
+# the placeholder itself, which is exactly the false-positive trap.
 # `rewin` is anchored so it does not match e.g. "rewind".
 REAL_HOSTS='devbox|alex-macbook-pro|fedora-box|pixel|exit-node|iphone|ipad|imac-pro|(^|[^a-z])rewin([^a-z]|$)|macbook-pro-2'
 
-# Real personal identifiers. NOTE: deliberately NOT `doubletake` — that is a
-# public product of the same owner (github.com/roowus/doubletake), referenced
-# on purpose. We only block *personal path* leaks here.
+# Real personal identifiers: the tailnet login, the macOS/Linux home path.
+# NOTE: deliberately NOT `doubletake` — that is a public product of the same
+# owner (github.com/roowus/doubletake) and is referenced on purpose.
 REAL_PERSONAL='lewishelh|/Users/alice\b|/home/alice\b|rewis/projects'
 
 PATTERN="(${REAL_TAILNET}|${REAL_IPS}|${REAL_V6}|${REAL_HOSTS}|${REAL_PERSONAL})"
