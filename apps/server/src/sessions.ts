@@ -64,11 +64,16 @@ export function onEvent(fn: EventListener) {
    router, `takePersistedByRouter` here. A WeakSet keyed by the event object
    is exact (the same object identity travels router → queue → pump) and
    self-cleaning: nothing else holds a reference once drained. */
-const persistedByRouter = new WeakSet<object>();
+const persistedByRouter = new WeakMap<object, number>();
 
-/** the tunnel router persisted this frame already — do not write it twice */
-export function markPersistedByRouter(ev: ProtoEvent) {
-  persistedByRouter.add(ev);
+/** the tunnel router persisted this frame already — do not write it twice.
+    The ROWID is remembered, not just the fact of persistence (audit round 2,
+    B1): the broadcast must carry the real log rowid, or the client's
+    `seq <= lastSeq` dedupe discards the frame and live remote transcripts
+    freeze. `sink` broadcast the rowid it got from appendEvent; a frame the
+    router already wrote has to carry the rowid that write produced. */
+export function markPersistedByRouter(ev: ProtoEvent, seq: number) {
+  persistedByRouter.set(ev, seq);
 }
 
 /** test-facing read of the same predicate the pump uses (no consume side effect) */
@@ -76,18 +81,22 @@ export function persistedByRouterForTest(ev: ProtoEvent): boolean {
   return persistedByRouter.has(ev);
 }
 
-/** true (once) when this frame was already persisted by the tunnel router */
-function takePersistedByRouter(ev: ProtoEvent): boolean {
-  if (!persistedByRouter.has(ev)) return false;
+/** the router's rowid for this frame, consumed once (undefined when the pump
+    should persist it itself) */
+function takePersistedByRouter(ev: ProtoEvent): number | undefined {
+  const seq = persistedByRouter.get(ev);
+  if (seq === undefined) return undefined;
   persistedByRouter.delete(ev);
-  return true;
+  return seq;
 }
 
-/** fan out an already-persisted event (no second log write) */
-function broadcastOnly(ev: ProtoEvent) {
+/** fan out an already-persisted event (no second log write) — the `seq` is the
+    rowid the router's write produced, so the client's replay-vs-live dedupe
+    still works (a `seq: 0` frame is discarded by every hydrated view) */
+function broadcastOnly(ev: ProtoEvent, seq: number) {
   if ((ev as { at?: unknown }).at === undefined) (ev as { at?: unknown }).at = Date.now();
   if (ev.type === "session.state") store.setSessionState(ev.sessionId, ev.state);
-  broadcastFn({ seq: 0, ev });
+  broadcastFn({ seq, ev });
   for (const fn of listeners) {
     try {
       fn(ev);
@@ -104,20 +113,37 @@ function broadcastOnly(ev: ProtoEvent) {
  * the durable step — the frame is in the log from this moment, so the queue's
  * drop-oldest policy can only ever cost latency, never transcript data.
  */
-export function persistInboundEvent(ev: ProtoEvent) {
+export function persistInboundEvent(ev: ProtoEvent): number | null {
   if ((ev as { at?: unknown }).at === undefined) (ev as { at?: unknown }).at = Date.now();
+  let seq: number;
   try {
-    store.appendEvent(ev);
+    seq = store.appendEvent(ev);
   } catch (err) {
     /* A frame that cannot be logged must NOT enter the queue: dropping it
        later would be silent data loss with no recovery path, which is the
-       exact failure this ordering exists to prevent. Log loudly and drop it
-       now, where it is visible and attributable. */
-    console.error(`persist failed for inbound frame ${ev.type} (${ev.sessionId}) — frame NOT queued`, err);
-    return;
+       exact failure this ordering exists to prevent. Returning null lets the
+       CALLER honour that (audit round 2, B2) — an earlier revision logged
+       "frame NOT queued" here while the router enqueued it anyway, so the
+       comment described a contract nobody implemented. */
+    console.error(`persist failed for inbound frame ${ev.type} (${ev.sessionId}) — frame not queued`, err);
+    return null;
   }
-  markPersistedByRouter(ev);
+  markPersistedByRouter(ev, seq);
   if (ev.type === "session.state") store.setSessionState(ev.sessionId, ev.state);
+  return seq;
+}
+
+/**
+ * The pump's per-frame step, extracted so a test can drive the REAL branch
+ * without exposing goLive (issue #218 round 2): a frame the router already
+ * persisted is broadcast with its log rowid, anything else is persisted here.
+ * `goLive` calls exactly this, so a test using it exercises production logic
+ * rather than a re-implementation.
+ */
+export function persistOrBroadcastForTest(ev: ProtoEvent) {
+  const routerSeq = takePersistedByRouter(ev);
+  if (routerSeq !== undefined) broadcastOnly(ev, routerSeq);
+  else sink(ev);
 }
 
 /** Persist + fan out one event. The single sink every adapter event flows through. */
@@ -334,11 +360,7 @@ function goLive(id: string, adapter: HarnessAdapter, handle: AdapterHandle) {
              live queue could drop it (issue #218, audit B1) — re-persisting
              here would double every remote transcript entry. The router marks
              what it wrote; local adapters are unmarked and persist as before. */
-          if (takePersistedByRouter(ev)) {
-            broadcastOnly(ev);
-          } else {
-            sink(ev);
-          }
+          persistOrBroadcastForTest(ev);
         } catch (err) {
           /* one bad event (a sqlite hiccup mid-persist, a broadcast throw)
              must not kill the pump — and before this guard it was an

@@ -784,11 +784,25 @@ export function agentFrame(hostId: string, msg: Record<string, unknown>) {
          (sessions.ts sink()), which DRAINS this queue — so a frame dropped by
          `push` was never persisted and was lost for good.
          `persistFrame` is the caller-supplied write into the durable log
-         (wired in index.ts to the same store sink the pump uses). It is
-         idempotent-by-contract: the pump's later sink() re-persisting the
-         frame is handled by the caller, so a drained frame is not written
-         twice. */
-      persistFrame?.(sessionId, ev);
+         (wired in index.ts to `persistInboundEvent`, the same store write the
+         pump uses). It returns the assigned rowid, or null on failure. The
+         pump recognises the frame as already-written when it drains it, so it
+         is never logged twice — and it broadcasts with that same rowid, so the
+         client's seq-dedupe accepts it (audit round 2, B1). */
+      /* Enqueue ONLY if the frame is durably logged (audit round 2, B2). A
+         frame that failed to persist must not enter the live queue: when the
+         pump later drained it, the dedupe mark would be absent, the retry
+         would fail again, and the frame would be broadcast to a client whose
+         log has no copy of it — silent loss with no recovery path, which is
+         exactly what the persist-first ordering exists to prevent. */
+      const seq = persistFrame?.(sessionId, ev);
+      if (persistFrame && seq === null) {
+        /* persistence is wired and FAILED: do NOT enqueue. The frame is
+           dropped HERE, where persistInboundEvent already logged the reason,
+           rather than being queued, retried, and then broadcast to a client
+           with no durable copy of it. */
+        return;
+      }
       /* the overflow policy runs here (issue #218): the queue drops the
          oldest frames if the consumer is behind, and reports whether that
          started/ended an episode or wedged the link — the health sink emits
@@ -903,13 +917,11 @@ export function dropWedgedQueue(sessionId: string) {
   const agent = hostId ? agents.get(hostId) : undefined;
 
   if (agent) {
-    /* stop the producer for this session first — otherwise it keeps sending
-       frames for a queue that no longer exists */
-    try {
-      agent.socket.send(JSON.stringify({ type: "dispose", sessionId }));
-    } catch {
-      /* socket already dying — the close below is the real signal */
-    }
+    /* The producer is stopped by the pump, not here (audit round 2, B3):
+       q.close() above ends the goLive for-await, and its `finally` calls
+       adapter.dispose(handle) → the single `{type:"dispose"}` frame. Sending
+       one here too would duplicate it, and made the "the agent was told to
+       dispose" assertion pass on either copy. */
     if (siblings === 0) {
       /* no other session needs this tunnel: it is the wedged link, close it
          with the dedicated code. The blip-tolerant reconnect path (#100)

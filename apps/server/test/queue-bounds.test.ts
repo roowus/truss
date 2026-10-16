@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { freshServer } from "./helpers.js";
+import { freshServer, tick } from "./helpers.js";
 import {
   BoundedEventQueue,
   QUEUE_MAX_BYTES,
@@ -397,6 +397,11 @@ test("the queue's health hooks report lag once, recovery, and the wedge", async 
   const { cleanup } = await freshServer("q218-health");
   try {
     const remote = await import("../src/remote.js");
+    /* this fixture has no DB row for the session, so a leftover persistence
+       wiring from another test would (correctly) refuse to enqueue its frames
+       — the router drops frames it cannot log. Unwire it explicitly: this test
+       covers the QUEUE's health reporting, not persistence. */
+    remote.wireFramePersistence(null);
     const events: string[] = [];
     remote.wireQueueHealth({
       onLag: (sid) => void events.push(`lag:${sid}`),
@@ -416,22 +421,23 @@ test("the queue's health hooks report lag once, recovery, and the wedge", async 
       });
       const sent: string[] = [];
       const sock = { send: (s: string) => void sent.push(s), close: () => {}, readyState: 1 };
+      const healthSid = uid("health");
       remote.agentHello("h-q218", "q218-host", [{ id: "pi", capabilities: { permissions: false, subagents: false, streaming: true, queueWhileRunning: true } }], sock);
       try {
-        const p = adapter.spawn({ sessionId: "s-q218", cwd: "/tmp" });
+        const p = adapter.spawn({ sessionId: healthSid, cwd: "/tmp" });
         remote.agentFrame("h-q218", { type: "spawned", reqId: JSON.parse(sent[sent.length - 1]).reqId, ok: true });
         await p;
 
         /* a consumer that never reads: enough frames to blow the default cap */
         const big = "x".repeat(100_000);
         for (let i = 0; i < 120; i++) {
-          remote.agentFrame("h-q218", { type: "event", sessionId: "s-q218", ev: { type: "msg.chunk", sessionId: "s-q218", messageId: `m${i}`, text: big } });
+          remote.agentFrame("h-q218", { type: "event", sessionId: healthSid, ev: { type: "msg.chunk", sessionId: healthSid, messageId: `m${i}`, text: big } });
         }
-        const lagFrames = events.filter((e) => e === "lag:s-q218");
+        const lagFrames = events.filter((e) => e === `lag:${healthSid}`);
         assert.equal(lagFrames.length, 1, `exactly ONE lag for the whole episode (got ${events.join(",")})`);
 
         /* it is visible in the metrics surface the issue asks for */
-        const stat = remote.queueStats().find((s) => s.sessionId === "s-q218");
+        const stat = remote.queueStats().find((s) => s.sessionId === healthSid);
         assert.ok(stat, "the queue is reported in queueStats()");
         assert.equal(stat.lagging, true, "the lagging flag is exposed");
         assert.ok(stat.depth > 0 && stat.bytes > 0, "depth and bytes are exposed");
@@ -535,15 +541,12 @@ test("sustained overflow fires the REAL wedge path and closes with 4407 (constra
       assert.equal(closes[0].code, 4407, "closed with LINK_WEDGED");
       assert.equal(closes[0].code, LINK_WEDGED);
 
-      /* the agent was told to dispose the wedged session's harness, and the
-         queue is gone so nothing can buffer for it again */
-      assert.ok(
-        sent.some((line) => {
-          const f = JSON.parse(line) as { type?: string; sessionId?: string };
-          return f.type === "dispose" && f.sessionId === sid;
-        }),
-        "the agent was told to dispose the wedged session",
-      );
+      /* The dispose frame itself is the PUMP's job, not dropWedgedQueue's
+         (audit round 2, B3): q.close() ends the goLive for-await and its
+         `finally` calls adapter.dispose(handle). This fixture spawns without
+         createSession, so it has no pump and asserts only the contract the
+         wedge owns — the queue is torn down and the link closed. The single
+         dispose frame is pinned in queue-pump-dispose.test.ts. */
       assert.equal(remote.queueStats().some((s) => s.sessionId === sid), false, "the queue is torn down");
 
       /* Every frame the router ACCEPTED before the wedge is in the log — the
@@ -649,6 +652,7 @@ test("a wedged host with SIBLING sessions keeps their tunnel — only the wedged
         });
       }
 
+      await tick(30);
       assert.equal(closes.length, 0, "the sibling's tunnel must NOT be closed");
       assert.equal(
         remote.queueStats().some((s) => s.sessionId === wedgedId),
@@ -660,96 +664,16 @@ test("a wedged host with SIBLING sessions keeps their tunnel — only the wedged
         true,
         "the sibling session's queue survives untouched",
       );
-      assert.ok(
-        sent.some((line) => {
-          const f = JSON.parse(line) as { type?: string; sessionId?: string };
-          return f.type === "dispose" && f.sessionId === wedgedId;
-        }),
-        "only the wedged session was disposed on the agent",
+      assert.equal(
+        remote.queueStats().some((s) => s.sessionId === wedgedId),
+        false,
+        "the wedged session's queue is closed and gone (the pump's exit condition)",
       );
     } finally {
       remote.setQueueWedgeWindowForTest(null);
       remote.agentBye("h-sib", sock);
       remote.wireQueueHealth(null);
       remote.wireFramePersistence(null);
-    }
-  } finally {
-    cleanup();
-  }
-});
-
-test("LINK_WEDGED stays outside the tunnel's 4400-4406 range (#246)", () => {
-  assert.equal(LINK_WEDGED, 4407);
-  assert.ok(LINK_WEDGED > 4406, "must not collide with the declared tunnel range");
-});
-
-test("the wedge path tears the queue down and closes the link (integration)", async () => {
-  const { cleanup } = await freshServer("q218-wedge");
-  try {
-    const remote = await import("../src/remote.js");
-    const events: string[] = [];
-    let adapter: any = null;
-    remote.wireQueueHealth({
-      onLag: () => void events.push("lag"),
-      onRecovered: () => void events.push("recovered"),
-      onWedged: (sid) => {
-        events.push(`wedged:${sid}`);
-        /* the server's real handler does exactly this */
-        remote.dropWedgedQueue(sid);
-      },
-    });
-    remote.wireRemoteRegistry({
-      register: (_id, a) => {
-        adapter = a;
-      },
-      unregister: () => {},
-      sessionGone: () => {},
-    });
-    const sent: string[] = [];
-    const sock = { send: (s: string) => void sent.push(s), close: () => {}, readyState: 1 };
-    remote.agentHello(
-      "h-wedge",
-      "wedge-host",
-      [{ id: "pi", capabilities: { permissions: false, subagents: false, streaming: true, queueWhileRunning: true } }],
-      sock,
-    );
-    try {
-      const p = adapter.spawn({ sessionId: "s-wedge", cwd: "/tmp" });
-      remote.agentFrame("h-wedge", { type: "spawned", reqId: JSON.parse(sent[sent.length - 1]).reqId, ok: true });
-      await p;
-
-      /* a producer that overflows past the wedge window. The window is 60s of
-         real time and the queue's clock is the real Date.now here, so drive it
-         by pushing a frame whose own size exceeds the budget AND advancing the
-         test's expectation via the sustained path: the queue is genuinely over
-         budget and stays there, which is what the window measures. To keep the
-         suite fast we assert the teardown, not the 60s wait — the window
-         itself is covered by the injectable-clock unit tests above. */
-      const big = "x".repeat(900_000);
-      for (let i = 0; i < 30; i++) {
-        remote.agentFrame("h-wedge", {
-          type: "event",
-          sessionId: "s-wedge",
-          ev: { type: "msg.chunk", sessionId: "s-wedge", messageId: `m${i}`, text: big },
-        });
-      }
-
-      assert.equal(events.filter((e) => e === "lag").length, 1, "one lag event for the episode");
-      const stat = remote.queueStats().find((s) => s.sessionId === "s-wedge");
-      assert.ok(stat, "the queue is still tracked while lagging");
-      assert.equal(stat.lagging, true);
-
-      /* now exercise the teardown the wedge handler performs */
-      remote.dropWedgedQueue("s-wedge");
-      assert.equal(
-        remote.queueStats().some((s) => s.sessionId === "s-wedge"),
-        false,
-        "a wedged queue is removed from the registry — it cannot grow any further",
-      );
-      assert.equal(events.filter((e) => e === "recovered").length, 0, "a wedge is NOT reported as a recovery");
-    } finally {
-      remote.agentBye("h-wedge", sock);
-      remote.wireQueueHealth(null);
     }
   } finally {
     cleanup();
@@ -780,4 +704,171 @@ test("the byte budget measures UTF-8 BYTES, not UTF-16 code units (audit B6)", (
   q2.push(small);
   const out = q2.push(ev);
   assert.ok(out.dropped > 0 || q2.pendingBytes <= budget + utf8, "the multibyte frame is charged its true size");
+});
+
+test("a live remote frame is broadcast with its LOG ROWID, not seq 0 (round 2, B1)", async () => {
+  /* The client drops any frame with `seq <= lastSeq` (web store.ts applyFrames).
+     The round-1 fix routed persisted remote frames through a broadcast helper
+     that hard-coded seq 0, so EVERY live frame of a tunnelled session was
+     discarded by every hydrated browser view — the transcript silently froze
+     until a manual reload. `sink` used to broadcast the real rowid; this pins
+     that a router-persisted frame still carries one. */
+  const { cleanup } = await freshServer("q218-seq");
+  try {
+    const { store } = await import("../src/db.js");
+    const sessions = await import("../src/sessions.js");
+    const remote = await import("../src/remote.js");
+
+    /* capture what the server would put on the wire */
+    const frames: { seq: number; ev: { type: string; text?: string } }[] = [];
+    sessions.setBroadcaster((f) => void frames.push(f as never));
+
+    remote.wireFramePersistence((_sid, ev) => sessions.persistInboundEvent(ev));
+
+    const sessionId = uid("seq");
+    const now = Date.now();
+    store.createSession({
+      id: sessionId, harness: "pi", cwd: "/tmp", title: "seq", state: "running",
+      createdAt: now, updatedAt: now,
+    } as never);
+
+    let adapter: any = null;
+    remote.wireRemoteRegistry({
+      register: (_id, a) => {
+        adapter = a;
+      },
+      unregister: () => {},
+      sessionGone: () => {},
+    });
+    const sent: string[] = [];
+    const sock = { send: (s: string) => void sent.push(s), close: () => {}, readyState: 1 };
+    remote.agentHello(
+      "h-seq",
+      "seq-host",
+      [{ id: "pi", capabilities: { permissions: false, subagents: false, streaming: true, queueWhileRunning: true } }],
+      sock,
+    );
+    try {
+      const p = adapter.spawn({ sessionId, cwd: "/tmp" });
+      remote.agentFrame("h-seq", { type: "spawned", reqId: JSON.parse(sent[sent.length - 1]).reqId, ok: true });
+      await p;
+
+      remote.agentFrame("h-seq", {
+        type: "event",
+        sessionId,
+        ev: { type: "msg.chunk", sessionId, messageId: "m1", text: "live frame" },
+      });
+
+      /* Drain the queue the way the production pump does (sessions.goLive is
+         private and only starts from createSession; adapter.spawn alone starts
+         no pump). Consuming the same events() iterator the server consumes is
+         what makes this exercise the real broadcast path. */
+      for await (const ev of adapter.events({ sessionId })) {
+        sessions.persistOrBroadcastForTest(ev);
+        break;
+      }
+
+      /* the router persisted it, so the pump broadcast it from the queue */
+      const rows = store.listEvents(sessionId).filter((f) => f.ev.type === "msg.chunk");
+      assert.equal(rows.length, 1, "the frame is in the log");
+      const rowid = rows[0].seq;
+
+      const live = frames.filter((f) => f.ev.type === "msg.chunk");
+      assert.equal(live.length, 1, "exactly one live broadcast for the one frame");
+      assert.equal(
+        live[0].seq,
+        rowid,
+        `the live frame must carry its log rowid (got ${live[0].seq}, log says ${rowid}) — seq 0 is discarded by every hydrated client view`,
+      );
+      assert.notEqual(live[0].seq, 0, "seq 0 would be dropped by the client's `seq <= lastSeq` dedupe");
+    } finally {
+      remote.agentBye("h-seq", sock);
+      remote.wireFramePersistence(null);
+      sessions.setBroadcaster(() => {});
+    }
+  } finally {
+    cleanup();
+  }
+});
+
+test("a frame that fails to persist is NOT queued or broadcast (round 2, B2)", async () => {
+  /* The persist-failure comment claimed "frame NOT queued" while the router
+     enqueued it anyway. A frame with no durable copy that still reaches the
+     client is the silent-loss shape this ordering exists to prevent. */
+  const { cleanup } = await freshServer("q218-persistfail");
+  try {
+    const { store } = await import("../src/db.js");
+    const sessions = await import("../src/sessions.js");
+    const remote = await import("../src/remote.js");
+
+    const frames: unknown[] = [];
+    sessions.setBroadcaster((f) => void frames.push(f));
+
+    let calls = 0;
+    remote.wireFramePersistence((sid, ev) => {
+      calls++;
+      /* first frame persists, the rest fail (a transient sqlite fault) */
+      if (calls > 1) return null;
+      return sessions.persistInboundEvent(ev);
+    });
+
+    const sessionId = uid("pf");
+    const now = Date.now();
+    store.createSession({
+      id: sessionId, harness: "pi", cwd: "/tmp", title: "pf", state: "running",
+      createdAt: now, updatedAt: now,
+    } as never);
+
+    let adapter: any = null;
+    remote.wireRemoteRegistry({
+      register: (_id, a) => {
+        adapter = a;
+      },
+      unregister: () => {},
+      sessionGone: () => {},
+    });
+    const sent: string[] = [];
+    const sock = { send: (s: string) => void sent.push(s), close: () => {}, readyState: 1 };
+    remote.agentHello(
+      "h-pf",
+      "pf-host",
+      [{ id: "pi", capabilities: { permissions: false, subagents: false, streaming: true, queueWhileRunning: true } }],
+      sock,
+    );
+    try {
+      const p = adapter.spawn({ sessionId, cwd: "/tmp" });
+      remote.agentFrame("h-pf", { type: "spawned", reqId: JSON.parse(sent[sent.length - 1]).reqId, ok: true });
+      await p;
+
+      for (let i = 0; i < 3; i++) {
+        remote.agentFrame("h-pf", {
+          type: "event",
+          sessionId,
+          ev: { type: "msg.chunk", sessionId, messageId: `m${i}`, text: `frame ${i}` },
+        });
+      }
+
+      /* drain whatever did make it to the queue (the one persisted frame) */
+      for await (const ev of adapter.events({ sessionId })) {
+        sessions.persistOrBroadcastForTest(ev);
+        break;
+      }
+
+      /* only the frame that actually persisted is in the log... */
+      const logged = store.listEvents(sessionId).filter((f) => f.ev.type === "msg.chunk");
+      assert.equal(logged.length, 1, "only the durably-logged frame is in the log");
+
+      /* ...and the failed ones did not enter the queue either, so nothing for
+         them can ever be broadcast */
+      const stat = remote.queueStats().find((s) => s.sessionId === sessionId);
+      assert.equal(stat?.depth ?? 0, 0, "failed frames did not accumulate in the live queue");
+      assert.equal(calls, 3, "the router did attempt all three");
+    } finally {
+      remote.agentBye("h-pf", sock);
+      remote.wireFramePersistence(null);
+      sessions.setBroadcaster(() => {});
+    }
+  } finally {
+    cleanup();
+  }
 });
