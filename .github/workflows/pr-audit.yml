@@ -222,26 +222,16 @@ jobs:
           allowed_bots: github-actions
           github_token: ${{ github.token }}
           anthropic_api_key: ${{ secrets.DEEPSEEK_API_KEY }}
+          # direct-prompt mode still evaluates the trigger gate, and the action
+          # defaults trigger_phrase to "@claude" — without this it decides no
+          # trigger was met and skips itself (0 ms, no review, green run).
+          trigger_phrase: "audit"
           claude_args: |
             --model ${{ env.DS_MODEL }}
             --max-turns 80
             --add-dir ${{ runner.temp }}/review-out
             --add-dir ${{ runner.temp }}/build-out
             --allowed-tools "Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh issue view:*),Bash(curl:*),Read,Write,Glob,Grep"
-          prompt: &audit-prompt |
-      - name: Agent audit (GLM fallback)
-        id: run-glm
-        if: steps.run-ds.outcome == 'failure'
-        uses: anthropics/claude-code-action@v1.0.35
-        continue-on-error: true
-        env:
-          ANTHROPIC_BASE_URL: ${{ env.ZAI_BASE_URL }}
-          ANTHROPIC_AUTH_TOKEN: ${{ secrets.ZAI_API_KEY }}
-        with:
-          # Labeled/pushed runs can be initiated by bots.
-          allowed_bots: github-actions
-          github_token: ${{ github.token }}
-          anthropic_api_key: ${{ secrets.ZAI_API_KEY }}
           prompt: &audit-prompt |
             You are auditing Pull Request #${{ needs.gate.outputs.pr_number }} in the
             repository ${{ github.repository }} (triggered via ${{ needs.gate.outputs.via }}).
@@ -354,6 +344,43 @@ jobs:
             serve> — <cheaper form>)`, appending `(no linked issue — judged from
             commits)` or `(linked issue off-topic)` where applicable.
 
+            COMPLEXITY — the issue carries a `complexity: trivial|low|medium|
+            high|epic` label, and `medium`+ (or any `qa-first` issue) must have
+            run a design Q&A before implementation. Judge two things in the
+            diff you are auditing:
+            (a) Is the label RIGHT for the change actually shipped? A `low`
+            issue that grew into a cross-cutting refactor is mislabeled; an
+            `epic` that shipped as a two-line change is too. State the label
+            you would assign and why, in one line.
+            (b) Did the design gate run when it should have? The Q&A itself
+            happens in the worker's SESSION CHAT (by design — the issue and PR
+            stay free of the negotiation), so the evidence here is the ONE
+            agreed-design summary comment the worker posts on the issue/PR
+            before implementing. Look for it predating the implementation
+            commits, and check the commits match it. A gated issue implemented
+            with no such summary is a finding (severity `high`: either the
+            developer was never consulted on decisions the label says are
+            theirs, or the agreed design was never recorded and no later
+            reader can tell whether the build matches it).
+            Verdict line: `Complexity: <label on the issue> — appropriate |
+            understated (<actual> — <why>) | overstated (<actual> — <why>);
+            design gate: ran | should have run (<what was decided unilaterally>)
+            | not required`.
+
+            PRIORITY — the issue also carries a `priority: critical|high|
+            medium|low` label. The work is often where the true severity shows
+            up, so check it against what the diff actually does: a "low"
+            polish item that turns out to touch stored data is understated; a
+            "critical" whose blast radius is an unreachable path is
+            overstated. Judge the ACTUAL consequence for someone using truss
+            today — data loss, security, a broken daily flow outrank a rough
+            edge. Only recommend a change you can point at in the diff.
+            Verdict line: `Priority: <label on the issue> — appropriate |
+            understated (<actual> — <consequence in this diff>) | overstated
+            (<actual> — <why the consequence does not land>)`. State
+            `(no linked issue — judged from commits)` when the issue's priority
+            was not visible to you.
+
             TEST COVERAGE — three checks against the diff and its tests:
             (a) Path coverage — are the changed code paths covered by tests in
             this PR or existing ones? Name the specific uncovered paths.
@@ -428,6 +455,37 @@ jobs:
             commas, no comments. A clean audit still carries the block:
             {"version": 1, "head": "${{ needs.gate.outputs.head_sha }}",
             "verdict": "approve", "findings": [], "warnings": []}.
+
+      # `continue-on-error: true` makes a failing agent step report
+      # outcome=success, so gating the fallbacks on `outcome == 'failure'`
+      # meant they could NEVER run — the chain was dead by construction, and
+      # an agent that died produced no report and no fallback. Gate on the
+      # only thing that matters instead: did a report actually land?
+      - name: Did the DeepSeek leg produce a report?
+        id: ds-report
+        if: always()
+        run: |
+          if [ -s "${{ runner.temp }}/review-out/review.md" ]; then
+            echo "present=1" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=0" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Agent audit (GLM fallback)
+        id: run-glm
+        if: always() && steps.ds-report.outputs.present == '0'
+        uses: anthropics/claude-code-action@v1.0.35
+        continue-on-error: true
+        env:
+          ANTHROPIC_BASE_URL: ${{ env.ZAI_BASE_URL }}
+          ANTHROPIC_AUTH_TOKEN: ${{ secrets.ZAI_API_KEY }}
+        with:
+          # Labeled/pushed runs can be initiated by bots.
+          allowed_bots: github-actions
+          github_token: ${{ github.token }}
+          anthropic_api_key: ${{ secrets.ZAI_API_KEY }}
+          trigger_phrase: "audit"
+          prompt: *audit-prompt
           claude_args: |
             --model ${{ needs.gate.outputs.provider == 'zai' && env.GLM_MODEL || env.KIMI_MODEL }}
             --max-turns 80
@@ -435,12 +493,22 @@ jobs:
             --add-dir ${{ runner.temp }}/build-out
             --allowed-tools "Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh issue view:*),Bash(curl:*),Read,Write,Glob,Grep"
 
-      # Same audit, retried once on Kimi if the GLM run failed (for example the
-      # Z.AI key is out of credits). Not retried when the stagnation rule
-      # already picked Kimi.
+      # Same audit, retried once on Kimi if the GLM run also produced no report
+      # (for example the Z.AI key is out of credits). Not retried when the
+      # stagnation rule already picked Kimi.
+      - name: Did the GLM leg produce a report?
+        id: glm-report
+        if: always()
+        run: |
+          if [ -s "${{ runner.temp }}/review-out/review.md" ]; then
+            echo "present=1" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=0" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Agent audit (Kimi fallback)
         id: run-fb
-        if: steps.run-glm.outcome == 'failure' && steps.run-ds.outcome == 'failure' && needs.gate.outputs.provider == 'zai'
+        if: always() && steps.ds-report.outputs.present == '0' && steps.glm-report.outputs.present == '0' && needs.gate.outputs.provider == 'zai'
         uses: anthropics/claude-code-action@v1.0.35
         env:
           ANTHROPIC_BASE_URL: ${{ env.FW_BASE_URL }}
@@ -449,6 +517,7 @@ jobs:
           allowed_bots: github-actions
           github_token: ${{ github.token }}
           anthropic_api_key: ${{ secrets.FIREWORKS_API_KEY }}
+          trigger_phrase: "audit"
           prompt: *audit-prompt
           claude_args: |
             --model ${{ env.KIMI_MODEL }}
@@ -493,7 +562,23 @@ jobs:
           python3 - "$REVIEW" <<'EOF' > "$RUNNER_TEMP/parsed.txt"
           import json, re, sys, os, hashlib
           text = open(sys.argv[1]).read() if os.path.exists(sys.argv[1]) else ""
+          # Prefer a properly closed block, but accept an un-closed one: the
+          # prompt asks for the closing fence and models still omit it
+          # sometimes, and a report that reads as zero findings blinds both the
+          # stagnation detector and the merge gate. Recovery here means a
+          # missing closer degrades the RENDERING, never the data.
           blocks = re.findall(r"```json\s*\n(.*?)```", text, re.S)
+          if not blocks:
+              m = re.search(r"```json\s*\n(.*)", text, re.S)
+              if m:
+                  # An un-closed block runs to EOF, so take only the first
+                  # balanced JSON object and ignore any footer after it.
+                  raw = m.group(1).lstrip()
+                  try:
+                      _, end = json.JSONDecoder().raw_decode(raw)
+                      blocks = [raw[:end]]
+                  except Exception:
+                      blocks = []
           signal, verdict = "error", ""
           majors = []
           if blocks:
@@ -532,9 +617,19 @@ jobs:
           EDIT_ID: ${{ needs.gate.outputs.comment_id }}
         run: |
           SHORT="$(echo '${{ needs.gate.outputs.head_sha }}' | cut -c1-7)"
-          MODEL_NOTE="GLM"
-          [ "$PROVIDER" = "fireworks" ] && MODEL_NOTE="Kimi (3 stagnant rounds on GLM)"
-          [ "${{ steps.run-glm.outcome }}" = "failure" ] && [ "$PROVIDER" = "zai" ] && MODEL_NOTE="Kimi (GLM run failed)"
+          # Name the model that ACTUALLY produced the report, derived from the
+          # report's presence rather than from a step outcome (which
+          # continue-on-error pins to success). Labels must never claim a
+          # stronger model audited the change than the one that did.
+          if [ "${{ steps.ds-report.outputs.present }}" = "1" ]; then
+            MODEL_NOTE="DeepSeek Flash"
+          elif [ -s "${{ runner.temp }}/review-out/review.md" ]; then
+            if [ "$PROVIDER" = "zai" ]; then MODEL_NOTE="Kimi (GLM produced no report)"; else MODEL_NOTE="GLM"; fi
+          elif [ "$PROVIDER" = "fireworks" ]; then
+            MODEL_NOTE="Kimi (3 stagnant rounds on GLM)"
+          else
+            MODEL_NOTE="GLM"
+          fi
           MAJORS_HASH="$(cat "$RUNNER_TEMP/majors-hash.txt" 2>/dev/null)"
           if [ -s "$REVIEW" ]; then
             {
@@ -547,18 +642,32 @@ jobs:
               echo
               echo "<!-- truss-audit-state: {\"head\":\"${{ needs.gate.outputs.head_sha }}\",\"majorsHash\":\"$MAJORS_HASH\",\"provider\":\"$PROVIDER\"} -->"
             } > "$RUNNER_TEMP/comment.md"
+            HAD_REPORT=1
           else
             {
               echo "## 🔍 PR audit — no report produced · $MODEL_NOTE"
               echo
               echo "The audit run finished without writing its report. See the [run logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})."
             } > "$RUNNER_TEMP/comment.md"
+            HAD_REPORT=0
           fi
           if [ -n "$EDIT_ID" ]; then
             python3 -c 'import json, sys; print(json.dumps({"body": open(sys.argv[1]).read()}))' "$RUNNER_TEMP/comment.md" \
               | gh api -X PATCH "repos/${{ github.repository }}/issues/comments/$EDIT_ID" --input - > /dev/null
           else
             gh pr comment "$PR_NUMBER" --repo "${{ github.repository }}" --body-file "$RUNNER_TEMP/comment.md"
+          fi
+          # A missing report is a PIPELINE FAILURE, not a quiet success.
+          # Every agent step is continue-on-error, so without this the job
+          # stays green while no audit actually ran (that masked a
+          # trigger_phrase misconfiguration across ten PRs — #228..#242).
+          # This check must key off the REPORT, never off the branch that
+          # happened to be taken when posting the comment: an earlier
+          # version sat in the `else` of `[ -n "$EDIT_ID" ]`, so every
+          # fresh run posted a good report and then failed anyway.
+          if [ "$HAD_REPORT" = "0" ]; then
+            echo "::error::no audit report was produced — every agent leg failed or skipped; treating this run as failed"
+            exit 1
           fi
 
       # Optional push-style delivery: when AUDIT_FORWARD_URL is configured,

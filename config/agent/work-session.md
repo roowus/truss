@@ -32,8 +32,102 @@ When you are handed a PR you did not make (the developer commented
    `~run-audit` to get a fresh baseline.
 5. Continue the loop exactly as if you had made the PR.
 
+## Phase 0 — the design Q&A gate (medium+ complexity, or `qa-first`)
+
+Read the issue's labels and its structured JSON block (the fenced `json` at
+the end of the body). You implement directly when complexity is `trivial` or
+`low` AND the issue has no `qa-first` label. Otherwise — `medium`, `high`,
+`epic`, or any issue carrying `qa-first` — you run a design Q&A with the
+developer FIRST, before writing code:
+
+1. **Ask in THIS CHAT — not on the issue, not on the PR.** The whole design
+   conversation happens as messages in this session, where the developer is
+   already talking to you. One message: what you understand about the task,
+   the decisions you would make, and every question you need answered (the
+   issue's `openQuestions` plus anything you found). Give a recommendation
+   for each so the developer can just say "yes". Keep the issue and PR free of
+   design chatter — a reader there should find the settled outcome, not the
+   negotiation.
+2. Retitle `#<issue> [needs-answer] — <slug>`, apply `needs-answer` to the
+   issue, badge the session unread, ledger `blocked`, then PARK (no polling —
+   the developer replies right here in the chat, and that reply wakes you).
+3. Iterate in the chat until the design is settled — you judge it settled
+   when the remaining unknowns cannot change what you build, or the developer
+   says go. Then remove `needs-answer`, retitle `[working]`, ledger `working`,
+   and implement. **Then post ONE comment on the issue/PR recording the agreed
+   design** (a short summary, not the transcript) so the audit can check the
+   build against what was actually agreed.
+
+Do not skip this gate because the change "looks obvious" — the label is the
+decision, not your in-the-moment opinion. If after investigating you believe
+the complexity label is WRONG (the issue is harder or simpler than labeled),
+say so in your Q&A comment and RELABEL it: `gh issue edit <n> --remove-label
+"complexity: <old>" --add-label "complexity: <new>"` with a one-line reason.
+Fixers own the label as much as intake does.
+
+**Priority is also yours to correct — but rarely.** Complexity is a fact you
+discover by reading the code; priority is a judgment about the developer's
+world, so change it only on real evidence, never on taste:
+
+- Raise it when the work reveals impact the issue understated: a data-loss or
+  security consequence, a live breakage on an existing flow, a bug that
+  silently corrupts state. `priority: critical` additionally requires that the
+  thing is breaking NOW for real use — if nobody is hitting it yet, `high` is
+  the honest ceiling.
+- Lower it when the work reveals an overstated severity: the "breakage" only
+  affects an unreachable path, the feature already degrades gracefully, or the
+  fix is only polish after all.
+- Never touch priority to jump your own queue, and never as a side effect of a
+  complexity change — the two are independent.
+- Relabel the same way (`--remove-label "priority: <old>" --add-label
+  "priority: <new>"`) and state the evidence in your Q&A comment or handoff.
+  Say it plainly when you move one, so a priority change is always a visible,
+  reasoned event rather than a quiet drift.
+
 ## Phase 1 — implement
 
+0a. **Your model follows the complexity ladder** (the cron sets it at
+   spawn; if you find it wrong, tell the developer in your handoff rather
+   than switching mid-flight — model changes are the cron's job):
+   - `trivial` / `low` → DeepSeek Flash for everything.
+   - `medium` → GLM 5.3 Flash fixes; audits run DeepSeek Flash.
+   - `high` → GLM 5.3 Flash plans and fixes; audits run DeepSeek Flash.
+   - `epic` → Kimi K3 for PLANNING ONLY, then drop to GLM 5.3 Flash to
+     execute; audits run DeepSeek Flash.
+
+  **When the ladder's model is not actually available** (the provider
+  errors, the key is out of credit, the model id 404s, or the model is
+  visibly degrading — repeating itself, losing the thread, ignoring the
+  spec), do NOT silently substitute and do NOT stall:
+
+  1. **Check before you claim it.** Availability is queryable, not a
+     feeling: the key proxy fronts every provider, so
+     `curl -sS https://api.deepseek.com/models -H "Authorization: Bearer
+     $DEEPSEEK_KEY"` (or the Fireworks equivalent) tells you whether the
+     model id still exists. A provider error mid-work is the other signal.
+  2. **Drop exactly one rung, never two, and never below DeepSeek Flash.**
+     The ladder is a quality contract, so the fallback is the next model
+     down that is available (`epic`→`high`'s model, `high`/`medium`→
+     DeepSeek Flash, `trivial`/`low`→ DeepSeek Flash is already the floor;
+     if THAT is down, stop and tell the developer rather than working on
+     nothing).
+  3. **Tell the developer in this session, in one message**: which model
+     the complexity called for, that it is unavailable and why (the exact
+     error or the failed probe), which model you would drop to, and what
+     that trade-off means for this specific task ("DeepSeek Flash is fine
+     for a contained fix like this" vs "this is the epic's planning step,
+     and the plan quality is the whole point").
+  4. **Then PARK for the decision** (bracket `[needs-answer]`, label
+     `needs-answer`, badge unread, ledger `blocked`, no polling — the
+     watcher wakes you on their reply). Do not start work on the lower
+     model while you wait.
+  5. **On their answer**: "go ahead" → proceed on the lower model, and say
+     in your handoff which model actually did the work so the record is
+     honest. "wait" → stay parked; the developer will raise the model
+     themselves when the provider recovers (or re-spawn you). Re-check
+     availability when you next run — a transient outage self-heals.
+  6. Never upgrade yourself to a model ABOVE your tier, even if it is
+     available: the ladder is also a cost contract.
 0. **Make yourself visible first.** Note your own id (`echo $DSH_SESSION_ID`)
    — you will publish it with the PR in phase 2. Your session TITLE carries a
    live status bracket; set it now and at every transition (the developer
@@ -188,7 +282,37 @@ never asked for? When you judge it done:
       - **how to test it** — the concrete steps that exercise the issue's
         own ask (its test contract when it has one), at the preview
       Both URLs verbatim, never just one.
-   d. Post the handoff comment:
+   d. End your in-session handoff message with this exact JSON block (fenced
+      `json`, the last thing in the message) — the same hard contract intake
+      uses, so the developer (and any future cleanup agent) can read status
+      mechanically. No extra keys, none omitted:
+
+      ```json
+      {
+        "version": 1,
+        "issue": <number>,
+        "pr": <number>,
+        "complexity": "trivial | low | medium | high | epic",
+        "priority": "critical | high | medium | low",
+        "complexityChanged": true,
+        "priorityChanged": true,
+        "status": "ready-for-review",
+        "rounds": <audit rounds this PR took>,
+        "findingsFixed": <count>,
+        "findingsDeclined": <count>,
+        "designAgreed": true,
+        "preview": "https://pr-<N>.truss.rewis",
+        "session": "session-<uuid>",
+        "smokeTested": true
+      }
+      ```
+      `complexityChanged` / `priorityChanged` are true when you relabeled
+      that family; the labels on the issue are the truth, these record that
+      you touched them (and your Q&A comment says why).
+      `designAgreed` is true when the design Q&A gate ran and settled (or the
+      issue never needed it). `smokeTested` is true when your browser smoke
+      passed.
+   e. Post the handoff comment:
       `gh pr comment <pr> --body "..."` covering, in plain language:
       - **The original issue** — link and one-sentence restatement of the
         ask, plus the exact steps that exercise it at the preview.
