@@ -5,7 +5,7 @@ import { harnessStyle, hostOf, shortPath } from "@/lib/format";
 import { hostAliases, hostDisplay } from "@/lib/device";
 import { resolveDefaultCwd, resolveDefaultProject, hostDefaultFor, hostSuggestedFor } from "@/lib/cwdDefault";
 import { createBrowseNav, type BrowseNav } from "@/lib/browseNav";
-import { buildModelOptions, modelSelectOptions, splitModelValue } from "@/lib/models";
+import { buildModelOptions, catalogScopeNote, modelSelectOptions, splitModelValue } from "@/lib/models";
 import { createPortal } from "react-dom";
 import type { BrowseDir } from "@/lib/proto";
 import { openPanel, openSession } from "@/lib/workspace";
@@ -105,6 +105,9 @@ export function NewSessionDialog({ onClose, preset }: { onClose: () => void; pre
      on hover) applies here too — and a remote harness shares the base
      harness's catalog exactly like the switcher. */
   const modelOptions = useMemo(() => buildModelOptions(models, harness), [models, harness]);
+  /* why the dialog's list is this short (issue #170) — the same note the
+     composer switcher shows, from the same options it already holds */
+  const scopeNote = catalogScopeNote(modelOptions);
   useEffect(() => setModel(modelOptions[0]?.value ?? ""), [harness, models.length]);
 
   const cwdErr = cwd && !cwd.startsWith("/") && !cwd.startsWith("~") ? "use an absolute path" : null;
@@ -212,6 +215,9 @@ export function NewSessionDialog({ onClose, preset }: { onClose: () => void; pre
                  switcher's (issue #199) */
               options={[{ value: "", label: "harness default" }, ...modelSelectOptions(modelOptions)]}
             />
+            {/* a scoped catalog explains itself under the list (issue #170)
+                — same note the composer switcher shows */}
+            {scopeNote && <div className="mt-1 px-1 text-[10.5px] leading-tight text-[var(--t-dim)]">{scopeNote}</div>}
           </Field>
 
           <div className="grid grid-cols-[1fr_180px] gap-3">
