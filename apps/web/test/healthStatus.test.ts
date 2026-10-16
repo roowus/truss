@@ -177,3 +177,41 @@ test("the demo backend PUSHES a health frame, so demo mode is not stuck grey", (
     "demo mode emits no agents.changed edge, so connectEvents must push a health frame itself (audit round 5 B1)",
   );
 });
+
+/* ── audit round 6: formatting hygiene guards ────────────────────────────
+ *
+ * Two rounds in a row, careless edits left (a) a class declaration collapsed
+ * onto its field line and (b) duplicated/orphaned doc comments. Lint catches
+ * neither. These are cheap structural guards over the files this feature
+ * owns, so the same regression cannot land a third time. */
+test("no stacked duplicate doc comments in the health files", () => {
+  const files = [
+    "../src/lib/health.ts",
+    "../src/lib/store.ts",
+    "../src/lib/demo.ts",
+  ];
+  for (const rel of files) {
+    const lines = readFileSync(new URL(rel, import.meta.url), "utf8").split("\n");
+    for (let i = 0; i < lines.length; i++) {
+      if (!lines[i].trimStart().startsWith("/**")) continue;
+      let j = i;
+      while (j < lines.length && !lines[j].includes("*/")) j++;
+      let k = j + 1;
+      while (k < lines.length && lines[k].trim() === "") k++;
+      assert.ok(
+        !(k < lines.length && lines[k].trimStart().startsWith("/**")),
+        `${rel}:${i + 1} has a doc comment immediately followed by another (an orphaned duplicate)`,
+      );
+      i = j;
+    }
+  }
+});
+
+test("the Store class body is not collapsed onto its declaration line", () => {
+  const src = readFileSync(new URL("../src/lib/store.ts", import.meta.url), "utf8");
+  assert.ok(
+    !/class Store \{[^\n]*state:/.test(src),
+    "class Store collapsed onto one line with its first field — a formatting regression lint misses",
+  );
+  assert.match(src, /class Store \{\n\s+state: AppState = \{/, "the class declaration and its state field are on separate lines");
+});

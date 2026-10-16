@@ -225,7 +225,8 @@ export function reduce(v: SessionView, ev: ProtoEvent, frameTime: number): Sessi
 }
 
 /* ---------------- store ---------------- */
-class Store {  state: AppState = {
+class Store {
+  state: AppState = {
     backend: null,
     conn: { kind: "connecting", attempt: 0 },
     everConnected: false,

@@ -38,14 +38,16 @@ function probeStore(): SubsystemHealth {
   }
 }
 
-/** remote hosts carry the real fleet signal: how many configured hosts are
+/** Remote hosts carry the real fleet signal: how many configured hosts are
     dialed in right now. Any configured host offline is `degraded` — the
-    server works, with less. No hosts configured is `ok` (nothing to lose). */
-/** PURE: the remote-hosts row for a given set of configured hosts and the
-    ids currently connected. Exported so the degraded/logic branches can be
-    tested with no store state at all — driving this through the live store
-    makes tests race each other, since node --test runs cases concurrently
-    (audit round 4 review). */
+    server works, with less. No hosts configured is `ok` (nothing to lose);
+    a revoked host is not part of the fleet, since it is not expected to dial
+    in, so it does not drag the row down.
+
+    PURE: takes the configured hosts and the currently-connected ids, so the
+    degraded/logic branches are testable with no store state at all — driving
+    this through the live store makes tests race each other, since node
+    --test runs cases concurrently (audit round 4 review). */
 export function hostsRow(
   hosts: { id: string; revoked?: boolean }[],
   onlineIds: Iterable<string>,
@@ -60,6 +62,9 @@ export function hostsRow(
     : { name: "remote-hosts", state: "degraded", detail };
 }
 
+/** the live remote-hosts probe: joins the configured hosts to the connected
+    agents and delegates the decision to hostsRow. A registry that cannot be
+    read at all is `degraded`, not fatal. */
 function probeHosts(): SubsystemHealth {
   try {
     return hostsRow(listHosts(), listAgents().map((a) => a.hostId));
