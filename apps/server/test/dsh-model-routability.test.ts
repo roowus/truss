@@ -72,3 +72,28 @@ test("the generated catalog patch is passed as a second --patch, after the stati
   dsh.useGeneratedCatalogPatch("/tmp/generated-models.yml");
   assert.deepEqual(dsh.__launchArgs(), after, "re-applying the same patch path is a no-op");
 });
+
+test("the harvest waits for generation, so dsh never boots on stale args (the preview race)", async () => {
+  /* REGRESSION: generation is I/O and runs concurrently with the server
+     coming up. On the preview, the first picker probe reached the harvest
+     before generation finished, so dsh was spawned from the static-only args
+     and the picker reported the old 27 even though the generated file existed
+     and was correct (verified: the exact command with both --patch args
+     reports 813 leaves). The harvest must therefore await the settled
+     generation attempt before it boots the harness. */
+  assert.equal(typeof dsh.markGenerationSettled, "function", "the gate must be wired for index.ts");
+
+  let resolved = false;
+  let release!: () => void;
+  const gate = new Promise<void>((r) => {
+    release = () => {
+      resolved = true;
+      r();
+    };
+  });
+  dsh.markGenerationSettled(gate);
+  assert.equal(resolved, false, "the gate is pending until generation settles");
+  release();
+  await gate;
+  assert.equal(resolved, true, "and resolves once it does");
+});

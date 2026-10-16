@@ -88,12 +88,40 @@ const launch = {
   env: { DSH_HOME: process.env.DSH_HOME ?? "/opt/dsh", ...loadDshEnv() },
 };
 
-/** point dsh at the generated catalog patch (idempotent) */
+/* the generated catalog patch, if generation has succeeded in this process.
+
+   Set by the boot-time sync, but READ AT SPAWN TIME (below) rather than
+   applied once at startup: generation runs concurrently with the server
+   coming up (the key-proxy fetch is I/O), so a boot-time mutation races the
+   first dsh spawn — observed on the preview, where dsh came up on the static
+   27 because its ACP process had already been started from the old args. */
+let generatedPatch: string | null = null;
+
+/** resolves once the boot-time generation attempt has settled — the harvest
+    awaits it so the picker's first probe cannot start dsh before the
+    generated catalog patch is known (the race that left the preview on 27).
+    Resolves immediately when nothing ever calls it (tests, agent bundle). */
+let generationSettled: Promise<void> = Promise.resolve();
+export function markGenerationSettled(p: Promise<void>) {
+  generationSettled = p.catch(() => undefined);
+}
+
+/** record the generated catalog patch for future spawns (idempotent) */
 export function useGeneratedCatalogPatch(path: string) {
   if (!path) return;
-  if (launch.args[launch.args.length - 1] === path) return;
-  launch.args = ["--profile", "acp", "--patch", PATCH, "--patch", path];
+  generatedPatch = path;
+  refreshLaunchArgs();
 }
+
+/** compose the launch args from the static patch plus, when available, the
+    generated catalog patch — which must come SECOND so it layers over the
+    static llm-pi-ai block rather than being overridden by it */
+function refreshLaunchArgs() {
+  launch.args = generatedPatch
+    ? ["--profile", "acp", "--patch", PATCH, "--patch", generatedPatch]
+    : ["--profile", "acp", "--patch", PATCH];
+}
+refreshLaunchArgs();
 
 /* Test seams for the launch wiring (the static-then-generated --patch order
    is a contract, not an implementation detail) */
@@ -147,6 +175,12 @@ function parseModelOptions(opts: AcpConfigOption[] | undefined): CatalogModel[] 
    dsh's boot pays its plugin stack (seconds), which is exactly why the probe
    must stay out of the picker request's path. */
 const catalog = lazyCatalog("models:dsh", async () => {
+  /* wait for the boot-time generation attempt, then re-read the generated
+     patch: generation is I/O and can finish after this module loaded, so the
+     harvest must not start dsh on stale args (that race left the preview
+     reporting the static 27) */
+  await generationSettled;
+  refreshLaunchArgs();
   await client.ensure();
   const res = (await client.call("session/new", { cwd: homedir(), mcpServers: [] })) as {
     sessionId: string;
@@ -240,6 +274,9 @@ export const dshAdapter: HarnessAdapter = {
   probeModels: catalog.probe,
 
   async spawn(opts: SessionOpts): Promise<AcpSessionState> {
+    /* re-read the generated patch before the client boots: generation may
+       have finished after module load (see generatedPatch above) */
+    refreshLaunchArgs();
     await client.ensure();
 
     let res: { sessionId: string; configOptions?: AcpConfigOption[] };
