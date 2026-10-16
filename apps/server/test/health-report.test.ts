@@ -153,15 +153,31 @@ test("the catalog row is never a hardcoded ok when nothing has loaded", () => {
      issue #219 names "a model catalog fails to load" as a thing the report
      must surface. On a fresh server no lazy adapter has discovered anything,
      so the row must be degraded and say so. */
+  /* probeCatalog reads the REAL process.env through modelRouterEnabled(), so
+     this assertion must not assume the gate is off: with TRUSS_MODEL_ROUTER
+     set, nothing-discovered is legitimately ok (the router serves models).
+     Asserting the ambient state instead of the invariant made the test fail
+     on any machine with the gate on (audit round 7, B2) — the same
+     host-dependence class round 1 fixed for the adapter rows. */
+  const gateOn = ["1", "true", "on"].includes(process.env.TRUSS_MODEL_ROUTER ?? "");
   const snap = buildHealthSnapshot();
   const catalog = snap.subsystems.find((s) => s.name === "model-catalog");
   assert.ok(catalog, "the model-catalog row exists");
   assert.notEqual(catalog.state, "down", "a cold catalog is not fatal — the server still runs");
+
   if (catalog.state === "ok") {
-    /* ok is only legitimate when a catalog really was discovered */
-    assert.match(catalog.detail ?? "", /\d+ models discovered/, "an ok row must justify itself with a real count");
+    /* ok is only legitimate when a catalog really was discovered, OR when the
+       router gate is on and serving models independently of the lazy caches */
+    assert.match(
+      catalog.detail ?? "",
+      gateOn ? /router/i : /\d+ models discovered/,
+      gateOn
+        ? "with the gate on, an ok row must credit the router"
+        : "with the gate off, an ok row must justify itself with a real count",
+    );
   } else {
     assert.equal(catalog.state, "degraded");
+    assert.ok(!gateOn, "with the gate off an undiscovered catalog is degraded");
     assert.match(catalog.detail ?? "", /no catalog discovered|no catalog from/, "a degraded row says which adapter has none");
   }
 });

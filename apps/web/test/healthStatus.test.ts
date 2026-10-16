@@ -185,10 +185,18 @@ test("the demo backend PUSHES a health frame, so demo mode is not stuck grey", (
  * neither. These are cheap structural guards over the files this feature
  * owns, so the same regression cannot land a third time. */
 test("no stacked duplicate doc comments in the health files", () => {
+  /* Audit round 7, B1: this guard originally covered only the three web
+     files, but the duplicated/orphaned doc comments it exists to prevent
+     actually lived in the SERVER health files (the orphaned probeHosts
+     block, the duplicated probeTranscribe block). It claims to walk "the
+     feature's files", so it must include them. */
   const files = [
     "../src/lib/health.ts",
     "../src/lib/store.ts",
     "../src/lib/demo.ts",
+    "../src/components/Chrome.tsx",
+    "../../server/src/health.ts",
+    "../../server/src/health-snapshot.ts",
   ];
   for (const rel of files) {
     const lines = readFileSync(new URL(rel, import.meta.url), "utf8").split("\n");

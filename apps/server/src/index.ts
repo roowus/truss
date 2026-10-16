@@ -236,7 +236,6 @@ const AGENT_PROTOCOL = 2;
 wireRemoteRegistry({
   register: registerAdapter,
   unregister: unregisterAdapter,
-  /* an agent hello'd/dropped — open clients refetch hosts + harnesses */
   /* an agent hello'd/dropped — open clients refetch hosts + harnesses.
      This is ALSO the health edge (issue #219): a host dropping or coming
      back is exactly when the readiness picture changes, so we re-probe and
