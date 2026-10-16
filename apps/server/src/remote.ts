@@ -324,6 +324,20 @@ class RemoteAdapter implements HarnessAdapter {
   }
 }
 
+/* the live adapter instances, keyed `<adapter>@<host>` (issue #232 audit B1).
+
+   A test seam: RemoteAdapter.probeModels' freshness policy is only genuinely
+   pinned by asserting that no `models.list` leaves over the tunnel while the
+   catalog is populated and fresh. That needs the real instance, not the
+   source text — a source grep passes on a commented-out line, which is
+   exactly how the first version of this pin was written. */
+const liveAdapters = new Map<string, RemoteAdapter>();
+
+/** the live RemoteAdapter for a host+adapter, or null (test seam, see above) */
+export function adapterForHost(hostId: string, adapterId: string): HarnessAdapter | null {
+  return liveAdapters.get(`${adapterId}@${hostId}`) ?? null;
+}
+
 /** an agent connected — register its adapters as `<id>@<host>` harnesses,
     then reconcile its session list against the server's (issue #100) */
 export function agentHello(
@@ -347,6 +361,7 @@ export function agentHello(
   });
   for (const a of adapterList) {
     const adapter = new RemoteAdapter(hostId, a.id, a.capabilities);
+    liveAdapters.set(`${a.id}@${hostId}`, adapter);
     registerFn?.(`${a.id}@${hostId}` as HarnessId, adapter);
     /* fill the catalog right at hello (issue #123): the picker's probe ask
        is deliberately gated behind a JSON content-type (CSRF hardening), so
@@ -415,6 +430,7 @@ export function agentBye(hostId: string, socket?: AgentInfo["socket"]) {
   if (socket && agent.socket !== socket) return; // stale close from a replaced connection
   agents.delete(hostId);
   for (const a of agent.adapters) {
+    liveAdapters.delete(`${a.id}@${hostId}`);
     unregisterFn?.(`${a.id}@${hostId}` as HarnessId);
   }
   for (const [reqId, p] of pendingSpawns) {

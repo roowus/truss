@@ -99,6 +99,39 @@ test("the harvest waits for generation, so dsh never boots on stale args (the pr
   assert.equal(resolved, true, "and resolves once it does");
 });
 
+/* spawn()'s gate ordering (audit B3) is pinned BEHAVIOURALLY in
+   dsh-spawn-gate.test.ts: a real spawn is driven against a fake ACP binary
+   while the generation gate is held open, asserting dsh does not boot until
+   it settles. That test was verified to fail with the await removed and pass
+   with it restored. An earlier version of this file asserted the same thing
+   by grepping the source for `await generationSettled`, which would have
+   passed on a commented-out line — deliberately not repeated here. */
+
+test("the harvest waits for generation, so dsh never boots on stale args (the preview race)", async () => {
+  /* REGRESSION: generation is I/O and runs concurrently with the server
+     coming up. On the preview, the first picker probe reached the harvest
+     before generation finished, so dsh was spawned from the static-only args
+     and the picker reported the old 27 even though the generated file existed
+     and was correct (verified: the exact command with both --patch args
+     reports 813 leaves). The harvest must therefore await the settled
+     generation attempt before it boots the harness. */
+  assert.equal(typeof dsh.markGenerationSettled, "function", "the gate must be wired for index.ts");
+
+  let resolved = false;
+  let release!: () => void;
+  const gate = new Promise<void>((r) => {
+    release = () => {
+      resolved = true;
+      r();
+    };
+  });
+  dsh.markGenerationSettled(gate);
+  assert.equal(resolved, false, "the gate is pending until generation settles");
+  release();
+  await gate;
+  assert.equal(resolved, true, "and resolves once it does");
+});
+
 test("spawn() waits for generation before booting dsh (audit B3)", async () => {
   /* spawn() calls refreshLaunchArgs() before client.ensure(), but generation
      is fire-and-forget at boot while the server is already listening. Without

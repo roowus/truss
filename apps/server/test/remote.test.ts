@@ -291,3 +291,53 @@ test("the remote catalog freshness policy: empty always probes, populated only w
     cleanup();
   }
 });
+
+test("a POPULATED remote catalog sends no models.list over the tunnel until stale (audit B1)", async () => {
+  /* The behavioural half of the B1 pin: the pure policy function above proves
+     the rule, this proves RemoteAdapter.probeModels actually applies it and
+     skips the tunnel round-trip. Before #232 a populated catalog was never
+     re-probed by the dialog; after it, probeModels is called for every
+     probeable adapter on each POST /api/harnesses/probe — so without this
+     guard every New Session open would fan a models.list (plus a 5s timer) at
+     every connected remote host × adapter. */
+  const { cleanup } = await freshServer("rem-probe-populated");
+  try {
+    const remote = await import("../src/remote.js");
+    remote.wireRemoteRegistry({ register: () => {}, unregister: () => {}, sessionGone: () => {} });
+
+    const sent: string[] = [];
+    remote.agentHello("h-pop", "pop-host", [{ id: "pi", capabilities: CAPS }], fakeSocket(sent));
+
+    const found = remote.adapterForHost("h-pop", "pi");
+    assert.ok(found, "the live adapter is reachable through the test seam");
+    const adapter = found as { probeModels: () => Promise<boolean> };
+
+    /* the hello fires its own background probe (#123) — let it land so we
+       start from a known state */
+    await new Promise((r) => setTimeout(r, 50));
+    const lists = () => sent.filter((s) => s.includes("models.list")).length;
+
+    /* answer whatever the hello probe asked for, so the catalog is populated */
+    for (const raw of sent.filter((s) => s.includes("models.list"))) {
+      const req = JSON.parse(raw) as { reqId: string };
+      remote.agentFrame("h-pop", {
+        type: "models.result",
+        reqId: req.reqId,
+        models: [{ provider: "p", model: "m", label: "M" }],
+      });
+    }
+    await new Promise((r) => setTimeout(r, 50));
+
+    /* now drive a probe explicitly; potentially several times, as the dialog
+       does on every open */
+    const before = lists();
+    for (let i = 0; i < 3; i += 1) await adapter.probeModels();
+    assert.equal(
+      lists(),
+      before,
+      "a populated, fresh catalog must NOT send another models.list — every dialog open would otherwise fan a tunnel probe (audit B1)",
+    );
+  } finally {
+    cleanup();
+  }
+});
