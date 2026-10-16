@@ -181,18 +181,20 @@ export function FilesPanel({ params }: IDockviewPanelProps<P>) {
 
   /* the panel is a dockview tab, not a DOM child of anything focusable, so
      the tree takes focus when this panel is shown — arrows then work
-     without a preliminary click. dockview finishes attaching (and focuses)
-     the panel AFTER our effects run, so the initial focus is re-asserted on
-     the next frame; without that the first arrow key went nowhere. */
-  useEffect(() => {
-    const grab = () => {
-      const el = treeRef.current;
-      if (el && !el.contains(document.activeElement)) el.focus({ preventScroll: true });
-    };
-    grab();
-    const raf = requestAnimationFrame(grab);
-    const t = window.setTimeout(grab, 60);
-    return () => { cancelAnimationFrame(raf); window.clearTimeout(t); };
+     without a preliminary click. A callback ref is what actually lands it:
+     the container mounts (and remounts, while the first listing loads)
+     independently of this component's own effects, and dockview finishes
+     attaching the panel after them. Focusing on the ref callback covers
+     every one of those mounts and never fights a later steal. */
+  const treeRefCb = useCallback((el: HTMLDivElement | null) => {
+    treeRef.current = el;
+    if (!el) return;
+    /* only steal focus when nothing inside the panel already has it */
+    window.setTimeout(() => {
+      if (!el.isConnected || el.contains(document.activeElement)) return;
+      if (document.activeElement && document.activeElement !== document.body) return;
+      el.focus({ preventScroll: true });
+    }, 0);
   }, []);
 
   const onTreeKeyDown = (ev: React.KeyboardEvent) => {
@@ -276,7 +278,7 @@ export function FilesPanel({ params }: IDockviewPanelProps<P>) {
       {/* body: tree + preview */}
       <div className="flex-1 min-h-0 flex">
         <div
-          ref={treeRef}
+          ref={treeRefCb}
           role="tree"
           aria-label="Files"
           tabIndex={0}
