@@ -182,6 +182,56 @@ process.stdin.on("end", () => process.exit(0));
   );
 }
 
+/**
+ * Make the "every adapter is installed" case TRUE rather than assumed
+ * (issue #219 audit round 1, B1).
+ *
+ * The health report resolves each adapter's binary from the host PATH, so a
+ * test that assumes claude/dsh are installed passes on a dev box and fails
+ * on CI. installFakePi already shadows `pi`; this shadows the remaining
+ * adapters the same way, so the all-ok readiness case is genuinely
+ * CONSTRUCTED on any host instead of depending on what is installed.
+ *
+ * hermes' default is an absolute path inside its own venv rather than a PATH
+ * name, so it is stubbed by pointing TRUSS_HERMES_BIN at a real executable.
+ *
+ * `omit` lets a test leave one binary out — that is how the
+ * degraded-on-missing-binary case is built hermetically too.
+ */
+export function installFakeAdapters(dir: string, omit: string[] = []): { binDir: string; hermesBin?: string } {
+  const binDir = join(dir, "bin");
+  mkdirSync(binDir, { recursive: true });
+  const stub = "#!/bin/sh\nexit 0\n";
+  for (const id of ["pi", "claude", "dsh"]) {
+    if (omit.includes(id)) continue;
+    const p = join(binDir, id);
+    writeFileSync(p, stub);
+    chmodSync(p, 0o755);
+  }
+  process.env.PATH = `${binDir}:${process.env.PATH}`;
+  /* hermes is also the odd one out: an absolute venv path, not a PATH name */
+  const hermes = join(dir, "hermes-acp");
+  if (!omit.includes("hermes")) {
+    writeFileSync(hermes, stub);
+    chmodSync(hermes, 0o755);
+    process.env.TRUSS_HERMES_BIN = hermes;
+    return { binDir, hermesBin: hermes };
+  }
+  return { binDir };
+}
+
+/** the env a caller should hand to probeAdapters() after installFakeAdapters:
+    an explicit env object must carry TRUSS_HERMES_BIN, because hermes does
+    not resolve from PATH and would otherwise be reported degraded */
+export function fakeAdapterEnv(dir: string, bins: { binDir: string; hermesBin?: string }): NodeJS.ProcessEnv {
+  return {
+    ...process.env,
+    PATH: bins.binDir,
+    HOME: dir,
+    ...(bins.hermesBin ? { TRUSS_HERMES_BIN: bins.hermesBin } : { TRUSS_HERMES_BIN: "" }),
+  };
+}
+
 /** poll until pred() is truthy (predicates may be async — awaited per tick) */
 export async function waitFor<T>(fn: () => T | Promise<T>, what = "condition", timeoutMs = 8000): Promise<T> {
   const t0 = Date.now();

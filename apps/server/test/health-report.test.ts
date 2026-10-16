@@ -4,7 +4,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, chmodSync, rmSync, readFileSync,
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
-import { bootServer, type TestServer } from "./server-harness.js";
+import { bootServer, fakeAdapterEnv, installFakeAdapters, type TestServer } from "./server-harness.js";
 import { buildHealthSnapshot } from "../src/health-snapshot.js";
 import { healthRollup, probeAdapters, startupLine, whichSync } from "../src/health.js";
 
@@ -52,51 +52,79 @@ test("fresh server: the readiness report comes up, with every required row", asy
     assert.ok(["ok", "degraded", "down"].includes(s.state), `bad state ${s.state} on ${s.name}`);
   }
 
-  /* The NON-adapter, NON-catalog subsystems do not depend on any harness
-     binary or on a catalog having been discovered, so they are the ones that
-     must be ok on any host. The adapter rows are asserted INDIVIDUALLY
-     below: they resolve against the host PATH (claude/dsh may legitimately
-     be absent on CI) plus the fake HOME (hermes), so asserting the whole
-     remainder is ok would be a green-locally / red-in-CI test — exactly what
-     audit round 1 caught. Never let a test depend on what happens to be
-     installed. */
-  const stable = body.subsystems.filter(
+  /* the rows that depend on NOTHING host-specific — no harness binary, no
+     catalog discovery — are the ones a fresh server must report ok. These
+     are exactly the host-independent subsystems the issue's first criterion
+     is about, and they cannot vary with what is installed. */
+  const hostIndependent = body.subsystems.filter(
     (s: { name: string }) => !s.name.startsWith("adapter:") && s.name !== "model-catalog",
   );
+  assert.deepEqual(
+    hostIndependent.filter((s: { state: string }) => s.state !== "ok"),
+    [],
+    "every host-independent subsystem is ok on a fresh server",
+  );
   assert.equal(
-    healthRollup(stable),
-    "ok",
-    `expected every host-independent subsystem ok, got ${JSON.stringify(stable.filter((s: { state: string }) => s.state !== "ok"))}`,
+    body.subsystems.filter((s: { state: string }) => s.state === "down").length,
+    0,
+    "a fresh server has nothing down",
   );
 
   /* the catalog row is honest, not permanently green (audit round 1, B2): a
      fresh test server has discovered no lazy catalog, so it reports degraded
-     with a reason instead of a hardcoded ok. */
+     with a reason rather than a hardcoded ok. */
   const catalog = body.subsystems.find((s: { name: string }) => s.name === "model-catalog");
   assert.ok(catalog, "the model-catalog row is present");
   assert.ok(["ok", "degraded"].includes(catalog.state), `catalog is ok or degraded, never down (got ${catalog.state})`);
   assert.ok(catalog.detail, "the catalog row always carries a detail naming the gate");
+});
 
-  /* each adapter row is present and individually honest. `pi` is guaranteed
-     by the harness (installFakePi puts a fake `pi` first on PATH); the rest
-     may be ok or degraded depending on the host — but NEVER down, and a
-     degraded one must always explain itself. */
-  const adapterRows = body.subsystems.filter((s: { name: string }) => s.name.startsWith("adapter:"));
-  assert.equal(adapterRows.length, 4, "one row per adapter");
-  const pi = adapterRows.find((s: { name: string }) => s.name === "adapter:pi");
-  assert.equal(pi.state, "ok", "the harness guarantees a fake `pi` on PATH, so this row is deterministically ok");
-  for (const row of adapterRows) {
-    assert.notEqual(row.state, "down", `${row.name}: a missing adapter is degraded, NEVER down (issue #219)`);
-    if (row.state === "degraded") assert.ok(row.detail, `${row.name}: a degraded adapter must say why`);
+/* ── 1b. the issue's "all ok" criterion, genuinely CONSTRUCTED ────────────
+ *
+ * "fresh server: all-local subsystems ok" must actually hold, not be
+ * narrowed until it passes. The adapters resolve from the host PATH, so the
+ * all-ok case is built here with installFakeAdapters rather than assumed —
+ * otherwise the assertion is green on a dev box with Claude Code installed
+ * and red on CI (audit round 1, B1). This pins the INTENDED state
+ * deterministically on any host. */
+test("with every harness installed, all four adapters report ok", () => {
+  const dir = mkdtempSync(join(tmpdir(), "truss-health-allok-"));
+  const bins = installFakeAdapters(dir);
+  const rows = probeAdapters(fakeAdapterEnv(dir, bins));
+  assert.equal(rows.length, 4, "one row per adapter");
+  assert.deepEqual(
+    rows.filter((r) => r.state !== "ok"),
+    [],
+    `with every harness installed ALL FOUR adapters must be ok: ${JSON.stringify(rows)}`,
+  );
+  assert.equal(healthRollup(rows), "ok", "a fully-provisioned host is ok — the issue's first criterion");
+  rmSync(dir, { recursive: true, force: true });
+});
+
+/* ── 2. hide a harness binary from PATH → degraded with detail, others ok ──
+ * The issue's SECOND criterion, kept strictly separate from the fresh-server
+ * case above: a missing binary degrades THAT adapter while the others stay
+ * ok. Built hermetically, so it is true on any host. */
+test("hiding a harness binary degrades ONLY that adapter, with detail, others stay ok", () => {
+  const dir = mkdtempSync(join(tmpdir(), "truss-health-path-"));
+  /* every adapter installed EXCEPT dsh */
+  const bins = installFakeAdapters(dir, ["dsh"]);
+  const rows = probeAdapters(fakeAdapterEnv(dir, bins));
+  const by = Object.fromEntries(rows.map((r) => [r.name, r]));
+
+  const dsh = by["adapter:dsh"];
+  assert.equal(dsh.state, "degraded", "a missing adapter is DEGRADED, never fatal (issue #219)");
+  assert.ok(dsh.detail && dsh.detail.length > 0, "the degraded row must carry a detail saying why");
+  assert.match(dsh.detail, /dsh/, "the detail names the binary that is missing");
+
+  /* the OTHERS STAY OK — the "others stay ok" half of the criterion */
+  for (const id of ["pi", "claude", "hermes"]) {
+    assert.equal(by[`adapter:${id}`].state, "ok", `adapter:${id} is unaffected by dsh being missing`);
   }
 
-  /* hermes is absent in the fake HOME → degraded with a detail. That alone
-     rolls the server to degraded, never down. */
-  const hermes = adapterRows.find((s: { name: string }) => s.name === "adapter:hermes");
-  assert.equal(hermes.state, "degraded", "a missing adapter is degraded");
-  assert.ok(hermes.detail, "with a detail explaining why");
-  assert.notEqual(body.state, "down", "a missing adapter must never report the server as down");
-  assert.equal(body.state, healthRollup(body.subsystems), "the reported rollup matches its own rows");
+  /* and the rollup of a single missing adapter is degraded, NOT down */
+  assert.equal(healthRollup(rows), "degraded", "one missing adapter rolls up to degraded, never down");
+  rmSync(dir, { recursive: true, force: true });
 });
 
 test("a host with no harnesses installed degrades every adapter but stays up", () => {
@@ -111,33 +139,6 @@ test("a host with no harnesses installed degrades every adapter but stays up", (
     assert.ok(r.detail, `${r.name} explains why`);
   }
   assert.equal(healthRollup(rows), "degraded", "a bare host is degraded, NOT down — it still serves UI/history/events");
-  rmSync(dir, { recursive: true, force: true });
-});
-
-/* ── 2. hide a harness binary from PATH → degraded with detail, others ok ── */
-test("hiding a harness binary degrades ONLY that adapter, with detail", () => {
-  /* a PATH with a fake pi but no dsh. probeAdapters takes the env, so this
-     exercises the real probe without touching the running server. */
-  const dir = mkdtempSync(join(tmpdir(), "truss-health-path-"));
-  const fakePi = join(dir, "pi");
-  writeFileSync(fakePi, "#!/bin/sh\nexit 0\n");
-  chmodSync(fakePi, 0o755);
-
-  const rows = probeAdapters({ PATH: dir, HOME: dir } as NodeJS.ProcessEnv);
-  const by = Object.fromEntries(rows.map((r) => [r.name, r]));
-
-  assert.equal(by["adapter:pi"].state, "ok", "pi is on the fake PATH");
-  const dsh = by["adapter:dsh"];
-  assert.equal(dsh.state, "degraded", "a missing adapter is DEGRADED, never fatal (issue #219)");
-  assert.ok(dsh.detail && dsh.detail.length > 0, "the degraded row must carry a detail saying why");
-  assert.match(dsh.detail, /dsh/, "the detail names the binary that is missing");
-
-  /* the other adapters must be unaffected — this is the "others stay ok" half */
-  assert.equal(by["adapter:hermes"].state, "degraded", "hermes venv is not in the fake HOME either");
-
-  /* and the rollup of a single missing adapter is degraded, NOT down */
-  assert.equal(healthRollup(rows), "degraded", "missing adapters roll up to degraded, never down");
-
   rmSync(dir, { recursive: true, force: true });
 });
 
