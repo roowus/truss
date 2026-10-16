@@ -23,7 +23,7 @@ process.on("exit", () => {
   }
 });
 
-const { resolveExposure, DEFAULT_BIND_HOST, exposureLine, exposureBanner } = await import("../src/exposure.js");
+const { resolveExposure, DEFAULT_BIND_HOST, exposureLine, exposureBanner, formatBindHost } = await import("../src/exposure.js");
 
 /* SPEC-TESTS for issue #214 —
    https://github.com/roowus/truss/issues/214
@@ -104,6 +104,16 @@ test("a wildcard public URL is refused (reject, not coerce)", () => {
 
 test("port 0 in a public URL is refused", () => {
   assert.throws(() => resolveExposure({ port: 4040, publicUrl: "http://truss.example.com:0" }), /port 0|port/i);
+});
+
+test("port 0 is refused in every spelling, not just the literal \":0\" (audit round 2 edge note)", () => {
+  /* the rejection compared the raw port TEXT against "0", so the equally
+     unusable zero-padded forms slipped through */
+  for (const url of ["http://truss.example.com:00", "http://truss.example.com:000", "http://[::1]:00"]) {
+    assert.throws(() => resolveExposure({ port: 4040, publicUrl: url }), /port 0|port/i, `${url} is port 0 too`);
+  }
+  /* a real port is untouched by the numeric check */
+  assert.equal(resolveExposure({ port: 4040, publicUrl: "http://truss.example.com:4040" }).publicUrl, "http://truss.example.com:4040");
 });
 
 test("a garbage port is an explicit error, never silently defaulted", () => {
@@ -242,6 +252,42 @@ test("the banner names the bind address and says there is no authentication", ()
 });
 
 /* ── 5. the startup line reflects the bind (and always carries it) ── */
+
+test("REGRESSION (audit round 2, B2): an IPv6 bind renders as a dialable URL, bracketed", () => {
+  /* exposureLine built `http://${v.bind}:${v.port}` raw, so TRUSS_HOST=::1
+     printed `http://::1:4040` — not a dialable URL, and a different
+     rendering of the SAME setting than TRUSS_HOST=[::1]. The issue's whole
+     point is that this line reports the effective exposure, so it has to be
+     a URL a human can actually paste. */
+  const line = exposureLine(resolveExposure({ port: 4040, host: "::1" }));
+  assert.match(line, /listening on http:\/\/\[::1\]:4040 \(local only\)/, "a bare IPv6 bind is bracketed");
+  assert.doesNotMatch(line, /http:\/\/::1:4040/, "never the malformed un-bracketed form");
+
+  /* both spellings of the same setting must render identically */
+  assert.equal(
+    exposureLine(resolveExposure({ port: 4040, host: "::1" })),
+    exposureLine(resolveExposure({ port: 4040, host: "[::1]" })),
+    "::1 and [::1] are the same bind and must print the same line",
+  );
+
+  /* the wildcard v6 bind, and a v6-with-port, bracket too */
+  for (const host of ["::", "[::]", "fe80::1", "2001:db8::1"]) {
+    const l = exposureLine(resolveExposure({ port: 4040, host }));
+    assert.doesNotMatch(l, /http:\/\/[^[]*::/, `${host} must render bracketed`);
+  }
+
+  /* and the banner's "Bound to" line takes the same path */
+  const banner = exposureBanner(resolveExposure({ port: 4040, host: "::" }));
+  assert.ok(banner, "a wildcard v6 bind warns");
+  assert.match(banner!, /Bound to \[::\]:4040/, "the banner brackets the v6 bind too");
+  assert.doesNotMatch(banner!, /Bound to :::4040/, "never the malformed form");
+
+  /* IPv4 and hostnames are untouched */
+  assert.equal(formatBindHost("127.0.0.1"), "127.0.0.1");
+  assert.equal(formatBindHost("0.0.0.0"), "0.0.0.0");
+  assert.equal(formatBindHost("truss.example.com"), "truss.example.com");
+  assert.equal(formatBindHost("[::1]"), "[::1]", "already-bracketed input is not double-bracketed");
+});
 
 test("the startup line distinguishes loopback from wide exposure", () => {
   const local = exposureLine(resolveExposure({ port: 4040 }));

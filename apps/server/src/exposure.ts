@@ -115,7 +115,10 @@ function validatedPublicUrl(raw: string, port: number): string {
   if (portText && !/^\d+$/.test(portText)) {
     throw new Error(`TRUSS_PUBLIC_URL "${raw}" has an invalid port "${portText}" — give a number, or omit the port to use the scheme default`);
   }
-  if (portText === "0") {
+  /* numerically, not textually: ":00" and ":000" are the same port 0 the
+     literal ":0" is, and they used to slip past a string comparison against
+     "0" (audit round 2 edge note) */
+  if (portText && Number(portText) === 0) {
     throw new Error(`TRUSS_PUBLIC_URL "${raw}" uses port 0, which is never dialable — give the real port this server answers on (${port})`);
   }
 
@@ -166,25 +169,16 @@ export function resolveExposure(input: {
   const rawPublic = (input.publicUrl ?? "").trim();
   const publicUrl = rawPublic ? validatedPublicUrl(rawPublic, port) : undefined;
 
-  if (publicUrl) {
-    /* Audit B1/B3: this block used to call assertDialableServerUrl here.
-       That call could never do anything except re-run its syntax regex:
-       passing `publicUrl` takes the checker's deliberate "the operator
-       declared this URL, trust it" early return, and NOT passing it would
-       reject the documented 443-front-door/4040-backend deployment. Either
-       way it was misleading dead code, and the first attempt papered over
-       that by bolting a port rule ON TOP of the checker — the fork the
-       design Q&A explicitly ruled out.
-
-       So the declaration is handled where it belongs: validatedPublicUrl
-       above enforces its SHAPE (wildcard, port 0, unparseable port, scheme,
-       credentials, protocol-relative), which is the whole of what a front
-       door must satisfy here. The shared checker keeps governing every
-       OTHER return address, unchanged, in the delivery routes — which is
-       the contract issue #100 built and net-bind.test.ts pins. There is no
-       port-agreement rule: a declaration names the front door (normally 443
-       behind a proxy), not the backend it forwards to. */
-  }
+  /* A declared front door is deliberately NOT run through
+     assertDialableServerUrl (audit round 1, finding B3). Passing publicUrl
+     takes that checker's "the operator declared this URL, trust it" early
+     return, so it could only ever re-run its own syntax regex; NOT passing it
+     would reject the documented 443-front-door/4040-backend deployment,
+     because a declaration names the front door, not the backend it forwards
+     to. validatedPublicUrl above therefore enforces the whole of what a
+     declaration must satisfy — its SHAPE — and the shared checker keeps
+     governing every OTHER return address, unchanged, in the delivery routes.
+     That is the contract issue #100 built and net-bind.test.ts pins. */
 
   /* Q1: the banner fires when the bind is not loopback AND no front door is
      declared. Truss has no auth of its own to inspect, so a declared
@@ -198,6 +192,19 @@ export function resolveExposure(input: {
   return { port, bind, bindKind, publicUrl, exposure, noAuthWarning };
 }
 
+/**
+ * A bind address rendered so it inside `host:port` is a dialable URL.
+ *
+ * A bare IPv6 address is ambiguous without brackets: `http://::1:4040` is not
+ * a URL a client can dial, and `TRUSS_HOST=::1` would render differently from
+ * `TRUSS_HOST=[::1]` for the very same setting (audit B2). Anything with a
+ * colon is bracketed unless it already is — the same normalization `new URL`
+ * expects. Exported for tests.
+ */
+export function formatBindHost(bind: string): string {
+  return bind.includes(":") && !(bind.startsWith("[") && bind.endsWith("]")) ? `[${bind}]` : bind;
+}
+
 /** the one-line exposure statement, greppable in a service log */
 export function exposureLine(v: ExposureVerdict): string {
   const where =
@@ -206,7 +213,7 @@ export function exposureLine(v: ExposureVerdict): string {
       : v.exposure === "fronted"
         ? `NO AUTH, fronted by ${v.publicUrl}`
         : "NO AUTH, reachable from your network";
-  return `listening on http://${v.bind}:${v.port} (${where})`;
+  return `listening on http://${formatBindHost(v.bind)}:${v.port} (${where})`;
 }
 
 /** the loud one-time banner, or null when there is nothing to shout about */
@@ -217,7 +224,7 @@ export function exposureBanner(v: ExposureVerdict): string | null {
     "  ┌─────────────────────────────────────────────────────────────────────┐",
     "  │  WARNING: this Truss has NO AUTHENTICATION and is not on loopback.  │",
     "  └─────────────────────────────────────────────────────────────────────┘",
-    `  Bound to ${v.bind}:${v.port}, so anyone who can route to this machine can`,
+    `  Bound to ${formatBindHost(v.bind)}:${v.port}, so anyone who can route to this machine can`,
     "  open the app and run commands through its agents. Truss is single-user",
     "  and has no login of its own.",
     "",
