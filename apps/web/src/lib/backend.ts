@@ -10,6 +10,7 @@ import type {
   GitBranch,
   GitStatus,
   HarnessesResp,
+  HealthSnapshot,
   HostInfo,
   PairRequestInfo,
   MonitorData,
@@ -57,6 +58,9 @@ export interface Backend {
      Probing rides a POST (JSON body → preflight → not cross-site
      triggerable), never a GET param. */
   harnesses(opts?: { probe?: boolean }): Promise<HarnessesResp>;
+  /** the rich readiness report (issue #219) — /api/health, NOT the flat
+      liveness /health that detectBackend probes. */
+  health(): Promise<HealthSnapshot>;
   agents(): Promise<{ agents: AgentInfo[] }>;
   listSessions(): Promise<{ sessions: SessionMeta[] }>;
   createSession(body: CreateSessionBody): Promise<{ session: SessionMeta }>;
@@ -211,6 +215,7 @@ export function createLiveBackend(): Backend {
   return {
     mode: "live",
     harnesses: (opts) => (opts?.probe ? req("POST", "/api/harnesses/probe", {}) : req("GET", "/api/harnesses")),
+    health: () => req<HealthSnapshot>("GET", "/api/health"),
     agents: () => req<{ agents: AgentInfo[] }>("GET", "/api/agents"),
     listSessions: () => req("GET", "/api/sessions"),
     createSession: (b) => req("POST", "/api/sessions", b),

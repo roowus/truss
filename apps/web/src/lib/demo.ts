@@ -6,14 +6,17 @@ import type {
   CreateSessionBody,
   Frame,
   HarnessesResp,
+  HealthSnapshot,
   HostInfo,
   ModelInfo,
   MonitorEntry,
   ProtoEvent,
   SessionMeta,
   SkillInfo,
+  SubsystemHealth,
   TerminalInfo,
 } from "./proto";
+import { healthRollup } from "./health";
 
 type Dist<T> = T extends unknown ? Omit<T, "sessionId"> : never;
 type EvBody = Dist<ProtoEvent>;
@@ -579,6 +582,32 @@ export function createDemoBackend(): Backend {
     async agents() {
       await net();
       return { agents: [{ hostId: "atlas", hostname: "atlas", adapters: ["pi"] }] };
+    },
+    /* the demo's readiness picture (issue #219): a plausible healthy fleet,
+       with the remote host the demo agents() call already reports so the
+       status bar has something honest to render in demo mode */
+    async health(): Promise<HealthSnapshot> {
+      await net();
+      const subsystems: SubsystemHealth[] = [
+        { name: "adapter:pi", state: "ok", detail: "/usr/local/bin/pi" },
+        { name: "adapter:dsh", state: "ok", detail: "/usr/local/bin/dsh" },
+        { name: "adapter:claude", state: "ok", detail: "/usr/local/bin/claude" },
+        { name: "adapter:hermes", state: "degraded", detail: "not found on PATH: ~/.hermes/venv/bin/hermes-acp" },
+        { name: "model-catalog", state: "ok", detail: "direct provider routes (model router gate off)" },
+        { name: "node-agent-listener", state: "ok", detail: "listening on 0.0.0.0:4040" },
+        { name: "remote-hosts", state: "ok", detail: "1/1 online" },
+        { name: "store", state: "ok", detail: "sqlite open" },
+        { name: "scheduler", state: "ok", detail: "cron running" },
+      ];
+      return {
+        commit: "demo",
+        version: "0.2.0",
+        bind: "0.0.0.0:4040",
+        dataDir: "/demo/data",
+        state: healthRollup(subsystems),
+        time: Date.now(),
+        subsystems,
+      };
     },
     async listSessions() {
       await ready;
