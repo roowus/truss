@@ -1,4 +1,4 @@
-import { assertDialableServerUrl, DEFAULT_BIND_HOST, type NetInfo } from "./net.js";
+import { DEFAULT_BIND_HOST } from "./net.js";
 
 /* re-exported so callers can reach the shared default through this module
    too; net.ts owns it (importing it from here would be a cycle) */
@@ -75,13 +75,29 @@ function effectiveHost(host: string | undefined): string {
 }
 
 /**
- * Validate a return address and hand back its normalized form.
+ * The port text from a URL's raw authority, or "" when there is none.
  *
- * Rejection is the contract here, so every failure mode has its own explicit
- * check BEFORE delegating: `assertDialableServerUrl` treats a URL equal to
- * `net.publicUrl` as dialable by declaration and returns early, so a
- * wildcard or port-0 public URL would sail straight through it.
+ * Never last-colon-splitting the authority: in `https://[2001:db8::1]` the
+ * colons belong to the IPv6 ADDRESS, so `split(":").pop()` yields `"1]"` and
+ * every bracketed IPv6 literal without an explicit port is rejected with a
+ * bogus "invalid port" (audit B2). A bracket pair is skipped as a unit, and
+ * only a colon AFTER it can introduce the port.
  */
+function rawPortText(value: string): string {
+  const authority = value.slice(value.indexOf("//") + 2).split(/[/?#]/)[0];
+  /* credentials may precede the host; a "@" inside an IPv6 literal cannot,
+     because the URL grammar requires brackets around it */
+  const hostPart = authority.slice(authority.lastIndexOf("@") + 1);
+  if (hostPart.startsWith("[")) {
+    const close = hostPart.indexOf("]");
+    if (close === -1) return ""; // malformed bracket — `new URL` already rejected it
+    const rest = hostPart.slice(close + 1);
+    return rest.startsWith(":") ? rest.slice(1) : "";
+  }
+  const colon = hostPart.indexOf(":");
+  return colon === -1 ? "" : hostPart.slice(colon + 1);
+}
+
 function validatedPublicUrl(raw: string, port: number): string {
   const value = raw.trim();
   if (!value) throw new Error("TRUSS_PUBLIC_URL is set but empty — unset it or give a full http(s) URL");
@@ -95,6 +111,14 @@ function validatedPublicUrl(raw: string, port: number): string {
     throw new Error(`TRUSS_PUBLIC_URL "${raw}" has no scheme — give a full absolute URL like https://truss.example.com`);
   }
 
+  const portText = rawPortText(value);
+  if (portText && !/^\d+$/.test(portText)) {
+    throw new Error(`TRUSS_PUBLIC_URL "${raw}" has an invalid port "${portText}" — give a number, or omit the port to use the scheme default`);
+  }
+  if (portText === "0") {
+    throw new Error(`TRUSS_PUBLIC_URL "${raw}" uses port 0, which is never dialable — give the real port this server answers on (${port})`);
+  }
+
   let u: URL;
   try {
     u = new URL(value);
@@ -102,11 +126,9 @@ function validatedPublicUrl(raw: string, port: number): string {
     /* `new URL` rejects ":abc" outright. The message must still name the
        port, because "invalid URL" sends the operator hunting through the
        whole string for a problem that is four characters long. */
-    const bad = value.slice(value.indexOf("//") + 2).split(/[/?#]/)[0];
-    const tail = bad.includes(":") ? bad.split(":").pop() ?? "" : "";
     throw new Error(
-      tail && !/^\d*$/.test(tail)
-        ? `TRUSS_PUBLIC_URL "${raw}" has an invalid port "${tail}" — give a number, or omit the port to use the scheme default`
+      portText && !/^\d+$/.test(portText)
+        ? `TRUSS_PUBLIC_URL "${raw}" has an invalid port "${portText}" — give a number, or omit the port to use the scheme default`
         : `TRUSS_PUBLIC_URL "${raw}" is not a valid URL`,
     );
   }
@@ -124,23 +146,6 @@ function validatedPublicUrl(raw: string, port: number): string {
   }
   if (!host) throw new Error(`TRUSS_PUBLIC_URL "${raw}" has no host`);
 
-  /* A port that is present but unparseable must be an ERROR, never a
-     silent "no port, use the scheme default". `new URL` throws on ":abc"
-     (caught above), but it also ACCEPTS forms that fold away, so the raw
-     authority is checked too. */
-  const authority = value.slice(value.indexOf("//") + 2).split(/[/?#]/)[0];
-  const portPart = authority.slice(authority.lastIndexOf("@") + 1).includes(":")
-    ? authority.slice(authority.lastIndexOf("@") + 1).split(":").pop() ?? ""
-    : "";
-  if (portPart && !/^\d+$/.test(portPart)) {
-    throw new Error(`TRUSS_PUBLIC_URL "${raw}" has an invalid port "${portPart}" — give a number, or omit the port to use the scheme default`);
-  }
-
-  const explicitPort = u.port === "" ? undefined : Number(u.port);
-  if (explicitPort === 0 || portPart === "0") {
-    throw new Error(`TRUSS_PUBLIC_URL "${raw}" uses port 0, which is never dialable — give the real port this server answers on (${port})`);
-  }
-
   const normalized = value.replace(/\/+$/, "");
   return normalized === "" ? value : normalized;
 }
@@ -153,9 +158,6 @@ export function resolveExposure(input: {
   port: number;
   host?: string;
   publicUrl?: string;
-  /** reachability facts for the dialability check (bind/port/publicUrl are
-   *  taken from this call's own arguments) */
-  net?: Pick<NetInfo, "tailscale" | "lan">;
 }): ExposureVerdict {
   const port = input.port;
   const bind = effectiveHost(input.host);
@@ -165,43 +167,23 @@ export function resolveExposure(input: {
   const publicUrl = rawPublic ? validatedPublicUrl(rawPublic, port) : undefined;
 
   if (publicUrl) {
-    /* Reuse the SAME checker the delivery routes use (issue #100) rather
-       than restating its bind/port rules — its signature and behavior stay
-       untouched for its existing callers.
+    /* Audit B1/B3: this block used to call assertDialableServerUrl here.
+       That call could never do anything except re-run its syntax regex:
+       passing `publicUrl` takes the checker's deliberate "the operator
+       declared this URL, trust it" early return, and NOT passing it would
+       reject the documented 443-front-door/4040-backend deployment. Either
+       way it was misleading dead code, and the first attempt papered over
+       that by bolting a port rule ON TOP of the checker — the fork the
+       design Q&A explicitly ruled out.
 
-       BUT it is called with `publicUrl` present in the net object, which
-       intentionally takes its "the operator declared this URL, trust it"
-       early return. That is not a loophole here, it is the semantics: a
-       declared TRUSS_PUBLIC_URL is BY DEFINITION a front door — a reverse
-       proxy or DNS name that forwards to this server — so it is expected to
-       be an address the local bind cannot itself answer. That is the whole
-       reason the escape hatch exists; without it, `TRUSS_PUBLIC_URL` would
-       be unusable on the loopback default this issue introduces, and a
-       proxied deployment would be rejected at startup.
-
-       What DOES have to hold for a declaration is its own shape (wildcard,
-       port 0, scheme, credentials, explicit port matching this server),
-       which validatedPublicUrl enforced above, plus the port agreement
-       checked below. The bind-match logic keeps governing every OTHER
-       address, exactly as before. */
-    assertDialableServerUrl(publicUrl, {
-      port,
-      bind,
-      publicUrl,
-      tailscale: input.net?.tailscale ?? { installed: false },
-      lan: input.net?.lan ?? [],
-    });
-
-    /* the front door must still land on the port this server answers: a
-       proxy forwards to a port, and a declaration naming a different one
-       describes a server that isn't this one */
-    const declared = new URL(publicUrl);
-    const declaredPort = declared.port ? Number(declared.port) : declared.protocol === "https:" ? 443 : 80;
-    if (declaredPort !== port) {
-      throw new Error(
-        `TRUSS_PUBLIC_URL "${rawPublic}" points at port ${declaredPort}, but this server listens on ${port} — a front door must forward to the port this server actually answers on`,
-      );
-    }
+       So the declaration is handled where it belongs: validatedPublicUrl
+       above enforces its SHAPE (wildcard, port 0, unparseable port, scheme,
+       credentials, protocol-relative), which is the whole of what a front
+       door must satisfy here. The shared checker keeps governing every
+       OTHER return address, unchanged, in the delivery routes — which is
+       the contract issue #100 built and net-bind.test.ts pins. There is no
+       port-agreement rule: a declaration names the front door (normally 443
+       behind a proxy), not the backend it forwards to. */
   }
 
   /* Q1: the banner fires when the bind is not loopback AND no front door is

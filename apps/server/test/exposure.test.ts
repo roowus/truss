@@ -5,7 +5,25 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { resolveExposure, DEFAULT_BIND_HOST, exposureLine, exposureBanner } from "../src/exposure.js";
+
+/* Isolate the store BEFORE the module graph loads (the house pattern — see
+   db.ts: it opens truss.db at import time from TRUSS_DATA_DIR, or from the
+   repo's apps/server/data when that is unset). src/exposure.ts pulls in
+   src/net.ts -> ./agentbundle.js -> ./db.js, so without this the suite opens
+   whatever data dir the checkout happens to ship and dies with
+   SQLITE_READONLY_DIRECTORY whenever that dir is not writable by the test
+   user. Static imports hoist, so the override has to happen here, above. */
+const ISOLATED_DIR = mkdtempSync(join(tmpdir(), "truss-exposure-suite-"));
+process.env.TRUSS_DATA_DIR = join(ISOLATED_DIR, "data");
+process.on("exit", () => {
+  try {
+    rmSync(ISOLATED_DIR, { recursive: true, force: true });
+  } catch {
+    /* best effort — tmp is reaped by the OS */
+  }
+});
+
+const { resolveExposure, DEFAULT_BIND_HOST, exposureLine, exposureBanner } = await import("../src/exposure.js");
 
 /* SPEC-TESTS for issue #214 —
    https://github.com/roowus/truss/issues/214
@@ -121,13 +139,11 @@ test("protocol-relative and non-http(s) forms are refused", () => {
   }
 });
 
-test("a mismatched port on the public URL is refused (it must answer the bound server)", () => {
-  assert.throws(
-    () => resolveExposure({ port: 4040, publicUrl: "http://127.0.0.1:9999" }),
-    /port|listen|unreachable|reach/i,
-    "the public URL must point at the port this server actually answers",
-  );
-});
+/* REMOVED (audit B1): a test asserting that a public URL naming a port other
+   than TRUSS_PORT is refused. That was the fork of assertDialableServerUrl
+   the audit ruled out: a declaration names the FRONT DOOR (typically 443 on
+   a proxy), not the backend (4040), so the ports are expected to differ. The
+   valid-config regression test below covers the real contract. */
 
 test("a public URL IS allowed on a loopback bind — that is the front-door case", () => {
   /* Corrected during implementation: the first draft asserted that a
@@ -143,21 +159,47 @@ test("a public URL IS allowed on a loopback bind — that is the front-door case
   assert.equal(v.bind, "127.0.0.1", "the bind is unchanged by the declaration");
 });
 
-test("the declared front door must land on this server's port", () => {
+test("REGRESSION (audit B1): a front door on 443 with the backend on 4040 is the DOCUMENTED valid config", () => {
+  /* The audited head (8dd57f8) added a `declaredPort !== port` throw that
+     made this the crash case: TRUSS_PUBLIC_URL is BY CONSTRUCTION the
+     external front door — a reverse proxy or DNS name terminating on 443
+     and forwarding to the loopback backend on 4040. A declaration names the
+     front door, NOT the backend, so the ports are expected to differ.
+
+     net-bind.test.ts and publicUrl.test.ts both pin this 443-on-4040 pair as
+     valid ("without this escape hatch, proxied deployments can't pair at
+     all"), and assertDialableServerUrl deliberately returns early for a URL
+     equal to publicUrl without comparing ports. That is the contract to
+     reuse; the extra port rule forked it and broke every proxied deploy. */
+  const v = resolveExposure({ port: 4040, publicUrl: "https://truss.example.com" });
+  assert.equal(v.publicUrl, "https://truss.example.com", "an implicit-443 front door is accepted");
+  assert.equal(v.exposure, "fronted");
+  assert.equal(v.noAuthWarning, false, "a declared front door still silences the banner");
+
+  /* any front-door port is fine, not just 443: the proxy decides */
+  for (const url of ["https://truss.example.com:8443", "https://truss.example.com:443", "http://truss.example.com:8080"]) {
+    const ok = resolveExposure({ port: 4040, publicUrl: url });
+    assert.equal(ok.publicUrl, url, `${url} is a valid front door for a backend on 4040`);
+  }
+});
+
+test("REGRESSION (audit B2): an IPv6-literal front door with no explicit port is accepted", () => {
+  /* The raw-authority scan split on ":" and took the last segment whenever
+     the authority contained a colon — but in `https://[2001:db8::1]` the
+     colons belong to the ADDRESS, so it produced "1]" and threw a bogus
+     `has an invalid port "1]"`. IPv6 WITH an explicit port parsed fine, so
+     the bug hit only the implicit-port form. */
+  for (const url of ["https://[2001:db8::1]", "https://[::1]", "http://[2001:db8::1]", "https://[2001:db8::1]:8443"]) {
+    const v = resolveExposure({ port: 4040, publicUrl: url });
+    assert.equal(v.publicUrl, url, `${url} is a valid IPv6 front door`);
+    assert.equal(v.exposure, "fronted");
+  }
+  /* a real garbage port on an IPv6 literal is still refused, and named */
   assert.throws(
-    () => resolveExposure({ port: 4040, publicUrl: "https://truss.example.com:8443" }),
-    /port 8443|port/i,
-    "a declaration naming another port describes a different server",
+    () => resolveExposure({ port: 4040, publicUrl: "https://[2001:db8::1]:abc" }),
+    /port/i,
+    "the fix must not stop validating actual ports",
   );
-  /* the scheme default counts as a port too: https with no port means 443 */
-  assert.throws(
-    () => resolveExposure({ port: 4040, publicUrl: "https://truss.example.com" }),
-    /port 443|port/i,
-    "https with no explicit port means 443, not 4040",
-  );
-  /* and when the server really is on 443, the same URL is fine */
-  const ok = resolveExposure({ port: 443, publicUrl: "https://truss.example.com" });
-  assert.equal(ok.publicUrl, "https://truss.example.com");
 });
 
 test("a valid public URL is normalized (trailing slash stripped, scheme kept)", () => {
@@ -281,6 +323,26 @@ test("a real start with TRUSS_HOST unset listens on loopback and prints the loca
   const { line } = await startServer({ TRUSS_HOST: "" });
   assert.match(line, /listening on http:\/\/127\.0\.0\.1:\d+ \(local only\)/, "the effective exposure is stated");
   assert.doesNotMatch(line, /NO AUTH/, "an unset bind is not a screaming start");
+});
+
+test("REGRESSION (audit B1): a real start with a 443 front door on a non-443 backend comes UP", async () => {
+  /* the audited head threw at module load here (uncaught, exit 1, server
+     never bound), so the strongest form of this test is an actual process
+     start against the documented proxied deployment. The backend port stays
+     ephemeral (the harness default) — pinning a literal port would collide
+     with whatever else is on this box and mask the real assertion, which is
+     simply that the front-door/backend port difference is legal. */
+  const { line, port } = await startServer({
+    TRUSS_HOST: "127.0.0.1",
+    TRUSS_PUBLIC_URL: "https://truss.example.com",
+  });
+  assert.notEqual(port, 443, "the backend is deliberately NOT on the front door's implicit 443");
+  assert.match(
+    line,
+    new RegExp(`listening on http://127\\.0\\.0\\.1:${port} \\(NO AUTH, fronted by https://truss\\.example\\.com\\)`),
+    "the server starts and reports the front door",
+  );
+  assert.doesNotMatch(line, /points at port/, "the front-door/backend port difference is legal, not a crash");
 });
 
 test("a real start with TRUSS_HOST=0.0.0.0 binds wide and prints the loud line and banner", async () => {
