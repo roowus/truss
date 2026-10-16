@@ -54,14 +54,21 @@ export class NotResumableError extends Error {
   }
 }
 
+/** the pump-end note is not a failure — it says the OPPOSITE (the next
+   prompt resumes the session), so quoting it as a refusal's reason would
+   contradict itself (audit B1 note). */
+const PUMP_END_NOTE = "harness event stream ended; the next prompt resumes the session";
+
 /** the detail of the newest `session.state error` event, if the log has one */
 function lastSessionFailureDetail(sessionId: string): string | undefined {
   try {
     for (const { ev } of [...store.listEvents(sessionId)].reverse()) {
       if (ev.type !== "session.state") continue;
       const detail = (ev as { detail?: unknown }).detail;
-      if (typeof detail === "string" && detail.trim()) return detail;
-      return undefined;
+      if (typeof detail !== "string" || !detail.trim()) return undefined;
+      /* the newest state event's detail is the only candidate: an older one
+         would describe a failure this row has since moved past */
+      return detail === PUMP_END_NOTE ? undefined : detail;
     }
   } catch {
     /* a store that cannot be read must not turn a refusal into a crash */

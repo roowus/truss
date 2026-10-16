@@ -47,7 +47,9 @@ export interface AcpLaunchSpec {
 /** one JSON-RPC error as it arrives on the wire. The SDK serializes the
    message and forwards `data` only when the thrown error carried one
    (issue #235) — the `cause` chain that holds the actionable text is not
-   put on the wire, so `data` is the only place a real reason can survive. */
+   put on the wire, so `data` is the only place a real reason can survive.
+   `code` is declared for the wire shape but deliberately NOT rendered:
+   a numeric JSON-RPC code tells a user nothing the message does not. */
 export interface AcpErrorPayload {
   code?: number;
   message?: string;
