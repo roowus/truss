@@ -10,7 +10,27 @@ on:
   workflow_dispatch:
 
 jobs:
+  # Cheap, fast, and runs before anything else: this repo is PUBLIC, so a
+  # leaked tailnet hostname / IP / personal path is a disclosure bug, not a
+  # style nit. Gating `verify` on it means it cannot be merged past.
+  pii-guard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # history is needed for the commit-range scan
+
+      - name: Scan work tree for real infrastructure identifiers
+        run: bash scripts/check-pii.sh --all
+
+      - name: Scan commits introduced by this PR
+        if: github.event_name == 'pull_request'
+        run: |
+          git fetch --no-tags origin "${{ github.base_ref }}"
+          bash scripts/check-pii.sh --rev "origin/${{ github.base_ref }}...HEAD"
+
   verify:
+    needs: pii-guard
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
