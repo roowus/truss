@@ -78,6 +78,11 @@ function Shell() {
          while typing). The legacy Cmd/Ctrl+Shift+W alias is Chrome's window
          chord: window-level, it fires even mid-typing wherever a setup
          delivers it. */
+      /* Alt+1-9 (issue #186): e.key only was dead on macOS, where Option
+         composes the digit row into glyphs ("¡" for Option+1); the predicate
+         falls back to e.code without double-firing on shifted digit rows.
+         Evaluated once here — the chain below reads the value. */
+      const wsIndex = workspaceIndexFromChord(e);
       if (isCloseWindowChord(e, !!typing)) {
         e.preventDefault();
         const live = desktops.state.spaces.filter((s) => !s.archived);
@@ -104,12 +109,8 @@ function Shell() {
       } else if ((e.metaKey || e.ctrlKey) && e.key === ",") {
         e.preventDefault();
         openPanel("settings");
-      } else if (!typing && workspaceIndexFromChord(e) !== null) {
-        /* Alt+1-9 (issue #186): e.key only was dead on macOS, where Option
-           composes the digit row into glyphs ("¡" for Option+1); the helper
-           falls back to e.code without double-firing on shifted digit rows. */
-        const index = workspaceIndexFromChord(e) as number;
-        const space = desktops.state.spaces[index];
+      } else if (!typing && wsIndex !== null) {
+        const space = desktops.state.spaces[wsIndex];
         if (space) { e.preventDefault(); desktops.switchTo(space.id); }
       } else if (!typing && !e.metaKey && !e.ctrlKey && !e.altKey && e.key.toLowerCase() === "n") {
         e.preventDefault();

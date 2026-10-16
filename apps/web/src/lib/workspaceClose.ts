@@ -202,8 +202,12 @@ const letterOf = (e: ChordEvent) => {
   return k.length === 1 && k >= "a" && k <= "z" ? k : null;
 };
 
+/** The Alt frame every chord in this family shares: exactly Alt(+Shift) — no Cmd/Ctrl, since AltGr (Ctrl+Alt) is typing, not a chord. */
+const altOnly = (e: ChordEvent, shift: boolean) =>
+  e.altKey === true && (e.shiftKey === true) === shift && e.metaKey !== true && e.ctrlKey !== true;
+
 const altChord = (e: ChordEvent, key: string, code: string, shift: boolean) => {
-  if (e.altKey !== true || (e.shiftKey === true) !== shift || e.metaKey === true || e.ctrlKey === true) return false;
+  if (!altOnly(e, shift)) return false;
   const letter = letterOf(e);
   return letter !== null ? letter === key : e.code === code;
 };
@@ -233,10 +237,6 @@ const digitOf = (e: ChordEvent) => {
   const k = e.key;
   return k.length === 1 && k >= "1" && k <= "9" ? Number(k) : null;
 };
-
-/** The Alt frame shared by the alphabetic chords: exactly Alt(+Shift) — no Cmd/Ctrl, since AltGr (Ctrl+Alt) is typing, not a chord. */
-const altOnly = (e: ChordEvent, shift: boolean) =>
-  e.altKey === true && (e.shiftKey === true) === shift && e.metaKey !== true && e.ctrlKey !== true;
 
 /**
  * The Alt family: Chrome's window/tab commands one for one, with Alt swapped
