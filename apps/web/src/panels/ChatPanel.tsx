@@ -4,7 +4,7 @@ import { store, useApp, useNow, capsOf, type Msg, type ToolRun, type Perm, type 
 import { argSummary, fmtMs, fmtTakeTime, harnessStyle, shortPath, baseHarness, deadSessionHint } from "@/lib/format";
 import { deviceLabel, harnessDisplay, hostAliases } from "@/lib/device";
 import { useDesktops } from "@/lib/desktops";
-import { buildModelOptions, modelSelectOptions, modelValue, splitModelValue } from "@/lib/models";
+import { buildModelOptions, catalogScopeNote, modelSelectOptions, modelValue, splitModelValue } from "@/lib/models";
 import { planHeaderFit, HEADER_CLUSTER, HEADER_GAP } from "@/lib/headerFit";
 import { CHAT_WIDTH_DEFAULT, chatHandleGeometry, commitChatWidth, dragDisplayWidth, readChatWidthPref, resolveChatWidth, writeChatWidthPref } from "@/lib/chatWidth";
 import { filesFromTransfer, isFileDrag } from "@/lib/attach";
@@ -679,6 +679,10 @@ function Composer({ id, active }: { id: string; active: boolean }) {
     if (v && v !== currentValue) void store.switchModel(id, model, provider).catch(() => {});
   };
   const hasModel = modelOptions.length > 0;
+  /* why the list is this short (issue #170): claude's ~11 rows ARE the local
+     key-proxy's real catalog, but a sparse list read as missing data. The
+     note is null for a rich catalog — the #169 per-row providers carry it. */
+  const scopeNote = catalogScopeNote(modelOptions);
 
   const hasPending = !!pending?.length;
   const running = meta.state === "running";
@@ -907,6 +911,12 @@ function Composer({ id, active }: { id: string; active: boolean }) {
         <div className={cn("mt-1.5 px-1 flex items-center gap-1.5 text-[11.5px] leading-tight", tone === "amber" ? "text-[var(--t-amber)]" : tone === "red" ? "text-[var(--t-red)]" : "text-[var(--t-mute)]")}>
           {hint}
         </div>
+      )}
+      {/* a scoped catalog explains itself under the list (issue #170) —
+          right-aligned under the picker it belongs to, and absent entirely
+          for a rich catalog */}
+      {scopeNote && (
+        <div className="mt-1.5 px-1 text-right text-[10.5px] leading-tight text-[var(--t-dim)]">{scopeNote}</div>
       )}
       </div>
     </div>
