@@ -35,7 +35,6 @@ const op = (over: Partial<Parameters<typeof enqueue>[1]> = {}) => ({
      asserting against a flag the helper swallowed */
   ...(over.at !== undefined ? { at: over.at } : {}),
   ...(over.replayed !== undefined ? { replayed: over.replayed } : {}),
-  ...(over.attempts !== undefined ? { attempts: over.attempts } : {}),
 });
 
 test("an enqueued op is queued until it is retired", () => {
@@ -83,11 +82,20 @@ test("#216/B1: the attempt count accumulates across replays", () => {
   assert.equal(attempts(s, "op-1"), 3, "three real fires, not reset to 1");
 });
 
-test("#216/B1: a repeated replay keeps the dead op at the head, so it ages out first", () => {
+test("#216/B1: a repeated replay keeps the dead op ahead of live sends, so the cap drops it first", () => {
+  /* the round-2 bug slid the dead entry to the tail on every replay, so a
+     full queue evicted genuine sends before it. With a live send queued
+     AFTER the dead one, the order claim is actually testable. */
   const old = Date.now() - (OUTBOX_MAX_AGE_MS - 1000);
   let s = enqueue(emptyOutbox, op({ opId: "dead", at: old }));
+  s = enqueue(s, op({ opId: "live", body: { text: "a real new message" } }));
   for (let i = 0; i < 3; i++) s = enqueue(s, op({ opId: "dead", replayed: true }));
-  assert.equal(s.entries[0]!.at, old, "not slid to the tail by its own replays");
+
+  const deadIdx = s.entries.findIndex((e) => e.opId === "dead");
+  const liveIdx = s.entries.findIndex((e) => e.opId === "live");
+  assert.ok(deadIdx >= 0 && liveIdx >= 0, "both are still queued");
+  assert.ok(deadIdx < liveIdx, "the older dead op is still ahead, so the cap evicts it first");
+  assert.equal(s.entries[deadIdx]!.at, old, "and it kept its original stamp");
 });
 
 test("pending() replays unacked ops with the same op id and marks them", () => {

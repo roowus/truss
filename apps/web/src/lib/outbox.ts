@@ -6,9 +6,15 @@
  * replayed on reconnect with the SAME op id, and the server's ledger returns
  * the original result instead of delivering a second turn.
  *
- * Pure helpers only, no React and no storage: the store owns the instance and
- * the persistence, this file owns the state machine. Types are kept narrow so
- * the reducer is directly testable (apps/web/test/outbox.test.ts).
+ * Pure helpers only, no React: the store owns the instance, this file owns
+ * the state machine. Types are kept narrow so the reducer is directly
+ * testable (apps/web/test/outbox.test.ts).
+ *
+ * The queue is IN MEMORY and dies with the page. A reload constructs a fresh
+ * store with an empty outbox, so anything still unacked is dropped rather
+ * than replayed. That is a deliberate bound, not an oversight: the server's
+ * ledger is itself recreated empty at boot, so a queue that outlived the page
+ * could not be trusted to still be deduped on the other side.
  */
 
 export type OpKind = "prompt" | "interrupt" | "perm";
@@ -61,16 +67,18 @@ export function newOpId(): string {
  * Queue an op. Returns a new state; the caller sends it immediately.
  *
  * Re-enqueueing an op id that is ALREADY queued keeps its original `at` and
- * its attempt count. That matters because every replay re-enters here: if the
- * clock restarted each time, an op the server keeps refusing would never age
- * out (audit round 2, B1) — the 10-minute cap would be unreachable, the entry
- * would keep sliding to the tail so the cap evicted live sends ahead of it,
- * and the window in which the server may have forgotten the op would reopen
- * indefinitely, which is the duplicate this whole file exists to prevent.
+ * its attempt count, and the queue is kept ordered by `at` (oldest first)
+ * rather than by write order. Both matter because every replay re-enters
+ * here: if the clock restarted each time, an op the server keeps refusing
+ * would never age out (audit round 2, B1) — the 10-minute cap would be
+ * unreachable, and the window in which the server may have forgotten the op
+ * would reopen indefinitely, which is the duplicate this whole file exists to
+ * prevent. And if a replay re-appended the entry behind newer sends, the cap
+ * would evict live work while the dead entry survived.
  */
 export function enqueue(
   state: OutboxState,
-  entry: { opId: string; kind: OpKind; sessionId: string; body: Record<string, unknown>; at?: number; attempts?: number; replayed?: boolean },
+  entry: { opId: string; kind: OpKind; sessionId: string; body: Record<string, unknown>; at?: number; replayed?: boolean },
 ): OutboxState {
   const prev = state.entries.find((e) => e.opId === entry.opId);
   const next: OutboxEntry = {
@@ -86,6 +94,13 @@ export function enqueue(
     ...(prev?.replayed || entry.replayed ? { replayed: true } : {}),
   };
   const entries = [...state.entries.filter((e) => e.opId !== next.opId), next];
+  /* Order by AGE, not by when the entry was last written. A replayed op is
+     re-appended here, so insertion order would push an old, never-landing op
+     behind every newer send and the cap would evict live work while the dead
+     entry survived (round-2 B1's second half). Sorting by `at` keeps the
+     queue oldest-first, which is what makes eviction mean "the oldest goes".
+     Ties break on op id so the result is deterministic. */
+  entries.sort((a, b) => a.at - b.at || (a.opId < b.opId ? -1 : a.opId > b.opId ? 1 : 0));
   /* cap by oldest first — the newest sends are the ones a user is waiting on */
   const trimmed = entries.length > OUTBOX_CAP ? entries.slice(entries.length - OUTBOX_CAP) : entries;
   return { entries: trimmed };
