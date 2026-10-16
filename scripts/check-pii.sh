@@ -32,8 +32,10 @@ REAL_V6='fd7a:115c:a1e0::d228:b42c'
 # Real machine hostnames. These are FULL or distinctive names only — a bare
 # `pixel` or `exit-node` would fire on the word "pixel" in CSS comments and on
 # the placeholder itself, which is exactly the false-positive trap.
-# `rewin` is anchored so it does not match e.g. "rewind".
-REAL_HOSTS='rewvis|rewiss-macbook-pro|rinuxfedola|pixel-4-xl|exit-rig|lewiss-iphone|lewiss-ipad|lewiss-imac-pro|(^|[^a-z])rewin([^a-z]|$)|macbook-pro-80'
+# `rewin` and `exit-rig` are word-anchored so they do not match English prose
+# ("rewind", "exit-rigging"): a false positive here blocks every commit, so
+# each short name is bounded on both sides by a non-letter.
+REAL_HOSTS='rewvis|rewiss-macbook-pro|rinuxfedola|pixel-4-xl|(^|[^a-z])exit-rig([^a-z]|$)|lewiss-iphone|lewiss-ipad|lewiss-imac-pro|(^|[^a-z])rewin([^a-z]|$)|macbook-pro-80'
 
 # Real personal identifiers: the tailnet login, the macOS/Linux home path.
 # NOTE: deliberately NOT `doubletake` — that is a public product of the same
@@ -99,10 +101,14 @@ $report
   This repo is PUBLIC. Real tailnet hostnames, tailnet IPs and personal
   paths must not be committed. Use the placeholder vocabulary instead:
 
-      devbox.example.ts.net   ->  devbox.example.ts.net
-      100.64.0.1            ->  100.64.0.1
-      /Users/alice               ->  /Users/alice   (or /home/you)
-      alex-macbook-pro         ->  macbook-pro.example.ts.net
+      <real-host>.<real-tailnet>  ->  devbox.example.ts.net
+      <real-tailnet-ip>           ->  100.64.0.10
+      /Users/<real-user>          ->  /Users/you   (or /home/you)
+      alex-macbook-pro            ->  macbook-pro.example.ts.net
+
+  The placeholder vocabulary (example.ts.net, tail-example.ts.net,
+  devbox.lan, 100.64.0.x, /Users/you) is deliberately NOT in the pattern
+  list — it must always pass. See TRUSS.md "Test fixtures" for the rule.
 
   If a match is a genuine false positive, add the file to ALLOWLIST in
   scripts/check-pii.sh — do not weaken the pattern.

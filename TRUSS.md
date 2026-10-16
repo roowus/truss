@@ -17,6 +17,37 @@ House rules for anyone (human or agent) working in this repo.
 - Plain human language in docs and comments. No em dashes in user-facing
   copy, no AI jargon.
 
+## Test fixtures
+
+This repo is PUBLIC, so fixtures must use **reserved names only** — never
+real infrastructure from the machine you are working on. A fixture canned
+from a live `tailscale status` publishes this box's tailnet id, hostnames
+and IP map to everyone who clones, permanently.
+
+Use the placeholder vocabulary:
+
+| Instead of | Use |
+| --- | --- |
+| the real tailnet suffix | `example.ts.net`, `tail-example.ts.net` |
+| a real tailnet hostname | `devbox.example.ts.net`, `node2.example.ts.net` |
+| a real tailnet IP | `100.64.0.x` (reserved CGNAT) |
+| a real LAN name | `devbox.lan` |
+| a real home path | `/Users/you`, `/home/you` |
+| a real device label | `Devbox Laptop`, `Phone A` |
+
+`scripts/check-pii.sh` enforces this: it scans staged changes
+(pre-commit), the work tree (`--all`), and a commit range (`--rev A..B`,
+used by CI's `pii-guard` job). Its pattern list holds only the **real**
+values, so the placeholder vocabulary above always passes. If it fires on
+a genuine false positive, allowlist that file — do not weaken the pattern.
+
+The guard scans comments too, so **describe a real identifier's shape, do
+not quote it** — a comment that spells one out is itself the disclosure,
+and the guard will (correctly) block the commit. That is also why its own
+tests assemble their literals from fragments: an allowlisted test file
+would be a blind spot exactly where someone is most likely to paste a
+real value.
+
 ## Branches
 
 - New work branches off `origin/main` after a fetch, never off another PR

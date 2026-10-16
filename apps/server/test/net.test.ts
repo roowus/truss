@@ -250,7 +250,7 @@ const STATUS_FIXTURE = {
   },
   Peer: {
     "node-key-1": {
-      HostName: "Rewis's MacBook Pro",
+      HostName: "Devbox Laptop",
       DNSName: "devbox-laptop.example.ts.net.",
       TailscaleIPs: ["100.64.0.11", "fd7a:115c:a1e0::1"],
       OS: "macOS",
@@ -260,7 +260,7 @@ const STATUS_FIXTURE = {
       ExitNodeOption: false,
     },
     "node-key-2": {
-      HostName: "Pixel 4 XL",
+      HostName: "Phone A",
       DNSName: "phone-a.example.ts.net.",
       TailscaleIPs: ["100.64.0.12"],
       OS: "android",
@@ -296,7 +296,7 @@ test("parseTailscaleStatus: self + peers with clean fields", async () => {
 
     assert.equal(peers.length, 3);
     const mac = peers.find((p) => p.os === "macOS")!;
-    assert.equal(mac.hostName, "Rewis's MacBook Pro");
+    assert.equal(mac.hostName, "Devbox Laptop");
     assert.equal(mac.ip4, "100.64.0.11");
     assert.equal(mac.exitNode, false);
     assert.equal(mac.tagged, false);
@@ -306,9 +306,9 @@ test("parseTailscaleStatus: self + peers with clean fields", async () => {
     assert.equal(rig.exitNodeOption, true);
     assert.equal(rig.tagged, true, "tagged devices flagged (no user owner)");
 
-    const pixel = peers.find((p) => p.hostName === "Pixel 4 XL")!;
-    assert.equal(pixel.online, false);
-    assert.equal(pixel.lastSeen, "2026-09-08T07:13:53.1Z");
+    const phone = peers.find((p) => p.hostName === "Phone A")!;
+    assert.equal(phone.online, false);
+    assert.equal(phone.lastSeen, "2026-09-08T07:13:53.1Z");
   } finally {
     cleanup();
   }
@@ -323,8 +323,8 @@ test("parseTailscaleStatus: online peers sort first, then alphabetical", async (
     // online entries come before offline ones
     assert.deepEqual(onlineIdx, [...onlineIdx].sort((a, b) => Number(b) - Number(a)));
     const names = peers.map((p) => p.hostName);
-    assert.deepEqual(names.slice(0, 2), ["exit-node", "Rewis's MacBook Pro"].sort((a, b) => a.localeCompare(b)), "alphabetical within online");
-    assert.equal(names[2], "Pixel 4 XL", "offline last");
+    assert.deepEqual(names.slice(0, 2), ["exit-node", "Devbox Laptop"].sort((a, b) => a.localeCompare(b)), "alphabetical within online");
+    assert.equal(names[2], "Phone A", "offline last");
   } finally {
     cleanup();
   }
