@@ -257,3 +257,37 @@ test("spawn through a half-open socket fails fast, not after a 30s ack-timeout l
     cleanup();
   }
 });
+
+test("the remote catalog freshness policy: empty always probes, populated only when stale (audit B1)", async () => {
+  /* sessions.listModels now offers probeModels() to every probeable adapter,
+     not only empty ones (issue #232). RemoteAdapter has no in-process
+     lazyCatalog in front of it, so it needs its own guard — otherwise every
+     New Session dialog open fans a models.list tunnel round-trip (plus a 5s
+     timer) at every connected remote host × adapter. The policy is a pure
+     function so it can be pinned here directly. */
+  const { cleanup } = await freshServer("rem-probe-fresh");
+  try {
+    const remote = await import("../src/remote.js");
+    const { CATALOG_MAX_AGE_MS } = await import("../src/adapters/model-catalog-cache.js");
+    const now = Date.now();
+
+    assert.equal(remote.remoteCatalogWantsProbe(0, 0, now), true, "an empty catalog always probes (#101)");
+    assert.equal(
+      remote.remoteCatalogWantsProbe(5, now, now),
+      false,
+      "a populated, just-probed catalog must NOT be re-probed on every dialog open",
+    );
+    assert.equal(
+      remote.remoteCatalogWantsProbe(5, now - CATALOG_MAX_AGE_MS - 1, now),
+      true,
+      "a populated catalog past the staleness window probes again (#232)",
+    );
+    assert.equal(
+      remote.remoteCatalogWantsProbe(5, 0, now),
+      true,
+      "never-probed counts as stale, so a catalog hydrated from an earlier connection still fills",
+    );
+  } finally {
+    cleanup();
+  }
+});

@@ -87,9 +87,14 @@ const PROBE_COOLDOWN_MS = 30_000;
    rewriting the narrow 27-row report, so nothing ever re-asked the harness.
 
    Six hours is the compromise: long enough that a healthy box does not boot
-   a harness process on every picker fetch, short enough that a profile or
-   credential change shows up the same working day. Exported so the
-   cross-check test can pin that a bounded window exists. */
+   a harness process on every picker fetch, short enough that a wedged or
+   changed harness is picked up without a restart.
+
+   Note the window only bounds how often the HARNESS is RE-ASKED. For dsh the
+   answer comes from the generated --patch, which is regenerated at boot
+   (issue #232 audit B5), so a credential added mid-day still needs a restart
+   to appear — the window does not make that live. Exported so the cross-check
+   test can pin that a bounded window exists. */
 export const CATALOG_MAX_AGE_MS = 6 * 60 * 60 * 1000;
 
 export interface ProbeOpts {
@@ -112,6 +117,10 @@ export interface LazyCatalog {
    * in-flight harvest; failures cool down.
    */
   probe(opts?: ProbeOpts): Promise<boolean>;
+  /** true when a probe would be attempted right now, ignoring the cooldown —
+      lets tests assert the freshness contract (issue #232 audit B2) without
+      depending on timing heuristics */
+  wantsProbe(maxAgeMs?: number): boolean;
 }
 
 /**
@@ -147,6 +156,11 @@ export function lazyCatalog(key: string, harvest: () => Promise<CatalogModel[]>)
       models = m;
       writeCatalogCache(key, m);
     },
+    wantsProbe(maxAgeMs = CATALOG_MAX_AGE_MS) {
+      /* mirrors the age predicate in probe(): an empty catalog always wants a
+         probe (#101), a non-empty one only once it is stale (#232) */
+      return !models.length || Date.now() - discoveredAt >= maxAgeMs;
+    },
     probe(opts: ProbeOpts = {}) {
       const maxAge = opts.maxAgeMs ?? CATALOG_MAX_AGE_MS;
       /* an empty catalog always probes (#101); a non-empty one probes once it
@@ -158,8 +172,14 @@ export function lazyCatalog(key: string, harvest: () => Promise<CatalogModel[]>)
       inflight = (async () => {
         try {
           const found = await harvest();
-          discoveredAt = Date.now();
+          /* only a NON-EMPTY answer is a confirmation (issue #232 audit B2).
+             Refreshing the clock on an empty harvest would mark the unchanged
+             (still stale) catalog as freshly confirmed and suppress re-probes
+             for the whole window — re-arming the very staleness bug this
+             fixes. An empty answer leaves the clock alone so the 30s cooldown
+             governs the next attempt. */
           if (!found.length) return false;
+          discoveredAt = Date.now();
           models = found;
           writeCatalogCache(key, found);
           return true;

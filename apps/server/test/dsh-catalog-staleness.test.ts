@@ -99,3 +99,44 @@ test("the default staleness window exists and is bounded", () => {
   assert.ok(cache.CATALOG_MAX_AGE_MS >= 60_000, "at least a minute — otherwise every fetch probes");
   assert.ok(cache.CATALOG_MAX_AGE_MS <= 24 * 60 * 60 * 1000, "at most a day — otherwise staleness wins again");
 });
+
+test("an EMPTY harvest does not refresh the clock (audit B2)", async () => {
+  /* A harvest returning nothing must not count as a confirmation. The bug set
+     discoveredAt BEFORE the empty check, so one empty answer marked the
+     unchanged (still stale) catalog as fresh and suppressed re-probes for the
+     whole 6h window — re-arming the exact staleness bug this PR fixes.
+     wantsProbe() exposes the age predicate the cooldown sits behind, so this
+     asserts the contract directly instead of reasoning about timing. */
+  const key = `models:emptyharvest-test-${Date.now()}`;
+  let calls = 0;
+  const cat = cache.lazyCatalog(key, async () => {
+    calls += 1;
+    return []; // harness reachable but reports nothing parseable
+  });
+  cat.set(rows(27));
+
+  const first = await cat.probe({ maxAgeMs: 0 });
+  assert.equal(first, false, "an empty harvest reports no change");
+  assert.equal(calls, 1, "the harvest ran once");
+  assert.equal(cat.list().length, 27, "and leaves the existing rows untouched");
+
+  /* THE PIN: after an empty harvest under a 0ms window, the catalog must
+     still read as STALE. With the bug, discoveredAt was refreshed, so under a
+     long window wantsProbe() would be false and the wrong catalog would be
+     locked in for the whole window. */
+  assert.equal(
+    cat.wantsProbe(cache.CATALOG_MAX_AGE_MS),
+    true,
+    "an empty harvest must NOT mark the catalog fresh — it would lock the stale rows in for 6h",
+  );
+
+  /* contrast: a NON-EMPTY harvest IS a confirmation, so the same catalog
+     reads as fresh under a long window */
+  const ok = cache.lazyCatalog(`models:confirmed-test-${Date.now()}`, async () => [
+    { provider: "deepseek", model: "fresh", label: "Fresh" },
+  ]);
+  ok.set(rows(27));
+  await ok.probe({ maxAgeMs: 0 });
+  assert.equal(ok.wantsProbe(60_000), false, "a non-empty harvest does confirm the catalog");
+  assert.equal(ok.wantsProbe(0), true, "but it still goes stale once the window lapses");
+});

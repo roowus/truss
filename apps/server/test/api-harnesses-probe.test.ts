@@ -89,3 +89,50 @@ test("GET /api/harnesses stays read-only; POST /api/harnesses/probe probes empty
   await new Promise((r) => setTimeout(r, 100));
   assert.deepEqual(probes.sort(), ["dsh", "hermes"], "refused requests never probe");
 });
+
+test("a NON-EMPTY catalog is still handed to the adapter, which decides freshness (issue #232)", async () => {
+  /* sessions.listModels no longer gates the probe on `models.length === 0`
+     (issue #232): a non-empty but WRONG catalog used to be permanent, because
+     nothing ever re-asked the harness. The adapter now owns the decision —
+     the in-process lazy catalogs re-probe once their staleness window lapses,
+     and remote.probeModels applies the same window (audit B1), so a populated
+     remote catalog is NOT re-probed over the tunnel on every dialog open.
+
+     This pins the sessions-level contract: a non-empty catalog still reaches
+     probeModels (so a stale one can heal), and the fake's own guard is what
+     suppresses redundant probes. */
+  const sessions = await import("../src/sessions.js");
+  const probes: string[] = [];
+  const fake = (id: string): HarnessAdapter => ({
+    id: id as never,
+    capabilities: { permissions: false, subagents: false, streaming: true, queueWhileRunning: false },
+    async listModels() {
+      return [{ provider: "p", model: "m", label: "M" }];
+    },
+    async probeModels() {
+      probes.push(id);
+      return false;
+    },
+    async spawn(): Promise<AdapterHandle> {
+      throw new Error("not under test");
+    },
+    send() {},
+    interrupt() {},
+    dispose() {},
+    async *events() {
+      await new Promise(() => {});
+      yield undefined as never;
+    },
+  });
+  sessions.registerAdapter("hermes", fake("hermes"));
+  sessions.registerAdapter("dsh", fake("dsh"));
+
+  const before = probes.length;
+  await sessions.listModels({ probe: true });
+  await new Promise((r) => setTimeout(r, 50));
+  assert.equal(
+    probes.length - before,
+    2,
+    "a non-empty catalog must still be offered to the adapter — otherwise a wrong-but-full catalog is permanent (#232)",
+  );
+});

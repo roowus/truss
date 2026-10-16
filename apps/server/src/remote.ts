@@ -1,5 +1,5 @@
 import type { HarnessAdapter, AdapterHandle, SessionOpts } from "./adapters/types.js";
-import { isCatalogModel } from "./adapters/model-catalog-cache.js";
+import { CATALOG_MAX_AGE_MS, isCatalogModel } from "./adapters/model-catalog-cache.js";
 import type { HarnessId, ProtoEvent } from "@truss/proto";
 
 /**
@@ -144,9 +144,34 @@ class AsyncQueue<T> {
   }
 }
 
+/** Should a remote adapter's catalog be re-probed? (issue #232 audit B1)
+
+    sessions.listModels now offers every probeable adapter a probe, not only
+    empty ones, so each adapter owns its own freshness policy. This mirrors the
+    in-process lazyCatalog rule: an EMPTY catalog always probes (#101), a
+    populated one only once the shared staleness window has lapsed. Without it
+    every New Session dialog open would fan a models.list tunnel round-trip
+    (plus a 5s timer) at every connected host x adapter.
+
+    Pure and exported so the policy is pinned by a test rather than inferred
+    from the call site. */
+export function remoteCatalogWantsProbe(rowCount: number, probedAt: number, now = Date.now()): boolean {
+  if (!rowCount) return true;
+  if (!probedAt) return true;
+  return now - probedAt >= CATALOG_MAX_AGE_MS;
+}
+
 class RemoteAdapter implements HarnessAdapter {
   id: HarnessId;
   capabilities: HarnessAdapter["capabilities"];
+
+  /* when this adapter's catalog was last confirmed by a tunnel probe
+     (issue #232 audit B1). sessions.listModels now calls probeModels() for
+     every probeable adapter — not only empty ones — so a populated remote
+     catalog would otherwise be re-probed over the tunnel on every New Session
+     dialog open. 0 means "never confirmed", which is correct for a catalog
+     that hydrated from a previous connection. */
+  private modelsProbedAt = 0;
 
   constructor(
     private hostId: string,
@@ -176,6 +201,12 @@ class RemoteAdapter implements HarnessAdapter {
   async probeModels(): Promise<boolean> {
     const agent = agents.get(this.hostId);
     if (!agent || (agent.socket.readyState !== undefined && agent.socket.readyState !== 1)) return false;
+    /* same freshness rule as the in-process lazy catalogs (issue #232 audit
+       B1): re-probe when the catalog is EMPTY, and otherwise only once the
+       shared staleness window has lapsed. Probing on every dialog open would
+       fan a tunnel round-trip (plus a 5s timer) at every connected host. */
+    if (!remoteCatalogWantsProbe(hostModels(this.hostId, this.adapterId).length, this.modelsProbedAt)) return false;
+    this.modelsProbedAt = Date.now();
     const reqId = `models-${++reqCounter}`;
     const models = await new Promise<ModelRow[] | null>((res) => {
       const timer = setTimeout(() => {

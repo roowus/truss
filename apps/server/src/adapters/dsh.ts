@@ -274,8 +274,13 @@ export const dshAdapter: HarnessAdapter = {
   probeModels: catalog.probe,
 
   async spawn(opts: SessionOpts): Promise<AcpSessionState> {
-    /* re-read the generated patch before the client boots: generation may
-       have finished after module load (see generatedPatch above) */
+    /* wait for generation, then re-read the generated patch before the client
+       boots (issue #232 audit B3). Without the await, a session created during
+       the boot window sees generatedPatch === null, boots dsh from the static
+       args, and the narrow report is then written over the good catalog by
+       catalog.set() below — and AcpClient keeps that process alive, so the
+       narrow catalog outlives the race. */
+    await generationSettled;
     refreshLaunchArgs();
     await client.ensure();
 

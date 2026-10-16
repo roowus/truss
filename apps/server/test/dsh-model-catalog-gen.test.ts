@@ -71,8 +71,9 @@ test("the generated patch carries every provider+model from the credential catal
      config/truss-dsh-acp.yml), so the entry is NOT indented. */
   assert.ok(yml.includes("- id: llm-pi-ai"), "the patch must target llm-pi-ai");
   assert.ok(/providers:/.test(yml), "the patch carries a providers map");
-  assert.ok(yml.includes("fireworks:") && yml.includes("deepseek:"), "both keyed providers appear as groups");
-  assert.ok(!yml.includes("zai:"), "a provider with zero rows must not emit an empty group");
+  /* ids are quoted since audit B4 — they come from upstream /models responses */
+  assert.ok(yml.includes('"fireworks":') && yml.includes('"deepseek":'), "both keyed providers appear as groups");
+  assert.ok(!yml.includes('"zai":'), "a provider with zero rows must not emit an empty group");
 });
 
 test("a model the credential catalog offers is never dropped from the report", () => {
@@ -189,4 +190,61 @@ test("generation is idempotent — unchanged content does not rewrite the file",
     dshgen.__sources.modelCatalog = origP;
     dshgen.__sources.catalogForPickers = origR;
   }
+});
+
+test("a catalog missing the PINNED default provider is a failure, not a valid catalog (audit B6)", async () => {
+  /* The generated patch REPLACES the static providers map, while
+     config/truss-dsh-acp.yml pins agent-default-model and acp to
+     `provider: fireworks`. Verified against the real harness: a generated map
+     with no fireworks makes dsh fail to build its model options ("Cannot read
+     properties of undefined (reading 'slice')") and report ZERO models — an
+     empty picker, the exact outcome the degradation rule exists to prevent.
+     So this must read as a failure and leave the static 27 in place. */
+  const origP = dshgen.__sources.modelCatalog;
+  const origR = dshgen.__sources.catalogForPickers;
+  /* every route healthy, but the pinned default is absent */
+  dshgen.__sources.modelCatalog = async () => [
+    { id: "deepseek", name: "DeepSeek", port: 1, endpoint: "http://d/v1", models: [] },
+  ];
+  dshgen.__sources.catalogForPickers = async () => [row("deepseek", "deepseek-v4-pro")];
+  try {
+    const r = await dshgen.syncDshCatalogPatch();
+    assert.equal(r.ok, false, "a catalog without the pinned default must not be written");
+    assert.equal(r.patchPath, "", "and must not be pointed at, so dsh keeps the static catalog");
+  } finally {
+    dshgen.__sources.modelCatalog = origP;
+    dshgen.__sources.catalogForPickers = origR;
+  }
+});
+
+test("a partial outage that still includes the pinned default IS usable (audit B6)", async () => {
+  /* The converse: one route down is fine as long as the pinned default
+     survives — the fix must not turn every partial outage into a failure and
+     lose the other five providers. */
+  const origP = dshgen.__sources.modelCatalog;
+  const origR = dshgen.__sources.catalogForPickers;
+  dshgen.__sources.modelCatalog = async () => CATALOG;
+  dshgen.__sources.catalogForPickers = async () => [
+    row("fireworks", "accounts/fireworks/models/kimi-k3"),
+    row("deepseek", "deepseek-v4-pro"),
+  ];
+  try {
+    const r = await dshgen.syncDshCatalogPatch();
+    assert.equal(r.ok, true, "the pinned default is present, so this is usable");
+    assert.equal(r.providers, 2, "and it must not silently narrow to one provider");
+  } finally {
+    dshgen.__sources.modelCatalog = origP;
+    dshgen.__sources.catalogForPickers = origR;
+  }
+});
+
+test("provider ids and model ids are quoted in the generated YAML (audit B4)", () => {
+  /* ids come from upstream /models responses; unquoted, a YAML metacharacter
+     could corrupt or inject into the config dsh is handed as --patch */
+  const providers = [{ id: "weird: provider", name: "W", port: 1, endpoint: "http://w", models: [] }];
+  const yml = dshgen.renderDshCatalogPatch(providers as any, [row("weird: provider", "model#name")]);
+  assert.ok(yml.includes('"weird: provider":'), "provider id must be quoted");
+  assert.ok(yml.includes('"model#name"'), "model id must be quoted");
+  /* and the quoting must be valid YAML, not merely present */
+  assert.ok(!/^\s+weird: provider:$/m.test(yml), "an unquoted id would break the providers map");
 });

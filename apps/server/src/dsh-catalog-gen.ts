@@ -56,6 +56,17 @@ export const __sources: CatalogSources = { modelCatalog, catalogForPickers };
 /** the generated patch filename inside the runtime data dir */
 const GENERATED_NAME = "truss-dsh-acp-models.yml";
 
+/* The static patch (config/truss-dsh-acp.yml) pins `agent-default-model` and
+   `acp` to this provider, and the generated patch REPLACES the providers map
+   rather than adding to it. Verified against the real harness: a generated
+   map that omits this provider makes dsh fail its own model-option build
+   ("Cannot read properties of undefined (reading 'slice')") and report ZERO
+   models — an empty picker, which is exactly the outcome the degradation rule
+   exists to prevent. So a generation that cannot supply this provider is
+   treated as a FAILURE and the static catalog stays in place (issue #232
+   audit B6). */
+export const PINNED_DEFAULT_PROVIDER = "fireworks";
+
 /* The runtime data dir can arrive as a RELATIVE path — the preview harness
    sets TRUSS_DATA_DIR=w/<pr>/apps/server/data-pr<pr> while the server's cwd
    is apps/server, so joining it naively yields a nested path. That is fine
@@ -125,14 +136,14 @@ export function renderDshCatalogPatch(providers: CatalogProvider[], rows: Catalo
   for (const p of providers) {
     const list = byProvider.get(p.id);
     if (!list?.length) continue; // never emit an empty group
-    lines.push(`      ${p.id}:`);
+    lines.push(`      ${yamlString(p.id)}:`);
     lines.push(`        apiKeyEnv: AGENT_PROXY_KEY`);
     lines.push(`        api: openai-completions`);
     lines.push(`        baseURL: ${yamlString(p.endpoint)}`);
     lines.push(`        displayName: ${yamlString(p.name)}`);
     lines.push(`        models:`);
     for (const r of list) {
-      lines.push(`          - id: ${r.model}`);
+      lines.push(`          - id: ${yamlString(r.model)}`);
       lines.push(`            name: ${yamlString(r.model.split("/").pop() ?? r.model)}`);
       lines.push(`            input: [text]`);
     }
@@ -166,6 +177,12 @@ export async function syncDshCatalogPatch(): Promise<DshCatalogSyncResult> {
     /* zero rows is a FAILURE, not a valid catalog: writing it would drop dsh
        to the stock 3 deepseek-official rows (#229's "never empty the picker") */
     if (!usable.length) return empty;
+    /* ...and so is a catalog that omits the provider the static patch pins as
+       its default — the generated map REPLACES the static one, and dsh
+       reports zero models (and errors) when its pinned default is absent.
+       Keeping the static 27 is strictly better than an empty picker
+       (issue #232 audit B6). */
+    if (!usable.some((r) => r.provider === PINNED_DEFAULT_PROVIDER)) return empty;
 
     const yml = renderDshCatalogPatch(providers, usable);
     const path = generatedPatchPath();
