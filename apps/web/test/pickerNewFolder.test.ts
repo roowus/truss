@@ -51,6 +51,25 @@ test("a failed create keeps the reason and leaves the row open to correct it", (
   assert.ok(!/setNewName\(null\)/.test(catchBlock), "a failure keeps the typed name so it can be corrected in place");
 });
 
+/* audit round 1 (PR #250, finding B2) */
+test("Escape in the New folder input cancels the ROW, not the whole picker", () => {
+  const src = read(PICKER);
+  /* the dialog's window-level Escape listener closes the whole picker; React's
+     onKeyDown is on the same bubble path, so the row must stop propagation */
+  assert.match(src, /window\.addEventListener\("keydown"/, "the dialog does close the picker from a window-level Escape");
+  const at = src.indexOf('aria-label="New folder name"');
+  assert.ok(at > -1, "the input exists");
+  /* the attribute block before the label; the comment inside the handler also
+     mentions onKeyDown, so anchor on the JSX attribute line itself */
+  const handler = src.slice(src.lastIndexOf("onKeyDown={(e) => {", at), at);
+  assert.match(handler, /Escape/, "the row handles Escape");
+  assert.match(
+    handler,
+    /stopPropagation\(\)/,
+    "and stops it before the dialog's window listener sees it — otherwise cancel discards the browsing position",
+  );
+});
+
 test("backend + demo expose browseMkdir", () => {
   assert.match(read(BACKEND), /browseMkdir/, "the client method exists");
   assert.match(read(BACKEND), /"\/api\/browse\/mkdir"/, "and hits the real route");

@@ -192,3 +192,40 @@ test("duplicates are refused across a symlinked parent too", async () => {
     rmSync(join(WS, "inside-link"), { force: true });
   }
 });
+
+/* audit round 1 (PR #250, finding B3): the write must target the REALPATH
+   that was checked, not the lexical parent — mkdirSync would re-resolve a
+   symlinked parent at call time (TOCTOU) */
+test("the write targets the checked realpath, not a symlinked parent's lexical path", async () => {
+  const real = join(WS, "real-target");
+  const link = join(WS, "repoint-link");
+  mkdirSync(real);
+  symlinkSync(real, link);
+  try {
+    const res = await mkdir({ parent: link, name: "via-real" });
+    assert.equal(res.status, 201, "a within-roots symlinked parent is a legal parent");
+    const body = await res.json();
+    assert.equal(body.path, join(real, "via-real"), "the path comes back canonical (the realpath), not through the link");
+    assert.ok(existsSync(join(real, "via-real")), "and it was really created at the canonical location");
+  } finally {
+    rmSync(link, { force: true });
+    rmSync(real, { recursive: true, force: true });
+  }
+});
+
+test("a symlinked parent repointed OUTSIDE never lands the folder outside", async () => {
+  /* the TOCTOU shape: the parent is swapped for an escaping link after a
+     lexical confine would have accepted it. The route must judge the link's
+     realpath, so this is refused rather than written through. */
+  const link = join(WS, "swapped-link");
+  symlinkSync(WS, link);
+  try {
+    rmSync(link, { force: true });
+    symlinkSync(OUTSIDE, link);
+    const res = await mkdir({ parent: link, name: "must-not-land" });
+    assert.ok([400, 403].includes(res.status), `repointed outside → refused (got ${res.status})`);
+    assert.ok(!existsSync(join(OUTSIDE, "must-not-land")), "nothing was created on the far side");
+  } finally {
+    rmSync(link, { force: true });
+  }
+});

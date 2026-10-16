@@ -141,13 +141,19 @@ export function mkdirInRoots(parent: string, name: string): string {
   }
   const clean = validDirName(name);
   if (!clean) throw new BrowseError(`not a valid folder name: ${JSON.stringify(name)}`, 400);
-  const target = join(parentPath, clean);
-  if (!within(target, browseRoots()) && !within(target, realRoots())) {
+  /* The write targets the REALPATH that was just checked, not the lexical
+     parent: listDirs offers within-roots symlinks as browsable parents, and
+     mkdirSync would otherwise re-resolve that link at call time — a link
+     repointed outside between the check and the write would land the new
+     directory outside the roots. `realParent` is verified inside the roots
+     by confine(), so this is the string that actually cleared the check. */
+  const target = join(realParent, clean);
+  if (!within(target, realRoots())) {
     throw new BrowseError(`path is outside the browse roots: ${target}`, 403);
   }
   /* A dangling symlink at this name is invisible to statSync but mkdirSync
      would still fail on it — refuse either way, never write through it. */
-  if (existsSync(target) || existsSync(join(realParent, clean))) {
+  if (existsSync(target)) {
     throw new BrowseError(`already exists: ${target}`, 409);
   }
   try {
@@ -157,9 +163,9 @@ export function mkdirInRoots(parent: string, name: string): string {
   } catch (e: any) {
     const code = e?.code;
     if (code === "EEXIST") throw new BrowseError(`already exists: ${target}`, 409);
-    if (code === "ENOTDIR") throw new BrowseError(`not a directory: ${parentPath}`, 400);
-    if (code === "ENOENT") throw new BrowseError(`directory does not exist: ${parentPath}`, 400);
-    throw e; // EACCES/ENOSPC/EROFS/ENAMETOOLONG — the route reports the OS reason
+    if (code === "ENOTDIR") throw new BrowseError(`not a directory: ${target}`, 400);
+    if (code === "ENOENT") throw new BrowseError(`directory does not exist: ${target}`, 400);
+    throw new BrowseError(`could not create the folder: ${e?.message ?? String(e)}`, 500); // EACCES/ENOSPC/EROFS — an environment failure, not bad input
   }
   return target;
 }

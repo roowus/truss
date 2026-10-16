@@ -584,6 +584,11 @@ function DirPicker({ anchorRef, onPick, onClose }: { anchorRef: { current: HTMLD
                 onKeyDown={(e) => {
                   if (e.key === "Enter") void createFolder();
                   if (e.key === "Escape") {
+                    /* the dialog's window-level Escape listener closes the
+                       WHOLE picker; React's onKeyDown sits on the same
+                       bubble path, so without this the row's cancel also
+                       threw away the user's browsing position */
+                    e.stopPropagation();
                     setNewName(null);
                     setErr(null);
                   }
