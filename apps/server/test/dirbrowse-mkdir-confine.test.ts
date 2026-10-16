@@ -106,6 +106,16 @@ test("confinement: parents outside the roots never create anything anywhere", as
   assert.ok(!existsSync(join(OUTSIDE, "truss-mkdir-should-not-exist")), "never in an outside dir");
 });
 
+test("confinement: an escape is 403 (a permission answer), bad input is 400", async () => {
+  /* Regression: confine() is shared with listDirs and throws plain Errors,
+     so an untranslated route answered 400 for EVERY refusal and the
+     documented 403 never happened. The spec test accepts [400, 403] and so
+     never caught it — this pins the distinction itself. */
+  assert.equal((await mkdir({ parent: "/etc", name: "nope" })).status, 403, "outside the roots is a permissions answer, not malformed input");
+  assert.equal((await mkdir({ parent: join(WS, "does-not-exist"), name: "nope" })).status, 400, "a missing parent is bad input");
+  assert.equal((await mkdir({ parent: WS, name: "a/b" })).status, 400, "a malformed name is bad input, never 403");
+});
+
 test("confinement: a symlink out of the roots is not a way through", async () => {
   const res = await mkdir({ parent: join(WS, "escape-link"), name: "through-the-link" });
   assert.ok([400, 403].includes(res.status), `a link escaping the roots → refused (got ${res.status})`);

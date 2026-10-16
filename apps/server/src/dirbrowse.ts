@@ -117,7 +117,20 @@ export function validDirName(name: string): string | null {
    check and the string returned to the caller are provably the same one, so
    no later refactor can validate one path and write another. */
 export function mkdirInRoots(parent: string, name: string): string {
-  const parentPath = confine(parent); // 400/403 for escapes, exactly like listDirs
+  /* confine() is shared with listDirs, so it throws plain Errors; the route
+     needs the STATUS distinction the picker's copy depends on. An escape is
+     a permission answer (403); a missing parent or a file-in-the-way is bad
+     input (400). Without this translation every refusal collapsed to 400
+     and the documented 403 never happened. */
+  const statusFor = (message: string): number =>
+    /outside the browse roots|escapes the browse roots/i.test(message) ? 403 : 400;
+  let parentPath: string;
+  try {
+    parentPath = confine(parent); // exactly like listDirs: escapes and missing dirs die here
+  } catch (e: any) {
+    const message = e?.message ?? String(e);
+    throw new BrowseError(message, statusFor(message));
+  }
   /* `parent` was a symlink: the child must be checked against where the
      write really lands, not just the lexical join. */
   let realParent: string;
