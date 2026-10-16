@@ -11,6 +11,14 @@ import { rowRenameTarget } from "@/lib/rowRename";
 import { sidebarAttention } from "@/lib/unread";
 import { sortWithPinned } from "@/lib/pinSort";
 import { pinAffordance, pinVisibilityCls } from "@/lib/pinAffordance";
+import {
+  applyClick,
+  bulkActions,
+  createSelection,
+  pruneSelection,
+  type BulkAction,
+  type SelectionState,
+} from "@/lib/multiSelect";
 import { cn } from "@/utils/cn";
 
 export function Sidebar({ onNew }: { onNew: () => void }) {
@@ -27,6 +35,11 @@ export function Sidebar({ onNew }: { onNew: () => void }) {
   const [q, setQ] = useState("");
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const now = useNow(15_000);
+  /* issue #225: one selection over every row the sidebar renders — sessions,
+     shells, hosts — so shift ranges and cmd/ctrl toggles span the sections
+     the user actually sees. The model is pure (src/lib/multiSelect.ts); this
+     is the only stateful bit. */
+  const [sel, setSel] = useState<SelectionState>(() => createSelection());
 
   /* group sessions by project tag, or by workspace folder (cwd);
      archived sessions leave the main list and collect below */
@@ -54,6 +67,55 @@ export function Sidebar({ onNew }: { onNew: () => void }) {
       sortWithPinned(arch, (s) => !!s.pinned),
     ] as const;
   }, [order, sessions, q, groupMode]);
+
+  /* issue #225: the ids the sidebar is actually rendering, in render order —
+     sections top to bottom, collapsed groups and filtered-out chats absent.
+     This array IS the range semantics: a shift-click ranges over what the
+     user can see, never over rows the search box or a collapsed group hid. */
+  const visibleIds = useMemo(() => {
+    const ids: string[] = [];
+    for (const [project, list] of groups) {
+      const key = project || "__none";
+      if (collapsed[key]) continue;
+      for (const s of list) ids.push(s.id);
+    }
+    if (collapsed.__archived) for (const s of archived) ids.push(s.id);
+    for (const t of sortWithPinned(terminals, (x) => !!x.pinned)) ids.push(t.id);
+    for (const h of sortWithPinned(hosts, (x) => !!x.pinned)) ids.push(h.id);
+    return ids;
+  }, [groups, archived, collapsed, terminals, hosts]);
+
+  /* rows that vanish (deleted, archived away, filtered out) drop out of the
+     selection — the model's prune, applied on every visible-order change, so
+     the bulk bar can never offer an action on a row that is gone */
+  useEffect(() => {
+    setSel((s) => {
+      const next = pruneSelection(s, visibleIds);
+      return next.ids.size === s.ids.size && next.anchor === s.anchor ? s : next;
+    });
+  }, [visibleIds]);
+
+  const selectionCount = sel.ids.size;
+  const actions = useMemo(() => bulkActions(sel, sidebarItems(sessions, terminals, hosts)), [sel, sessions, terminals, hosts]);
+
+  /* Esc clears the selection (issue #225). Bound on the document so it works
+     wherever focus sits inside the sidebar — but not while the user is typing
+     in the search box or renaming a row, where Esc means "cancel". */
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || selectionCount === 0) return;
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
+      setSel(createSelection());
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [selectionCount]);
+
+  const onRowClick = (id: string, e: React.MouseEvent) =>
+    setSel((s) => applyClick(s, id, { shift: e.shiftKey, meta: e.metaKey, ctrl: e.ctrlKey }, visibleIds));
+
+  const clearSel = () => setSel(createSelection());
 
   return (
     <aside className="h-full flex flex-col bg-[var(--t-bg0)] border-r border-[var(--t-line)]">
@@ -89,6 +151,22 @@ export function Sidebar({ onNew }: { onNew: () => void }) {
           ))}
         </div>
       </div>
+
+      {/* issue #225: the bulk action bar — the sidebar's top edge, only when
+          something is selected. It does NOT replace the per-row clusters
+          (those keep working); it adds the set-level actions, each carrying
+          its own disabled reason when the set can't take it. */}
+      {selectionCount > 0 && (
+        <BulkBar
+          count={selectionCount}
+          actions={actions}
+          sel={sel}
+          sessions={sessions}
+          terminals={terminals}
+          hosts={hosts}
+          onClear={clearSel}
+        />
+      )}
 
       <div className="flex-1 min-h-0 overflow-y-auto t-scroll px-1.5 pb-3">
         {!loaded ? (
@@ -137,7 +215,9 @@ export function Sidebar({ onNew }: { onNew: () => void }) {
                     )}
                   </div>
                 )}
-                {!isCol && list.map((s) => <SessionRow key={s.id} s={s} now={now} />)}
+                {!isCol && list.map((s) => (
+                  <SessionRow key={s.id} s={s} now={now} selected={sel.ids.has(s.id)} onRowClick={onRowClick} />
+                ))}
               </div>
             );
           })
@@ -159,7 +239,9 @@ export function Sidebar({ onNew }: { onNew: () => void }) {
               <span>archived</span>
               <span className="ml-auto tabular-nums">{archived.length}</span>
             </button>
-            {collapsed.__archived && archived.map((s) => <SessionRow key={s.id} s={s} now={now} archived />)}
+            {collapsed.__archived && archived.map((s) => (
+              <SessionRow key={s.id} s={s} now={now} archived selected={sel.ids.has(s.id)} onRowClick={onRowClick} />
+            ))}
           </div>
         )}
 
@@ -168,7 +250,9 @@ export function Sidebar({ onNew }: { onNew: () => void }) {
             <div className="px-3 py-1 text-[11px] text-[var(--t-dim)]">None running.</div>
           ) : (
             /* issue #86: pinned shells lead the section, stable within each partition */
-            sortWithPinned(terminals, (t) => !!t.pinned).map((t) => <ShellRow key={t.id} t={t} />)
+            sortWithPinned(terminals, (t) => !!t.pinned).map((t) => (
+              <ShellRow key={t.id} t={t} selected={sel.ids.has(t.id)} onRowClick={onRowClick} />
+            ))
           )}
         </Section>
 
@@ -176,7 +260,9 @@ export function Sidebar({ onNew }: { onNew: () => void }) {
           {/* auto-pairing (issue #111 review): a device that downloaded and
               ran the installer asks here; Allow is the whole handshake */}
           {pairRequests.map((r) => <PairRequestRow key={r.id} r={r} />)}
-          {sortWithPinned(hosts, (h) => !!h.pinned).map((h) => <HostRow key={h.id} h={h} alias={hostPrefs[h.id]?.alias} />)}
+          {sortWithPinned(hosts, (h) => !!h.pinned).map((h) => (
+            <HostRow key={h.id} h={h} alias={hostPrefs[h.id]?.alias} selected={sel.ids.has(h.id)} onRowClick={onRowClick} />
+          ))}
           {hosts.length === 0 && !agentsError && (
             <button onClick={() => window.dispatchEvent(new Event("truss:add-host"))} className="w-full mx-0.5 px-2 py-2 rounded-md border border-dashed border-[var(--t-line2)] text-[11px] text-[var(--t-dim)] hover:text-[var(--t-mute)] hover:border-[var(--t-mute)] text-left">
               No hosts yet. Add one — the agent dials out, so no firewall holes.
@@ -212,7 +298,19 @@ function Section({ title, action, children }: { title: string; action?: ReactNod
    marks have not loaded/seeded yet (issue #173) */
 const NO_READ_MARKS: Record<string, number> = {};
 
-function SessionRow({ s, now, archived }: { s: SessionMeta; now: number; archived?: boolean }) {
+function SessionRow({
+  s,
+  now,
+  archived,
+  selected,
+  onRowClick,
+}: {
+  s: SessionMeta;
+  now: number;
+  archived?: boolean;
+  selected?: boolean;
+  onRowClick: (id: string, e: React.MouseEvent) => void;
+}) {
   const focused = useApp((st) => st.focused === s.id);
   const focusedId = useApp((st) => st.focused ?? null);
   const readAt = useDesktops((st) => st.readAt);
@@ -288,6 +386,7 @@ function SessionRow({ s, now, archived }: { s: SessionMeta; now: number; archive
       /* an explicit name: without it the row announces as the concatenation
          of title + timestamp + state text (audit B2) */
       aria-label={s.title}
+      aria-selected={selected || undefined}
       tabIndex={0}
       onKeyDown={(e) => {
         if ((e.key === "Enter" || e.key === " ") && e.target === e.currentTarget) {
@@ -295,11 +394,25 @@ function SessionRow({ s, now, archived }: { s: SessionMeta; now: number; archive
           openSession(s.id);
         }
       }}
-      onClick={() => openSession(s.id)}
-      className={cn("group relative mx-0.5 flex items-center gap-2 px-2 t-session-row rounded-md transition-colors cursor-pointer", focused ? "bg-[var(--t-bg2)]" : "hover:bg-white/[0.03]")}
+      /* issue #225: a modified click is a SELECTION gesture, never an open —
+         plain click keeps opening the session (and collapses to one row) as
+         it always has; shift/cmd/ctrl build the set instead of navigating */
+      onClick={(e) => {
+        if (e.shiftKey || e.metaKey || e.ctrlKey) {
+          onRowClick(s.id, e);
+          return;
+        }
+        openSession(s.id);
+      }}
+      className={cn(
+        "group relative mx-0.5 flex items-center gap-2 px-2 t-session-row rounded-md transition-colors cursor-pointer",
+        selected ? "bg-[color-mix(in_oklab,var(--t-amber)_14%,transparent)]" : focused ? "bg-[var(--t-bg2)]" : "hover:bg-white/[0.03]",
+      )}
       title={`${s.title}\n${harnessDisplay(s.harness, hosts, hostAliases(hostPrefs))}${s.model ? ` · ${s.model}` : ""}\n${shortPath(s.cwd)}\n${STATE_META[s.state]?.hint ?? s.state}${attention === "unread" ? "\nunread activity (open to mark it read)" : ""}${archived ? "\narchived — hidden from the main list" : ""}${renameTarget ? "\n(double-click the name to rename)" : ""}`}
     >
-      {focused ? (
+      {selected ? (
+        <span className="absolute left-0 top-2 bottom-2 w-[2px] rounded-full bg-[var(--t-amber)]" />
+      ) : focused ? (
         <span className="absolute left-0 top-2 bottom-2 w-[2px] rounded-full bg-[var(--t-amber)]" />
       ) : attention === "unread" ? (
         <span className="absolute left-0 top-2 bottom-2 w-[2px] rounded-full bg-[var(--t-violet)]" />
@@ -393,7 +506,7 @@ function useTwoClickConfirm(): [boolean, (fire: () => void) => void] {
 const confirmCls = (confirm: boolean) =>
   cn("w-6 h-6", confirm && "!text-[var(--t-red)] bg-[color-mix(in_oklab,var(--t-red)_15%,transparent)]");
 
-function ShellRow({ t }: { t: TerminalInfo }) {
+function ShellRow({ t, selected, onRowClick }: { t: TerminalInfo; selected?: boolean; onRowClick: (id: string, e: React.MouseEvent) => void }) {
   const [confirm, confirmClick] = useTwoClickConfirm();
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState("");
@@ -415,10 +528,21 @@ function ShellRow({ t }: { t: TerminalInfo }) {
 
   return (
     <div
-      className="group flex items-center gap-2 mx-0.5 px-2 h-7 rounded-md hover:bg-white/[0.03] cursor-pointer"
-      onClick={() => openPanel("terminal", { terminalId: t.id, title: t.title })}
+      className={cn(
+        "group relative flex items-center gap-2 mx-0.5 px-2 h-7 rounded-md cursor-pointer",
+        selected ? "bg-[color-mix(in_oklab,var(--t-amber)_14%,transparent)]" : "hover:bg-white/[0.03]",
+      )}
+      aria-selected={selected || undefined}
+      onClick={(e) => {
+        if (e.shiftKey || e.metaKey || e.ctrlKey) {
+          onRowClick(t.id, e);
+          return;
+        }
+        openPanel("terminal", { terminalId: t.id, title: t.title });
+      }}
       title={t.cwd ? shortPath(t.cwd) : undefined}
     >
+      {selected && <span className="absolute left-0 top-1.5 bottom-1.5 w-[2px] rounded-full bg-[var(--t-amber)]" />}
       <Icon name="term" size={12} className={dead ? "text-[var(--t-red)]" : "text-[var(--t-dim)]"} />
       {editing ? (
         <input
@@ -519,7 +643,7 @@ function PairRequestRow({ r }: { r: import("@/lib/proto").PairRequestInfo }) {
   );
 }
 
-function HostRow({ h, alias }: { h: HostInfo; alias?: string }) {
+function HostRow({ h, alias, selected, onRowClick }: { h: HostInfo; alias?: string; selected?: boolean; onRowClick: (id: string, e: React.MouseEvent) => void }) {
   const [confirm, confirmClick] = useTwoClickConfirm();
   const hosts = useApp((st) => st.hosts);
   const hostPrefs = useDesktops((st) => st.hosts);
@@ -551,7 +675,14 @@ function HostRow({ h, alias }: { h: HostInfo; alias?: string }) {
     <div
       role="button"
       tabIndex={0}
-      onClick={open}
+      aria-selected={selected || undefined}
+      onClick={(e) => {
+        if (e.shiftKey || e.metaKey || e.ctrlKey) {
+          onRowClick(h.id, e);
+          return;
+        }
+        open();
+      }}
       onKeyDown={(e) => {
         /* the row was a real <button> before #85 — keyboard opens stay */
         if ((e.key === "Enter" || e.key === " ") && e.target === e.currentTarget) {
@@ -559,9 +690,13 @@ function HostRow({ h, alias }: { h: HostInfo; alias?: string }) {
           open();
         }
       }}
-      className="group w-full flex items-center gap-2 mx-0.5 px-2 h-7 text-[12px] text-[var(--t-mute)] hover:text-[var(--t-fg)] hover:bg-white/[0.03] rounded-md text-left cursor-pointer"
+      className={cn(
+        "group relative w-full flex items-center gap-2 mx-0.5 px-2 h-7 text-[12px] text-[var(--t-mute)] hover:text-[var(--t-fg)] rounded-md text-left cursor-pointer",
+        selected ? "bg-[color-mix(in_oklab,var(--t-amber)_14%,transparent)] text-[var(--t-fg)]" : "hover:bg-white/[0.03]",
+      )}
       title={`${h.label} · ${h.online ? `online · ${h.agent?.adapters.map((x) => harnessDisplay(x, hosts, hostAliases(hostPrefs))).join(", ")}` : "offline"} · open host details`}
     >
+      {selected && <span className="absolute left-0 top-1.5 bottom-1.5 w-[2px] rounded-full bg-[var(--t-amber)]" />}
       <span className={cn("w-1.5 h-1.5 rounded-full shrink-0", h.online ? "bg-[var(--t-teal)]" : "bg-[var(--t-line2)]")} />
       <Icon name="host" size={12} className={h.online ? "text-[var(--t-sky)]" : "text-[var(--t-dim)]"} />
       {editing ? (
@@ -635,5 +770,125 @@ function GroupTrash({ ids, name }: { ids: string[]; name: string }) {
     >
       <Icon name="trash" size={11} />
     </button>
+  );
+}
+
+/* ---------------- multi-select bulk actions (issue #225) ----------------
+   The kind map the pure model needs (src/lib/multiSelect.ts `bulkActions`):
+   the sidebar is the only place that knows a row is a chat, a shell, or a
+   host. The model stays kind-agnostic so #226 can drive it from a Files
+   tree with its own descriptors. */
+function sidebarItems(
+  sessions: Record<string, SessionMeta>,
+  terminals: TerminalInfo[],
+  hosts: HostInfo[],
+): { id: string; kind: string }[] {
+  const items: { id: string; kind: string }[] = [];
+  for (const id of Object.keys(sessions)) items.push({ id, kind: "session" });
+  for (const t of terminals) items.push({ id: t.id, kind: "shell" });
+  for (const h of hosts) items.push({ id: h.id, kind: "host" });
+  return items;
+}
+
+/* The bulk bar. It sits at the sidebar's top edge and appears only while
+   something is selected; it never replaces the per-row clusters (a row's own
+   confirm-delete still works), it adds the set-level actions. Each action
+   carries its own reason when the set can't take it (a mixed-kind set can't
+   be deleted wholesale), and the destructive one keeps the same two-click
+   gate the single-row path uses (issue #85) — a bulk delete is MORE
+   destructive, so it must never get a lighter confirmation. */
+function BulkBar({
+  count,
+  actions,
+  sel,
+  sessions,
+  terminals,
+  hosts,
+  onClear,
+}: {
+  count: number;
+  actions: BulkAction[];
+  sel: SelectionState;
+  sessions: Record<string, SessionMeta>;
+  terminals: TerminalInfo[];
+  hosts: HostInfo[];
+  onClear: () => void;
+}) {
+  const [confirm, setConfirm] = useState(false);
+  useEffect(() => {
+    if (!confirm) return;
+    const t = setTimeout(() => setConfirm(false), 3000);
+    return () => clearTimeout(t);
+  }, [confirm]);
+
+  const ids = [...sel.ids];
+  const kill = (action: BulkAction) => {
+    /* reason-disabled actions do nothing and say why (via title) */
+    if (action.disabled) return;
+    if (action.confirm) {
+      if (!confirm) return setConfirm(true);
+      setConfirm(false);
+    }
+    switch (action.id) {
+      case "pin": {
+        /* pin the set, then clear: the gesture is done */
+        for (const id of ids) {
+          if (sessions[id]) void store.pinSession(id, true);
+          else if (terminals.some((t) => t.id === id)) void store.pinTerminal(id, true);
+          else if (hosts.some((h) => h.id === id)) void store.pinHost(id, true);
+        }
+        return onClear();
+      }
+      case "archive": {
+        for (const id of ids) if (sessions[id]) void store.archiveSession(id, true);
+        return onClear();
+      }
+      case "delete": {
+        const sessionIds = ids.filter((id) => sessions[id]);
+        const shellIds = ids.filter((id) => terminals.some((t) => t.id === id));
+        const hostIds = ids.filter((id) => hosts.some((h) => h.id === id));
+        if (sessionIds.length) void store.bulkDeleteSessions(sessionIds);
+        for (const id of shellIds) void desktops.killTerminal(id);
+        for (const id of hostIds) void store.deleteHost(id);
+        return onClear();
+      }
+    }
+  };
+
+  return (
+    <div className="shrink-0 mx-1.5 mb-1.5 px-2 py-1.5 rounded-md border border-[var(--t-amber)]/40 bg-[var(--t-amber)]/[0.07]" role="toolbar" aria-label={`${count} selected`}>
+      <div className="flex items-center gap-1.5 text-[11px] text-[var(--t-fg)]">
+        <span className="font-medium tabular-nums">{count} selected</span>
+        <button
+          className="ml-auto px-1.5 py-0.5 rounded text-[10.5px] text-[var(--t-mute)] hover:text-[var(--t-fg)] border border-[var(--t-line2)]"
+          title="Clear selection (Esc)"
+          onClick={onClear}
+        >
+          Clear
+        </button>
+      </div>
+      <div className="mt-1.5 flex flex-wrap gap-1">
+        {actions.map((a) => (
+          <button
+            key={a.id}
+            disabled={!!a.disabled}
+            title={a.disabled ?? (confirm && a.confirm ? "Click again to confirm" : a.label)}
+            onClick={() => kill(a)}
+            className={cn(
+              "px-2 py-0.5 rounded text-[10.5px] font-medium border transition-colors",
+              a.disabled
+                ? "border-[var(--t-line)] text-[var(--t-dim)] cursor-not-allowed"
+                : a.confirm
+                  ? confirm
+                    ? "border-[var(--t-red)] bg-[color-mix(in_oklab,var(--t-red)_15%,transparent)] text-[var(--t-red)]"
+                    : "border-[var(--t-line2)] text-[var(--t-mute)] hover:text-[var(--t-red)] hover:border-[var(--t-red)]/50"
+                  : "border-[var(--t-line2)] text-[var(--t-mute)] hover:text-[var(--t-fg)] hover:border-[var(--t-mute)]",
+            )}
+          >
+            {confirm && a.confirm ? `Click again: ${a.label}` : a.label}
+          </button>
+        ))}
+      </div>
+    </div>
   );
 }
