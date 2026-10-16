@@ -1,11 +1,13 @@
 import { useSyncExternalStore, useRef, useCallback, useEffect, useState } from "react";
 import type { Backend, ConnStatus } from "./backend";
+import { healthFramePatch } from "./health";
 import type {
   AgentInfo,
   CreateSessionBody,
   FeedItem,
   Frame,
   HarnessInfo,
+  HealthSnapshot,
   HostInfo,
   ModelInfo,
   ProtoEvent,
@@ -64,6 +66,9 @@ export interface AppState {
   backend: Backend | null;
   conn: ConnStatus;
   everConnected: boolean;
+  /** the server's readiness report (issue #219), null until the first
+      health.snapshot frame or /api/health fetch lands */
+  health: HealthSnapshot | null;
   harnesses: HarnessInfo[];
   models: ModelInfo[];
   agents: AgentInfo[];
@@ -225,6 +230,7 @@ class Store {
     backend: null,
     conn: { kind: "connecting", attempt: 0 },
     everConnected: false,
+    health: null,
     harnesses: [],
     models: [],
     agents: [],
@@ -290,6 +296,13 @@ class Store {
       this.refreshTodos(),
       this.refreshFeed(),
       this.refreshHosts(),
+      /* the readiness report (issue #219, audit round 5 B1). Without this the
+         dot only ever filled in on an agents.changed edge, so a tab opened
+         against an already-running server — the normal case, and every
+         single-host setup with no remote agents — showed a grey "unknown"
+         dot and "No snapshot yet" forever. The event push stays the live
+         path; this is the initial read. */
+      this.refreshHealth(),
     ]);
     // Active sessions may have pending permission cards — hydrate them eagerly.
     for (const id of this.state.order) {
@@ -335,6 +348,7 @@ class Store {
     await this.refreshSessions();
     await this.refreshTerminals();
     await this.refreshAgents();
+    void this.refreshHealth();
     await Promise.all([this.refreshTodos(), this.refreshFeed(), this.refreshHosts(), this.refreshTrash()]);
     for (const id of Object.keys(this.state.views)) {
       if (this.state.sessions[id]) void this.rehydrate(id);
@@ -348,6 +362,20 @@ class Store {
     } catch (e: any) {
       this.set({ agentsError: e?.message ?? String(e) });
       this.toast("error", "Could not load remote hosts", e?.message ?? String(e));
+    }
+  }
+
+  /** one-shot fetch of the rich readiness report (issue #219). The live
+      push (health.snapshot on the event bus) is the normal path; this covers
+      the case where the page loaded while a snapshot was not re-sent, so the
+      dot is never stuck on "unknown". A failure is NOT toasted — a health
+      fetch is background chrome, and a toast here would fire on every blip. */
+  async refreshHealth() {
+    try {
+      const health = await this.be.health();
+      this.set({ health });
+    } catch {
+      /* leave the last known snapshot in place */
     }
   }
 
@@ -496,6 +524,17 @@ class Store {
       if (ev.event === "requested" && ev.request?.hostname) {
         this.toast("info", "Pairing request", `${ev.request.hostname} wants to pair: allow it under Remote hosts`);
       }
+      return;
+    }
+    /* the server's readiness picture (issue #219): replace the whole snapshot.
+       It is server-authoritative and already rolled up, so the client stores
+       it verbatim — recomputing the tri-state here would let the status bar
+       disagree with /api/health. The mapping itself lives in the exported
+       pure reducer below so it is testable without instantiating the store
+       (audit round 3, B3). */
+    if (ev.type === "health.snapshot") {
+      const patch = healthFramePatch(ev);
+      if (patch) this.set(patch);
       return;
     }
     if (ev.type === "models.updated") {

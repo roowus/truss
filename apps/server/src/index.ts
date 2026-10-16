@@ -64,6 +64,8 @@ import { modelCatalog } from "./modelcat.js";
 import { modelRouterBaseUrl, modelRouterEnabled, modelRouterPort } from "./router-resolve.js";
 import { routerPickerModels, startModelRouter } from "./model-router.js";
 import { COMMIT } from "./version.js";
+import { buildHealthSnapshot, healthDiagnostics } from "./health-snapshot.js";
+import { startupLine } from "./health.js";
 import { syncPiExtension, syncPiModelsJson } from "./pi-config.js";
 import { transcribeAudio, transcribeConfigFromEnv } from "./transcribe.js";
 import { setClaudeModels } from "./adapters/claude.js";
@@ -172,8 +174,37 @@ if (modelRouterEnabled()) {
 }
 
 /* commit: which code is answering — one curl tells a live fix from a stale
-   squatter (issue #135); "unknown" when the deploy has no git */
+   squatter (issue #135); "unknown" when the deploy has no git.
+
+   ── DO NOT TIDY THIS INTO AN ALIAS OF /api/health (issue #219) ──
+   This is the LIVENESS/IDENTITY endpoint with live consumers:
+     - scripts/mainline-watch.sh extracts the commit from this response with
+       an UNANCHORED sed match for a quoted "commit" whose value is 7-40 hex
+       characters. Because the pattern demands hex, a value that is not
+       sha-like — notably "unknown", which this route legitimately returns on
+       a deploy without git — extracts as EMPTY, and the watcher then cannot
+       tell "stale" from "unreadable" and believes the service is never
+       current. That is the real fragility, and it is about the VALUE, not
+       the nesting or key order: the unanchored greedy match finds the key
+       whether nested or not, in any position (verified against the script
+       itself).
+     - apps/web/src/lib/backend.ts probes it for `ok` to pick live vs demo.
+   So: keep this route's `commit` a plain sha-or-"unknown" string, keep the
+   flat shape, and do NOT alias it to the rich readiness route. The rich
+   `/api/health` is a separate endpoint and the UI consumes that one; both
+   read from one snapshot builder. (This comment deliberately does not quote
+   the sed expression: its terminator sequence would close this block
+   comment early.) */
 app.get("/health", async () => ({ ok: true, service: "truss", time: Date.now(), commit: COMMIT }));
+
+/* rich readiness report (issue #219): server identity + a row per subsystem,
+   each { name, state: ok | degraded | down, detail? }. RE-PROBES live on
+   every call so a binary that appears on PATH, or a host that comes back, is
+   reflected without a restart — but every probe is cheap and spawns nothing:
+   a health request that spawned harnesses would be a denial-of-service on
+   ourselves. `degraded` means "works with less"; `down` means the server
+   refuses to pretend. */
+app.get("/api/health", async () => buildHealthSnapshot());
 
 app.get("/events", { websocket: true }, (socket) => {
   clients.add(socket);
@@ -205,8 +236,17 @@ const AGENT_PROTOCOL = 2;
 wireRemoteRegistry({
   register: registerAdapter,
   unregister: unregisterAdapter,
-  /* an agent hello'd/dropped — open clients refetch hosts + harnesses */
-  registryChanged: () => broadcastRaw({ type: "agents.changed", sessionId: "" }),
+  /* an agent hello'd/dropped — open clients refetch hosts + harnesses.
+     This is ALSO the health edge (issue #219): a host dropping or coming
+     back is exactly when the readiness picture changes, so we re-probe and
+     push a fresh health.snapshot on the same event. Deliberately NOT a
+     polling timer — an interval re-probing PATH and the store would be the
+     self-inflicted load the issue warns against, and this edge covers the
+     stated case. */
+  registryChanged: () => {
+    broadcastRaw({ type: "agents.changed", sessionId: "" });
+    broadcastRaw({ type: "health.snapshot", sessionId: "", health: buildHealthSnapshot() });
+  },
   /* a tunnel probe filled a remote harness's catalog (issue #123) — same
      refetch contract as the local lazy-catalog probe (issue #101) */
   modelsChanged: (harness) => broadcastRaw({ type: "models.updated", sessionId: "", harness }),
@@ -1314,6 +1354,18 @@ export { app };
 
 app
   .listen({ port: PORT, host: process.env.TRUSS_HOST ?? "0.0.0.0" })
+  .then(() => {
+    /* startup health report (issue #219). ONE parseable key=value line on
+       STDOUT — awk/sed can read it with no JSON dependency, which is what a
+       log pipeline wants. The per-subsystem detail goes to STDERR as
+       diagnostics, so the summary line stays greppable. The same snapshot is
+       broadcast so devices already connected learn the boot state without
+       polling, and is answered live at GET /api/health. */
+    const snap = buildHealthSnapshot();
+    process.stdout.write(startupLine(snap) + "\n");
+    process.stderr.write(healthDiagnostics(snap) + "\n");
+    broadcastRaw({ type: "health.snapshot", sessionId: "", health: snap });
+  })
   .catch((err) => {
     app.log.error(err);
     process.exit(1);

@@ -7,6 +7,8 @@ import { openDailyDriver, openFreeShell, openPanel } from "@/lib/workspace";
 import { canClose, describeClosed } from "@/lib/workspaceClose";
 import { HarnessMark, Icon, StateDot } from "./ui";
 import { cn } from "@/utils/cn";
+import { HEALTH_META, healthDotState, healthRows, healthSummary } from "@/lib/health";
+import type { HealthSnapshot } from "@/lib/proto";
 
 /* ================= Status bar ================= */
 export function StatusBar({ onToggleSidebar }: { onToggleSidebar: () => void }) {
@@ -15,6 +17,7 @@ export function StatusBar({ onToggleSidebar }: { onToggleSidebar: () => void }) 
   const canRestart = useApp((s) => !!s.backend?.simulateRestart);
   const order = useApp((s) => s.order);
   const sessions = useApp((s) => s.sessions);
+  const health = useApp((s) => s.health);
   const totalCost = useApp((s) => {
     let c = 0;
     let has = false;
@@ -29,6 +32,7 @@ export function StatusBar({ onToggleSidebar }: { onToggleSidebar: () => void }) 
   const pendingTotal = useApp((s) => Object.values(s.views).reduce((n, v) => n + v.pending.length, 0));
   const running = useMemo(() => order.filter((i) => sessions[i]?.state === "running" || sessions[i]?.state === "spawning"), [order, sessions]);
   const [menu, setMenu] = useState(false);
+  const [healthMenu, setHealthMenu] = useState(false);
   const now = useNow(1000, conn.kind === "closed");
 
   const firstPending = () => {
@@ -42,6 +46,11 @@ export function StatusBar({ onToggleSidebar }: { onToggleSidebar: () => void }) 
         <span className={cn("w-1.5 h-1.5 rounded-full", conn.kind === "open" ? "bg-[var(--t-teal)]" : conn.kind === "connecting" ? "bg-[var(--t-amber)] t-pulse" : "bg-[var(--t-red)] t-pulse")} />
         {conn.kind === "open" ? "live" : conn.kind === "connecting" ? "connecting…" : `offline · retry ${Math.max(0, Math.ceil((conn.retryAt - now) / 1000))}s`}
       </SBItem>
+      {/* server readiness (issue #219): the dot is the WORST subsystem state.
+          `degraded` is amber, not green — "works with less" must not read as
+          healthy — and `unknown` (no snapshot yet) is deliberately grey: we
+          do not claim health we have not been told about. */}
+      <HealthItem health={health} open={healthMenu} onToggle={() => setHealthMenu((m) => !m)} />
       {running.length > 0 && (
         <SBItem onClick={() => setMenu((m) => !m)} title="Running agents">
           <StateDot state="running" size={7} />
@@ -99,6 +108,61 @@ function SBItem({ children, onClick, title }: { children: ReactNode; onClick?: (
     <C onClick={onClick} title={title} className={cn("h-full inline-flex items-center gap-1.5 px-2", onClick && "hover:bg-white/[0.05] hover:text-[var(--t-fg)]")}>
       {children}
     </C>
+  );
+}
+
+/**
+ * Server readiness in the status bar (issue #219): a dot whose colour is the
+ * worst subsystem state, and a popover listing every subsystem with its
+ * detail. The rollup and the row list come from lib/health.ts — pure
+ * functions, unit-tested without a DOM — so what is rendered here is exactly
+ * what that test pins.
+ */
+function HealthItem({ health, open, onToggle }: { health: HealthSnapshot | null; open: boolean; onToggle: () => void }) {
+  const dot = healthDotState(health);
+  const meta = HEALTH_META[dot];
+  const rows = healthRows(health);
+  return (
+    <div className="relative h-full">
+      <SBItem onClick={onToggle} title={`Server health: ${meta.label}. ${meta.hint}`}>
+        <span className="w-1.5 h-1.5 rounded-full" style={{ background: meta.color }} />
+        {meta.label}
+      </SBItem>
+      {open && (
+        <>
+          {/* click-away: the popover is chrome, closing on any outside click */}
+          <div className="fixed inset-0 z-40" onClick={onToggle} />
+          <div className="absolute left-0 bottom-[26px] z-50 min-w-[320px] max-w-[520px] rounded-md border border-[var(--t-line2)] bg-[var(--t-bg0)] shadow-xl">
+            <div className="flex items-center gap-2 px-3 h-7 border-b border-[var(--t-line)]">
+              <span className="w-1.5 h-1.5 rounded-full" style={{ background: meta.color }} />
+              <span className="text-[11.5px] text-[var(--t-fg)]">Server health</span>
+              <span className="ml-auto font-mono text-[10px] text-[var(--t-dim)]">{healthSummary(health)}</span>
+            </div>
+            {health && (
+              <div className="px-3 py-1.5 font-mono text-[10px] text-[var(--t-dim)] border-b border-[var(--t-line)] break-all">
+                {health.bind} · {health.dataDir} · {String(health.commit).slice(0, 12)}
+              </div>
+            )}
+            <div className="max-h-[300px] overflow-auto t-scroll py-1">
+              {rows.length === 0 && <div className="px-3 py-2 text-[11px] text-[var(--t-dim)]">No snapshot yet. The server has not reported.</div>}
+              {rows.map((r) => {
+                const m = HEALTH_META[r.state] ?? HEALTH_META.down;
+                return (
+                  <div key={r.name} className="flex items-start gap-2 px-3 py-1">
+                    <span className="mt-[5px] w-1.5 h-1.5 rounded-full shrink-0" style={{ background: m.color }} />
+                    <div className="min-w-0">
+                      <div className="font-mono text-[11px] text-[var(--t-fg2)]">{r.name}</div>
+                      {r.detail && <div className="font-mono text-[10px] text-[var(--t-dim)] break-all">{r.detail}</div>}
+                    </div>
+                    <span className="ml-auto shrink-0 font-mono text-[10px]" style={{ color: m.color }}>{r.label}</span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </>
+      )}
+    </div>
   );
 }
 

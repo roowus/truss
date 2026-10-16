@@ -129,6 +129,40 @@ export interface PairChanged {
   request: { id: string; hostname: string; os: string; tailscaleIp?: string; sourceIp: string; expiresAt: number };
 }
 
+/* the server's own readiness report (issue #219). The tri-state is the point:
+   `degraded` = "works with less" (an adapter missing from PATH), `down` =
+   "the server refuses to pretend" (the store is unusable). Definitions live
+   here in the shared proto so the server builder and the web status bar
+   cannot drift apart. */
+export type HealthState = "ok" | "degraded" | "down";
+
+export interface SubsystemHealth {
+  name: string;
+  state: HealthState;
+  detail?: string;
+}
+
+export interface HealthSnapshot {
+  commit: string;
+  version: string;
+  bind: string;
+  dataDir: string;
+  /** worst-wins rollup of `subsystems` */
+  state: HealthState;
+  time: number;
+  subsystems: SubsystemHealth[];
+}
+
+/* the server's readiness picture (issue #219): sent at boot and on the
+   agents.changed edge, so an open device's status-bar dot flips the moment a
+   remote host drops or recovers instead of waiting for a manual refetch.
+   sessionId is "" — carried for the frame shape only, like agents.changed. */
+export interface HealthSnapshotFrame {
+  type: "health.snapshot";
+  sessionId: string;
+  health: HealthSnapshot;
+}
+
 /** a harness's model catalog just filled in (lazy adapters discover it from
     the first session boot, or from the first-boot probe — issue #101).
     Broadcast-only; clients refetch /api/harnesses. sessionId is "" — carried
@@ -289,6 +323,7 @@ export type ProtoEvent =
   | FeedUpsert
   | AgentsChanged
   | PairChanged
+  | HealthSnapshotFrame
   | ModelsUpdated
   | MsgStart
   | MsgChunk

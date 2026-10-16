@@ -95,6 +95,23 @@ export interface LazyCatalog {
   probe(): Promise<boolean>;
 }
 
+/* Every lazy catalog registers itself here so the readiness report (issue
+   #219) can read catalog state CHEAPLY — an in-memory read, no network call
+   and no spawn, which is the health contract. Without this the health row
+   had nothing honest to report and was hardcoded green even when no catalog
+   had ever loaded (audit round 1, B2). */
+const lazyCatalogs = new Map<string, LazyCatalog>();
+
+/** in-memory catalog state per lazy adapter, for the health probe */
+export function lazyCatalogStates(): { harness: string; count: number }[] {
+  /* keys are "<something>:<harness>" (e.g. "models:dsh") — report the bare
+     harness name so the health row reads like the others */
+  return [...lazyCatalogs.entries()].map(([key, c]) => ({
+    harness: key.includes(":") ? key.slice(key.lastIndexOf(":") + 1) : key,
+    count: c.list().length,
+  }));
+}
+
 /**
  * The lazy-catalog state machine both ACP adapters share (hermes, dsh) —
  * hydrated cache + persist-on-discover + guarded background probe. Only the
@@ -113,7 +130,7 @@ export function lazyCatalog(key: string, harvest: () => Promise<CatalogModel[]>)
   }
   let inflight: Promise<boolean> | null = null;
   let lastProbeAt = 0;
-  return {
+  const self: LazyCatalog = {
     list: () => models,
     set(m) {
       models = m;
@@ -140,4 +157,6 @@ export function lazyCatalog(key: string, harvest: () => Promise<CatalogModel[]>)
       return inflight;
     },
   };
+  lazyCatalogs.set(key, self);
+  return self;
 }

@@ -3,6 +3,30 @@
 export type HarnessId = string; // pi | dsh | claude-code | hermes | <adapter>@<host>
 export type SessionState = "spawning" | "idle" | "running" | "error" | "closed";
 
+/* ── server readiness (issue #219) ──
+   Mirrors packages/proto. The tri-state is the contract, not decoration:
+   `degraded` means "works with less" (an adapter missing from PATH), `down`
+   means "the server refuses to pretend" (the store is unusable). Never
+   collapse the two — the status bar's honesty depends on keeping them. */
+export type HealthState = "ok" | "degraded" | "down";
+
+export interface SubsystemHealth {
+  name: string;
+  state: HealthState;
+  detail?: string;
+}
+
+export interface HealthSnapshot {
+  commit: string;
+  version: string;
+  bind: string;
+  dataDir: string;
+  /** worst-wins rollup of `subsystems` */
+  state: HealthState;
+  time: number;
+  subsystems: SubsystemHealth[];
+}
+
 export interface Capabilities {
   permissions: boolean;
   subagents: boolean;
@@ -384,6 +408,10 @@ export type ProtoEvent =
   /* a device asked to auto-pair, or its request was decided (issue #111
      review) — refetch hosts (the pendingPair list) and toast the ask */
   | (Base & { type: "pair.changed"; event: "requested" | "resolved"; request?: PairRequestInfo })
+  /* the server's readiness picture (issue #219) — drives the status-bar dot
+     and its popover; re-sent on the agents.changed edge so a host dropping
+     or recovering flips the dot without a manual refetch */
+  | (Base & { type: "health.snapshot"; health: HealthSnapshot })
   | (Base & { type: "models.updated"; harness: HarnessId })
   | (Base & { type: "msg.start"; messageId: string; role: "user" | "assistant" | "system"; at: At; attachments?: PromptAttachment[] })
   /* the server sink stamps `at` on every event that lacks one (issue #142

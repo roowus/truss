@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
-import { dirname } from "node:path";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 /* Code identity for /health (issue #135): which commit this server is
@@ -27,3 +28,25 @@ function resolveCommit(): string {
 }
 
 export const COMMIT = resolveCommit();
+
+/* The server's own version for the readiness report (issue #219, audit B3).
+   Read from THIS package's manifest rather than a literal: a hardcoded
+   "0.2.0" reported a version the server was not (apps/server is 0.1.0) and
+   would drift on every release. Resolved once at boot; a deploy whose
+   manifest cannot be read reports "unknown" rather than crashing — identity
+   must never be the reason /api/health fails. */
+function resolveVersion(): string {
+  const fromEnv = process.env.TRUSS_VERSION?.trim();
+  if (fromEnv) return fromEnv;
+  try {
+    const here = dirname(fileURLToPath(import.meta.url));
+    /* src/ in dev (tsx) and dist/ in a build both sit one level under the
+       package root, so the same relative hop works for both */
+    const pkg = JSON.parse(readFileSync(join(here, "..", "package.json"), "utf8")) as { version?: unknown };
+    return typeof pkg.version === "string" && pkg.version ? pkg.version : "unknown";
+  } catch {
+    return "unknown";
+  }
+}
+
+export const VERSION = resolveVersion();
