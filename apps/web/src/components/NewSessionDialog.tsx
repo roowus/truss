@@ -5,6 +5,7 @@ import { harnessStyle, hostOf, shortPath } from "@/lib/format";
 import { hostAliases, hostDisplay } from "@/lib/device";
 import { resolveDefaultCwd, resolveDefaultProject, hostDefaultFor, hostSuggestedFor } from "@/lib/cwdDefault";
 import { createBrowseNav, type BrowseNav } from "@/lib/browseNav";
+import { browseCrumbs } from "@/lib/browseCrumbs";
 import { buildModelOptions, modelSelectOptions, splitModelValue } from "@/lib/models";
 import { createPortal } from "react-dom";
 import type { BrowseDir } from "@/lib/proto";
@@ -332,11 +333,20 @@ function Cap({ on, children }: { on: boolean; children: React.ReactNode }) {
 function DirPicker({ anchorRef, onPick, onClose }: { anchorRef: { current: HTMLDivElement | null }; onPick: (path: string) => void; onClose: () => void }) {
   const [path, setPath] = useState<string | null>(null);
   const [roots, setRoots] = useState<string[]>([]);
+  /* the roots with symlinks resolved: mkdir answers with a CANONICAL path,
+     so a path created under a symlinked root (/tmp on macOS) only matches a
+     crumb through this list (audit round 2, B1) */
+  const [realRoots, setRealRoots] = useState<string[]>([]);
   const [dirs, setDirs] = useState<BrowseDir[]>([]);
   const [parent, setParent] = useState<string | null>(null);
   const [hidden, setHidden] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  /* "New folder" (issue #233): the inline create row. `newName === null`
+     means the row is closed; a created folder is ENTERED, never auto-picked
+     (a picked cwd is an explicit choice to the dialog's cwdTouched). */
+  const [newName, setNewName] = useState<string | null>(null);
+  const [creating, setCreating] = useState(false);
 
   /* Scroll memory (issue #136): before this, every navigation re-rendered a
      fresh listing and the scroll container reset — climbing back out of a
@@ -368,6 +378,26 @@ function DirPicker({ anchorRef, onPick, onClose }: { anchorRef: { current: HTMLD
     setPath(next);
   };
 
+  /* Create a folder in the directory currently shown, then navigate into it
+     so "Choose this folder" is one click away (issue #233). The server owns
+     the name rules and the confinement; its reason is what the user reads.
+     The row stays open on failure so the name can be corrected in place. */
+  const createFolder = async () => {
+    const name = (newName ?? "").trim();
+    if (!path || !name || creating) return;
+    setCreating(true);
+    setErr(null);
+    try {
+      const r = await store.be.browseMkdir(path, name);
+      setNewName(null);
+      go(r.path, "enter");
+    } catch (e: any) {
+      setErr(e?.message ?? String(e));
+    } finally {
+      setCreating(false);
+    }
+  };
+
   useEffect(() => {
     let alive = true;
     setBusy(true);
@@ -377,6 +407,7 @@ function DirPicker({ anchorRef, onPick, onClose }: { anchorRef: { current: HTMLD
       .then((r) => {
         if (!alive) return;
         if (r.roots) setRoots(r.roots);
+        if (r.realRoots) setRealRoots(r.realRoots);
         setDirs(r.dirs ?? []);
         setParent(r.parent ?? null);
         loadedFor.current = path;
@@ -407,33 +438,22 @@ function DirPicker({ anchorRef, onPick, onClose }: { anchorRef: { current: HTMLD
     if (listRef.current) listRef.current.scrollTop = nav.scrollMemory(target);
   });
 
-  const crumbs = useMemo(() => {
-    if (path === null) return [];
-    const root = [...roots].filter((r) => path === r || path.startsWith(r + "/")).sort((a, b) => b.length - a.length)[0];
-    const home = roots[0];
-    const out: { label: string; path: string }[] = [];
-    let cur = root ?? "";
-    if (root) out.push({ label: root === home ? "~" : root, path: root });
-    for (const seg of path.slice(cur.length).split("/").filter(Boolean)) {
-      cur += "/" + seg;
-      out.push({ label: seg, path: cur });
-    }
-    return out;
-  }, [path, roots]);
+  const crumbs = useMemo(() => browseCrumbs(path, roots, realRoots), [path, roots, realRoots]);
 
   /* anchor the overlay under the cwd field; follow any scroll (the dialog
      itself can scroll on short viewports — capture phase, scroll doesn't
      bubble) or resize. Flip above the field when the window has no room
-     below; the dropdown's tallest form is ~310px (header 36 + list padding
-     8 + list 224 + footer 40 + border 2), so below needs ≥312 to fit. The
-     flip clamps BOTH edges: bottom ≥ 4 keeps it off the viewport's bottom
-     edge, and capping bottom at innerHeight - 316 keeps the header row (up,
-     breadcrumbs, .* toggle, close) below the viewport's top (audit round 3,
-     B5). The setState is skipped when the rect is unchanged — a capture-
-     phase listener sees every scroll tick, including inside the picker's
-     own list, and a fresh anchor object each tick would re-render and
-     re-diff the whole unvirtualized listing per wheel event (B4). */
-  const MAXH = 312;
+     below; the dropdown's tallest form is ~347px (header 36 + list padding
+     8 + list 224 + "New folder" row 36 + footer 40 + border 2), so below
+     needs ≥349 to fit. The flip clamps BOTH edges: bottom ≥ 4 keeps it off
+     the viewport's bottom edge, and capping bottom at innerHeight - 353
+     keeps the header row (up, breadcrumbs, .* toggle, close) below the
+     viewport's top (audit round 3, B5). The setState is skipped when the
+     rect is unchanged — a capture-phase listener sees every scroll tick,
+     including inside the picker's own list, and a fresh anchor object each
+     tick would re-render and re-diff the whole unvirtualized listing per
+     wheel event (B4). */
+  const MAXH = 349;
   const [anchor, setAnchor] = useState<{ left: number; top?: number; bottom?: number; width: number } | null>(null);
   useLayoutEffect(() => {
     const update = () => {
@@ -529,6 +549,53 @@ function DirPicker({ anchorRef, onPick, onClose }: { anchorRef: { current: HTMLD
           ))
         )}
       </div>
+
+      {/* "New folder" (issue #233): only inside a real directory — in the
+          roots view there is no parent to create in. Collapsed it is one
+          row; open it mirrors the Files panel's create row. */}
+      {path !== null && (
+        <div className="border-t border-[var(--t-line)]">
+          {newName === null ? (
+            <button
+              type="button"
+              onClick={() => {
+                setErr(null);
+                setNewName("");
+              }}
+              className="w-full flex items-center gap-2 px-3 h-7 text-left font-mono text-[11.5px] text-[var(--t-dim)] hover:text-[var(--t-fg)] hover:bg-[var(--t-bg2)]"
+            >
+              <Icon name="folder" size={12} />
+              <span>New folder…</span>
+            </button>
+          ) : (
+            <div className="flex items-center gap-2 px-3 h-9">
+              <Icon name="folder" size={12} className="text-[var(--t-dim)] shrink-0" />
+              <input
+                autoFocus
+                value={newName}
+                disabled={creating}
+                onChange={(e) => setNewName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") void createFolder();
+                  if (e.key === "Escape") {
+                    /* the dialog's window-level Escape listener closes the
+                       WHOLE picker; React's onKeyDown sits on the same
+                       bubble path, so without this the row's cancel also
+                       threw away the user's browsing position */
+                    e.stopPropagation();
+                    setNewName(null);
+                    setErr(null);
+                  }
+                }}
+                placeholder="new-folder (Enter)"
+                aria-label="New folder name"
+                className="flex-1 min-w-0 bg-transparent outline-none font-mono text-[11.5px] text-[var(--t-fg)] placeholder:text-[var(--t-dim)] disabled:opacity-50"
+              />
+              {creating ? <Spinner size={11} /> : <Btn size="xs" variant="ghost" onClick={() => { setNewName(null); setErr(null); }}>Cancel</Btn>}
+            </div>
+          )}
+        </div>
+      )}
 
       <div className="flex items-center gap-2 px-2 h-10 border-t border-[var(--t-line)]">
         <span className="flex-1 font-mono text-[10.5px] text-[var(--t-dim)] truncate">{path ?? "pick a folder, then choose it"}</span>
