@@ -5,8 +5,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { bootServer, fakeAdapterEnv, installFakeAdapters, type TestServer } from "./server-harness.js";
-import { buildHealthSnapshot } from "../src/health-snapshot.js";
 import { healthRollup, probeAdapters, startupLine, whichSync } from "../src/health.js";
+import { buildHealthSnapshot, healthDiagnostics } from "../src/health-snapshot.js";
 
 /* SPEC-TESTS for the startup health report — issue #219
    https://github.com/roowus/truss/issues/219
@@ -357,4 +357,63 @@ test("the startup line is one parseable key=value line", () => {
   assert.match(line, /\bcommit=\S+/);
   /* it must be JSON-free: a log pipeline parses this with awk/sed */
   assert.ok(!line.includes("{") && !line.includes("}"), "no JSON in the summary line");
+});
+
+/* ── coverage the audit round 1 named as missing ──────────────────────── */
+
+test("transcribe is reported only when configured", () => {
+  /* the issue says report transcribe "only if configured" — an ok row for a
+     feature that is not on is noise that trains people to ignore the list */
+  const off = buildHealthSnapshot({ PATH: process.env.PATH, HOME: process.env.HOME } as NodeJS.ProcessEnv);
+  assert.ok(
+    !off.subsystems.some((s) => s.name === "transcribe"),
+    "unconfigured transcribe is OMITTED, not reported ok",
+  );
+
+  const on = buildHealthSnapshot({
+    PATH: process.env.PATH,
+    HOME: process.env.HOME,
+    TRUSS_TRANSCRIBE_URL: "http://127.0.0.1:9/transcribe",
+  } as NodeJS.ProcessEnv);
+  const row = on.subsystems.find((s) => s.name === "transcribe");
+  assert.ok(row, "a configured transcribe appears as a row");
+  assert.equal(row.state, "ok", "configured transcribe is ok");
+  assert.equal(row.detail, "http://127.0.0.1:9/transcribe", "the row names the endpoint");
+});
+
+test("remote hosts: none configured is ok, an offline host degrades and says n/m", () => {
+  /* no hosts configured is ok — there is nothing to be missing */
+  const none = buildHealthSnapshot({ PATH: process.env.PATH, HOME: process.env.HOME } as NodeJS.ProcessEnv);
+  const row = none.subsystems.find((s) => s.name === "remote-hosts");
+  assert.ok(row, "the remote-hosts row is always present");
+  assert.ok(["ok", "degraded"].includes(row.state), "never down — a missing remote host is not fatal");
+  assert.ok(row.detail, "the row always explains itself");
+  if (row.state === "ok") {
+    assert.match(row.detail, /none configured|\d+\/\d+ online/, "ok means either nothing to lose or all online");
+  } else {
+    assert.equal(row.state, "degraded");
+    assert.match(row.detail, /\d+\/\d+ online/, "a degraded row reports how many of how many are online");
+  }
+});
+
+test("the diagnostics block details every subsystem for stderr", () => {
+  /* stdout stays one parseable line; the human detail goes to stderr */
+  const snap = buildHealthSnapshot();
+  const text = healthDiagnostics(snap);
+  for (const s of snap.subsystems) {
+    assert.ok(text.includes(s.name), `diagnostics name ${s.name}`);
+    assert.ok(text.includes(s.state), `diagnostics carry ${s.name}'s state`);
+  }
+  assert.match(text, /^truss: health detail \(state=(ok|degraded|down)\)/, "a stable header a log reader can grep");
+});
+
+test("whichSync finds an absolute path target, not just a PATH name", () => {
+  /* hermes resolves this way: an absolute venv path rather than a PATH name */
+  const dir = mkdtempSync(join(tmpdir(), "truss-health-abs-"));
+  const abs = join(dir, "hermes-acp");
+  writeFileSync(abs, "#!/bin/sh\nexit 0\n");
+  chmodSync(abs, 0o755);
+  assert.equal(whichSync(abs, { PATH: "/nonexistent" } as NodeJS.ProcessEnv), abs, "an absolute executable resolves with an empty PATH");
+  assert.equal(whichSync(join(dir, "nope"), { PATH: dir } as NodeJS.ProcessEnv), null, "a missing absolute path is null");
+  rmSync(dir, { recursive: true, force: true });
 });
