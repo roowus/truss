@@ -354,6 +354,24 @@ jobs:
             serve> — <cheaper form>)`, appending `(no linked issue — judged from
             commits)` or `(linked issue off-topic)` where applicable.
 
+            COMPLEXITY — the issue carries a `complexity: trivial|low|medium|
+            high|epic` label, and `medium`+ (or any `qa-first` issue) must have
+            run a design Q&A before implementation. Judge two things in the
+            diff you are auditing:
+            (a) Is the label RIGHT for the change actually shipped? A `low`
+            issue that grew into a cross-cutting refactor is mislabeled; an
+            `epic` that shipped as a two-line change is too. State the label
+            you would assign and why, in one line.
+            (b) Did the design gate run when it should have — is there an
+            agreed-design comment on the issue/PR predating the implementation
+            commits, and do the commits match it? A gated issue implemented
+            without the Q&A is a finding (severity `high`: the developer was
+            never consulted on decisions the label says are theirs).
+            Verdict line: `Complexity: <label on the issue> — appropriate |
+            understated (<actual> — <why>) | overstated (<actual> — <why>);
+            design gate: ran | should have run (<what was decided unilaterally>)
+            | not required`.
+
             TEST COVERAGE — three checks against the diff and its tests:
             (a) Path coverage — are the changed code paths covered by tests in
             this PR or existing ones? Name the specific uncovered paths.

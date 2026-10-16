@@ -32,8 +32,44 @@ When you are handed a PR you did not make (the developer commented
    `~run-audit` to get a fresh baseline.
 5. Continue the loop exactly as if you had made the PR.
 
+## Phase 0 — the design Q&A gate (medium+ complexity, or `qa-first`)
+
+Read the issue's labels and its structured JSON block (the fenced `json` at
+the end of the body). You implement directly when complexity is `trivial` or
+`low` AND the issue has no `qa-first` label. Otherwise — `medium`, `high`,
+`epic`, or any issue carrying `qa-first` — you run a design Q&A with the
+developer FIRST, before writing code:
+
+1. Post your understanding and the open questions on the issue as ONE comment:
+   what you plan to build, the decisions you would make, and every question
+   you need answered (the issue's `openQuestions` plus anything you found).
+   Give a recommendation for each so the developer can just say "yes".
+2. Retitle `#<issue> [needs-answer] — <slug>`, apply `needs-answer`, badge
+   the session unread, ledger `blocked`, then PARK (no polling — the watcher
+   wakes you when a comment lands, or the developer messages you).
+3. Iterate until the design is settled — you judge it settled when the
+   remaining unknowns cannot change what you build, or the developer says go.
+   Then remove `needs-answer`, retitle `[working]`, ledger `working`, and
+   implement. Record the agreed design in a comment so the audit can check
+   the build against it.
+
+Do not skip this gate because the change "looks obvious" — the label is the
+decision, not your in-the-moment opinion. If after investigating you believe
+the complexity label is WRONG (the issue is harder or simpler than labeled),
+say so in your Q&A comment and RELABEL it: `gh issue edit <n> --remove-label
+"complexity: <old>" --add-label "complexity: <new>"` with a one-line reason.
+Fixers own the label as much as intake does.
+
 ## Phase 1 — implement
 
+0a. **Your model follows the complexity ladder** (the cron sets it at
+   spawn; if you find it wrong, tell the developer in your handoff rather
+   than switching mid-flight — model changes are the cron's job):
+   - `trivial` / `low` → DeepSeek Flash for everything.
+   - `medium` → GLM 5.3 Flash fixes; audits run DeepSeek Flash.
+   - `high` → GLM 5.3 Flash plans and fixes; audits run DeepSeek Flash.
+   - `epic` → Kimi K3 for PLANNING ONLY, then drop to GLM 5.3 Flash to
+     execute; audits run DeepSeek Flash.
 0. **Make yourself visible first.** Note your own id (`echo $DSH_SESSION_ID`)
    — you will publish it with the PR in phase 2. Your session TITLE carries a
    live status bracket; set it now and at every transition (the developer
@@ -188,7 +224,34 @@ never asked for? When you judge it done:
       - **how to test it** — the concrete steps that exercise the issue's
         own ask (its test contract when it has one), at the preview
       Both URLs verbatim, never just one.
-   d. Post the handoff comment:
+   d. End your in-session handoff message with this exact JSON block (fenced
+      `json`, the last thing in the message) — the same hard contract intake
+      uses, so the developer (and any future cleanup agent) can read status
+      mechanically. No extra keys, none omitted:
+
+      ```json
+      {
+        "version": 1,
+        "issue": <number>,
+        "pr": <number>,
+        "complexity": "trivial | low | medium | high | epic",
+        "complexityChanged": true,
+        "status": "ready-for-review",
+        "rounds": <audit rounds this PR took>,
+        "findingsFixed": <count>,
+        "findingsDeclined": <count>,
+        "designAgreed": true,
+        "preview": "https://pr-<N>.truss.rewis",
+        "session": "session-<uuid>",
+        "smokeTested": true
+      }
+      ```
+      `complexityChanged` is true when you relabeled the issue; the label on
+      the issue is the truth, this records that you touched it.
+      `designAgreed` is true when the design Q&A gate ran and settled (or the
+      issue never needed it). `smokeTested` is true when your browser smoke
+      passed.
+   e. Post the handoff comment:
       `gh pr comment <pr> --body "..."` covering, in plain language:
       - **The original issue** — link and one-sentence restatement of the
         ask, plus the exact steps that exercise it at the preview.
