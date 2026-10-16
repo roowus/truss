@@ -14,6 +14,17 @@
 #   scripts/check-pii.sh --rev A..B # scan a commit range (CI)
 #
 # Exit 1 with a report if anything real is found.
+#
+# CI enforces this (the `pii-guard` job, which `verify` depends on), so a
+# leak cannot merge. To also catch it locally before it is ever committed:
+#
+#   ln -sf ../../scripts/check-pii.sh .git/hooks/pre-commit
+#
+# The repo has no husky/lefthook, so the hook is a per-clone opt-in; CI is
+# the path that is always on.
+#
+# NOTE: this script is the one file allowed to contain the real values — it
+# is the detector. It allowlists itself by basename.
 
 set -uo pipefail
 
