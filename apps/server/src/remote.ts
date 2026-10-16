@@ -206,7 +206,6 @@ class RemoteAdapter implements HarnessAdapter {
        shared staleness window has lapsed. Probing on every dialog open would
        fan a tunnel round-trip (plus a 5s timer) at every connected host. */
     if (!remoteCatalogWantsProbe(hostModels(this.hostId, this.adapterId).length, this.modelsProbedAt)) return false;
-    this.modelsProbedAt = Date.now();
     const reqId = `models-${++reqCounter}`;
     const models = await new Promise<ModelRow[] | null>((res) => {
       const timer = setTimeout(() => {
@@ -222,7 +221,12 @@ class RemoteAdapter implements HarnessAdapter {
       });
       agent.socket.send(JSON.stringify({ type: "models.list", reqId, adapterId: this.adapterId }));
     });
+    /* only a REAL answer confirms the catalog (audit round 2; the same rule
+       the in-process lazy catalog follows after round-1 B2). Stamping before
+       the probe resolves would let one timeout or a pre-probe agent suppress
+       re-probes for the entire staleness window. */
     if (!models) return false;
+    this.modelsProbedAt = Date.now();
     const before = hostModels(this.hostId, this.adapterId);
     setHostModels(this.hostId, models, this.adapterId);
     return JSON.stringify(before) !== JSON.stringify(models);
@@ -336,6 +340,12 @@ const liveAdapters = new Map<string, RemoteAdapter>();
 /** the live RemoteAdapter for a host+adapter, or null (test seam, see above) */
 export function adapterForHost(hostId: string, adapterId: string): HarnessAdapter | null {
   return liveAdapters.get(`${adapterId}@${hostId}`) ?? null;
+}
+
+/** when this host+adapter's catalog was last CONFIRMED by a successful probe,
+    or 0 if never (issue #232 audit round 2) — test seam, see liveAdapters */
+export function __probedAtForTest(hostId: string, adapterId: string): number {
+  return (liveAdapters.get(`${adapterId}@${hostId}`) as unknown as { modelsProbedAt?: number })?.modelsProbedAt ?? 0;
 }
 
 /** an agent connected — register its adapters as `<id>@<host>` harnesses,

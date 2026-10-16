@@ -150,22 +150,25 @@ export function lazyCatalog(key: string, harvest: () => Promise<CatalogModel[]>)
      starts at 0, i.e. immediately stale, which is correct: it is the
      previous process's answer. */
   let discoveredAt = 0;
+  /* the freshness rule, stated ONCE (audit round 2, Minor B1). wantsProbe()
+     exposes it as a test seam and probe() consults the same function, so the
+     seam cannot drift from the rule the runtime actually applies. */
+  const wantsProbe = (maxAgeMs = CATALOG_MAX_AGE_MS) =>
+    !models.length || Date.now() - discoveredAt >= maxAgeMs;
+
   return {
     list: () => models,
     set(m) {
       models = m;
       writeCatalogCache(key, m);
     },
-    wantsProbe(maxAgeMs = CATALOG_MAX_AGE_MS) {
-      /* mirrors the age predicate in probe(): an empty catalog always wants a
-         probe (#101), a non-empty one only once it is stale (#232) */
-      return !models.length || Date.now() - discoveredAt >= maxAgeMs;
-    },
+    wantsProbe,
     probe(opts: ProbeOpts = {}) {
       const maxAge = opts.maxAgeMs ?? CATALOG_MAX_AGE_MS;
-      /* an empty catalog always probes (#101); a non-empty one probes once it
-         is older than the window (#232 — the fix) */
-      if (models.length && Date.now() - discoveredAt < maxAge) return Promise.resolve(false);
+      /* the freshness rule lives in ONE place (audit round 2, Minor B1):
+         probe() delegates to wantsProbe() so the exported seam the tests
+         assert against cannot drift from the rule the runtime applies */
+      if (!wantsProbe(maxAge)) return Promise.resolve(false);
       if (inflight) return inflight;
       if (Date.now() - lastProbeAt < PROBE_COOLDOWN_MS) return Promise.resolve(false);
       lastProbeAt = Date.now();

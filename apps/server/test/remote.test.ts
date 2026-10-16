@@ -341,3 +341,48 @@ test("a POPULATED remote catalog sends no models.list over the tunnel until stal
     cleanup();
   }
 });
+
+test("only a REAL answer confirms the remote catalog — a timeout is retried (audit round 2)", async () => {
+  /* Round-2 edge finding: modelsProbedAt was stamped BEFORE the tunnel probe
+     resolved, so one timeout (or a pre-probe agent that never answers) marked
+     the catalog as freshly probed and suppressed re-probes for the whole
+     staleness window. Same shape as round-1 B2, which was fixed for the
+     in-process catalog — the remote adapter now follows the same rule.
+
+     Asserted directly on the stamp via a narrow test seam, because inferring
+     it through layered probe state gives false passes: the hello probe's own
+     success already stamps the clock, which masks a later failed probe. */
+  const { cleanup } = await freshServer("rem-probe-failed");
+  try {
+    const remote = await import("../src/remote.js");
+    remote.wireRemoteRegistry({ register: () => {}, unregister: () => {}, sessionGone: () => {} });
+
+    const sent: string[] = [];
+    /* a socket that never answers models.list — the pre-probe-agent case */
+    remote.agentHello("h-fail", "fail-host", [{ id: "pi", capabilities: CAPS }], fakeSocket(sent));
+
+    const found = remote.adapterForHost("h-fail", "pi");
+    assert.ok(found, "adapter reachable through the seam");
+    const adapter = found as { probeModels: () => Promise<boolean> };
+
+    /* the hello's own background probe is in flight; wait it out (5s timeout)
+       so we start from an unanswered, never-confirmed state */
+    await new Promise((r) => setTimeout(r, 5600));
+    assert.equal(
+      remote.__probedAtForTest("h-fail", "pi"),
+      0,
+      "an unanswered probe must leave the catalog UNCONFIRMED (stamp unset) — stamping at probe start is the bug",
+    );
+
+    /* and the adapter must therefore still want to probe */
+    sent.length = 0;
+    const inFlight = adapter.probeModels();
+    assert.ok(
+      sent.filter((s) => s.includes("models.list")).length > 0,
+      "a never-confirmed catalog must still send models.list on the next ask (audit round 2)",
+    );
+    await Promise.race([inFlight, new Promise((r) => setTimeout(r, 600))]);
+  } finally {
+    cleanup();
+  }
+});
