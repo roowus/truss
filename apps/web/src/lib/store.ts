@@ -266,6 +266,8 @@ class Store {
      it is transport bookkeeping, not render state, so putting it in the
      render path would re-render every subscriber on each send */
   private outbox: OutboxState = emptyOutbox;
+  /** the in-flight replay, so back-to-back reconnects share one pass */
+  private replaying?: Promise<void>;
 
   /**
    * Read the unacked ops. Exists so a test can assert the wiring that
@@ -698,8 +700,23 @@ class Store {
    * has forgotten would BE the duplicate we are preventing).
    *
    * Called from the reconnect path only — see onConn.
+   *
+   * Re-entrant calls are serialized: `onConn` fires this with `void`, so two
+   * quick flaps could otherwise drive two replays of the same op ids at once.
+   * The server's ledger would still dedupe the duplicate turn, but each pass
+   * would add its own "Retried after reconnect" note for one message. Sharing
+   * the in-flight promise means a second call just waits for the first.
    */
-  async replayOutbox() {
+  async replayOutbox(): Promise<void> {
+    if (this.replaying) return this.replaying;
+    const attempt = this.replayOnce().finally(() => {
+      if (this.replaying === attempt) this.replaying = undefined;
+    });
+    this.replaying = attempt;
+    return attempt;
+  }
+
+  private async replayOnce(): Promise<void> {
     const { replay, state } = outboxPending(this.outbox);
     this.outbox = state;
     if (!replay.length) return;

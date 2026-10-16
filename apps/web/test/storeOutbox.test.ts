@@ -160,3 +160,21 @@ test("#216/B1: repeated replays keep the original age stamp, so the cap can fire
   const after = store.pendingOps()[0] as unknown as { at: number };
   assert.equal(after.at, stamp, "the clock did not restart — the cap can still abandon it");
 });
+
+test("#216: concurrent replays are serialized, so one message gets one retry note", async () => {
+  /* onConn fires replayOutbox with `void`, so two quick socket flaps could
+     drive two passes over the same op ids; the server dedupes the turn, but
+     without serialization each pass adds its own "Retried after reconnect"
+     note for the one message. */
+  const { store, calls, failPrompt } = await freshStore();
+  failPrompt(1);
+  await assert.rejects(() => store.prompt("s1", "hello"));
+  const opId = calls[0]!.opId;
+  const before = calls.length;
+
+  /* two replays started together, as two flaps would */
+  await Promise.all([store.replayOutbox(), store.replayOutbox()]);
+  assert.equal(calls.length - before, 1, "the queued op was fired once, not twice");
+  assert.equal(calls[calls.length - 1]!.opId, opId);
+  assert.equal(store.pendingOps().length, 0, "and it retired");
+});
