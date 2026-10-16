@@ -63,7 +63,12 @@ SELF_BASENAME='check-pii.sh'
 mode="${1:-staged}"
 case "$mode" in
   staged)  files=$(git diff --cached --name-only --diff-filter=ACMR) ;;
-  --all)   files=$(git ls-files) ;;
+  # Tracked AND untracked-but-not-ignored: `git ls-files` alone would miss a
+  # brand-new fixture file, which is exactly where a pasted real hostname
+  # lands. CI checks out a clean tree where everything is tracked, so this
+  # only matters for the by-hand local run — but the message below tells the
+  # reader this scans "everything currently in the work tree", so it must.
+  --all)   files=$(git ls-files; git ls-files --others --exclude-standard) ;;
   --rev)   files=$(git diff --name-only "${2:?need a rev range}") ;;
   *) echo "check-pii: unknown mode '$mode'" >&2; exit 2 ;;
 esac

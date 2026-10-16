@@ -112,6 +112,27 @@ test("check-pii: --all passes on this repo's own work tree", () => {
   assert.equal(code, 0, `the cleaned tree must pass --all — the guard said:\n${stderr}`);
 });
 
+test("check-pii: --all sees an untracked file, not just tracked ones", () => {
+  /* `--all` originally used `git ls-files`, which is tracked-only — so a
+     brand-new fixture file, exactly where a pasted real hostname lands,
+     was invisible. CI checks out a clean tree where everything is tracked,
+     so this only bites the by-hand local run; but the failure message
+     advertises this mode as scanning "everything currently in the work
+     tree", so it has to be true. */
+  const dir = mkdtempSync(join(tmpdir(), "pii-untracked-"));
+  try {
+    execFileSync("git", ["init", "-q", "."], { cwd: dir });
+    // Deliberately NOT added: the file exists in the work tree only.
+    writeFileSync(join(dir, "brand-new.ts"), `export const a = 'http://${REAL_VALUES.linuxHost}';\n`);
+
+    const { code, stderr } = runGuard(dir, ["--all"]);
+    assert.equal(code, 1, `an untracked real identifier must be caught by --all — the guard said:\n${stderr}`);
+    assert.ok(stderr.includes("brand-new.ts"), "the report names the untracked file");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 /* --- polarity B: real identifiers must fire -----------------------------
    The literals below are assembled from fragments at run time rather than
    written out. That is not paranoia: the guard scans its own repo, and a
