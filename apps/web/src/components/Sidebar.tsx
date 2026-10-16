@@ -482,11 +482,12 @@ const CONFIRM_LABEL: Record<string, string> = {
 
 /* the bulk bar's armed tooltips — the set-level consequence, by action id
    (audit round 1, B4): the single-row actions name what each kind loses, and
-   the bulk path must not be vaguer than the one it multiplies */
+   the bulk path must not be vaguer than the one it multiplies. Only actions
+   the model marks confirm:true belong here (today: delete) — a future confirm
+   action without an entry falls back to the generic hint at the call site,
+   so this map is not a wish list (round 2, B3). */
 const CONFIRM_HINT: Record<string, string> = {
   delete: "Click again to confirm — chats go to trash (recoverable 30 days), shells are killed, hosts are deleted (drops their agent)",
-  archive: "Click again to archive the selected chats",
-  pin: "Click again to pin the selection",
 };
 
 
@@ -790,11 +791,11 @@ function sidebarItems(
   sessions: Record<string, SessionMeta>,
   terminals: TerminalInfo[],
   hosts: HostInfo[],
-): { id: string; kind: string }[] {
-  const items: { id: string; kind: string }[] = [];
-  for (const id of Object.keys(sessions)) items.push({ id, kind: "session" });
-  for (const t of terminals) items.push({ id: t.id, kind: "shell" });
-  for (const h of hosts) items.push({ id: h.id, kind: "host" });
+): { id: string; kind: string; pinned: boolean }[] {
+  const items: { id: string; kind: string; pinned: boolean }[] = [];
+  for (const id of Object.keys(sessions)) items.push({ id, kind: "session", pinned: !!sessions[id]?.pinned });
+  for (const t of terminals) items.push({ id: t.id, kind: "shell", pinned: !!t.pinned });
+  for (const h of hosts) items.push({ id: h.id, kind: "host", pinned: !!h.pinned });
   return items;
 }
 
@@ -829,6 +830,15 @@ function BulkBar({
     return () => clearTimeout(t);
   }, [confirm]);
 
+  /* audit round 2 (B1): the two-click gate guards a SPECIFIC target set, so
+     the arm must not survive a change to that set. Without this, arming
+     "Kill 2 shells" and then ctrl-clicking a third left the button armed and
+     reading "Kill 3 shells" — one more click would have fired on a set the
+     arming click never applied to. Keyed on the selection's identity, so it
+     also disarms when the set is replaced wholesale or emptied. */
+  const selKey = [...sel.ids].sort().join("\u0000");
+  useEffect(() => setConfirm(false), [selKey]);
+
   const ids = [...sel.ids];
   const kill = (action: BulkAction) => {
     /* reason-disabled actions do nothing and say why (via title) */
@@ -839,11 +849,14 @@ function BulkBar({
     }
     switch (action.id) {
       case "pin": {
-        /* pin the set, then clear: the gesture is done */
+        /* pin the set, then clear: the gesture is done. Round 2 (B2): an
+           all-pinned set gets the Unpin action instead, so the intent is
+           carried by the model's label — pin true unless this is that case. */
+        const want = !/^unpin/i.test(action.label);
         for (const id of ids) {
-          if (sessions[id]) void store.pinSession(id, true);
-          else if (terminals.some((t) => t.id === id)) void store.pinTerminal(id, true);
-          else if (hosts.some((h) => h.id === id)) void store.pinHost(id, true);
+          if (sessions[id]) void store.pinSession(id, want);
+          else if (terminals.some((t) => t.id === id)) void store.pinTerminal(id, want);
+          else if (hosts.some((h) => h.id === id)) void store.pinHost(id, want);
         }
         return onClear();
       }

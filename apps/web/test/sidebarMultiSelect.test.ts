@@ -118,9 +118,9 @@ test("bulk dispatch is per-kind and keeps the two-click gate (never a lighter co
   assert.ok(/desktops\.killTerminal\(id\)/.test(bar), "shells → kill");
   assert.ok(/store\.deleteHost\(id\)/.test(bar), "hosts → delete");
   assert.ok(/store\.archiveSession\(id, true\)/.test(bar), "archive → archiveSession");
-  assert.ok(/store\.pinSession\(id, true\)/.test(bar), "pin routes per kind too");
-  assert.ok(/store\.pinTerminal\(id, true\)/.test(bar), "…shell");
-  assert.ok(/store\.pinHost\(id, true\)/.test(bar), "…host");
+  assert.ok(/store\.pinSession\(id, want\)/.test(bar), "pin routes per kind too");
+  assert.ok(/store\.pinTerminal\(id, want\)/.test(bar), "…shell");
+  assert.ok(/store\.pinHost\(id, want\)/.test(bar), "…host");
 
   /* a disabled action says why and does nothing */
   assert.ok(/if \(action\.disabled\) return;/.test(bar), "a reason-disabled action is inert");
@@ -186,4 +186,46 @@ test("the bulk destructive tooltip names the per-kind consequence (round-1 B4)",
     "the bulk delete repeats the single-row warning — it is the MORE destructive path, never vaguer",
   );
   assert.ok(!/Click again to confirm"\s*:/.test(src), "the generic 'Click again to confirm' is gone");
+});
+
+test("the armed confirm does not survive a selection change (round-2 B1)", () => {
+  const bar = src.slice(src.indexOf("function BulkBar("));
+  /* the arm is keyed to the selection's identity: arm "Kill 2 shells", then
+     ctrl-click a third, and the button must not still be armed reading
+     "Kill 3 shells" — one more click would fire on a set the arming click
+     never applied to */
+  assert.ok(
+    /const selKey = \[\.\.\.sel\.ids\]\.sort\(\)\.join\("\\u0000"\)/.test(bar),
+    "the bar derives a key from the selected ids",
+  );
+  assert.ok(
+    /useEffect\(\(\) => setConfirm\(false\), \[selKey\]\)/.test(bar),
+    "…and disarms whenever that key changes (round-2 B1)",
+  );
+});
+
+test("CONFIRM_HINT holds only reachable entries (round-2 B3)", () => {
+  const hint = src.slice(src.indexOf("const CONFIRM_HINT"), src.indexOf("/* ---------------- multi-select bulk actions"));
+  assert.ok(/delete:/.test(hint), "delete is the confirm action and keeps its per-kind warning");
+  /* only the model's confirm:true action can ever render an armed tooltip */
+  assert.ok(!/^\s*archive:/m.test(hint), "no dead archive entry — nothing arms archive");
+  assert.ok(!/^\s*pin:/m.test(hint), "no dead pin entry — nothing arms pin");
+});
+
+test("the pin dispatch honours the Unpin label (round-2 B2)", () => {
+  const bar = src.slice(src.indexOf("function BulkBar("));
+  assert.ok(
+    /const want = !\/\^unpin\/i\.test\(action\.label\)/.test(bar),
+    "the pin branch reads its own label so an all-pinned set actually unpins",
+  );
+  assert.ok(/store\.pinSession\(id, want\)/.test(bar), "…session");
+  assert.ok(/store\.pinTerminal\(id, want\)/.test(bar), "…shell");
+  assert.ok(/store\.pinHost\(id, want\)/.test(bar), "…host");
+});
+
+test("the sidebar reports pinned state to the model (round-2 B2 needs it)", () => {
+  assert.ok(
+    /pinned: !!sessions\[id\]\?\.pinned/.test(src) && /pinned: !!t\.pinned/.test(src) && /pinned: !!h\.pinned/.test(src),
+    "all three kinds pass their pinned flag, so the model can tell an all-pinned set",
+  );
 });

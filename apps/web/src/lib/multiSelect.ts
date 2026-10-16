@@ -119,7 +119,7 @@ const KIND_NOUN: Record<string, string> = {
   host: "host",
 };
 
-function kindsOf(sel: SelectionState, items: { id: string; kind: string }[]): Set<string> {
+function kindsOf(sel: SelectionState, items: BulkItem[]): Set<string> {
   const present = new Set((items ?? []).map((i) => i.id));
   const kinds = new Set<string>();
   for (const id of sel?.ids ?? []) {
@@ -129,23 +129,46 @@ function kindsOf(sel: SelectionState, items: { id: string; kind: string }[]): Se
   return kinds;
 }
 
-export function bulkActions(sel: SelectionState, items: { id: string; kind: string }[]): BulkAction[] {
+/** A row descriptor handed to `bulkActions`. `pinned` is optional and only
+ *  read for the pin action's honesty: a surface that doesn't track pinning
+ *  (a Files tree, #226) simply omits it and gets a live pin, exactly as
+ *  before. */
+export interface BulkItem {
+  id: string;
+  kind: string;
+  pinned?: boolean;
+}
+
+export function bulkActions(sel: SelectionState, items: BulkItem[]): BulkAction[] {
   const kinds = kindsOf(sel, items);
   /* nothing (live) selected → no actions at all, not a row of dead buttons */
   if (kinds.size === 0) return [];
 
-  const n = [...(sel?.ids ?? [])].filter((id) => (items ?? []).some((i) => i.id === id)).length;
+  const live = (items ?? []).filter((i) => (sel?.ids ?? new Set<string>()).has(i.id));
+  const n = live.length;
   const single = kinds.size === 1;
   const only = single ? [...kinds][0] : null;
   const noun = (only && KIND_NOUN[only]) || "item";
   const plural = n === 1 ? noun : `${noun}s`;
   const actions: BulkAction[] = [];
 
-  /* pin covers all three kinds — the one action a mixed set can still take */
-  actions.push({
-    id: "pin",
-    label: n === 1 ? `Pin ${plural}` : `Pin ${n} ${plural}`,
-  });
+  /* pin covers all three kinds — the one action a mixed set can still take.
+     Round 2 (B2): it must be HONEST about the set's current state. When the
+     surface reports pinned flags and every selected row already carries one,
+     pinning again is a silent no-op (and the bar would still clear the
+     selection) — so the action says so instead. The per-row pin toggles, so
+     "all pinned" is the only state where the set-level pin has nothing to do;
+     a partial set still has work, and unpinning a mixed set is a different
+     verb than the label promises, so it isn't silently substituted. */
+  const pinKnown = live.length > 0 && live.every((i) => typeof i.pinned === "boolean");
+  if (pinKnown && live.every((i) => i.pinned)) {
+    actions.push({ id: "pin", label: n === 1 ? `Unpin ${plural}` : `Unpin ${n} ${plural}`, disabled: "already pinned" });
+  } else {
+    actions.push({
+      id: "pin",
+      label: n === 1 ? `Pin ${plural}` : `Pin ${n} ${plural}`,
+    });
+  }
 
   /* archiving is a session concept; mixed sets can't be archived wholesale */
   actions.push(

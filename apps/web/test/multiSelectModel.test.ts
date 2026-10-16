@@ -139,3 +139,41 @@ test("modifier typing: the exported names #226 imports exist", () => {
   assert.equal(mods.shift, true);
   assert.equal(sel.anchor, null);
 });
+
+test("bulk pin is honest about an all-pinned set (audit round 2, B2)", () => {
+  /* a surface that reports pinned flags: all pinned → pinning again is a
+     silent no-op, so the action says so rather than clearing the selection
+     as if it had done something */
+  const allPinned = bulkActions(
+    applyClick(applyClick(createSelection(), "s1", {}, ALL), "s2", { shift: true }, ALL),
+    [
+      { id: "s1", kind: "session", pinned: true },
+      { id: "s2", kind: "session", pinned: true },
+    ],
+  );
+  const pin = allPinned.find((a) => a.id === "pin")!;
+  assert.match(pin.label, /unpin/i, "an all-pinned set offers Unpin, not a no-op Pin");
+  assert.equal(pin.disabled, "already pinned", "…and says why it can't simply pin");
+
+  /* a partial set still has real work to do → a live Pin */
+  const somePinned = bulkActions(
+    applyClick(applyClick(createSelection(), "s1", {}, ALL), "s2", { shift: true }, ALL),
+    [
+      { id: "s1", kind: "session", pinned: true },
+      { id: "s2", kind: "session", pinned: false },
+    ],
+  );
+  const live = somePinned.find((a) => a.id === "pin")!;
+  assert.equal(live.disabled, undefined, "a partially-pinned set can still be pinned");
+  assert.doesNotMatch(live.label, /unpin/i, "…and is not mislabelled as an unpin");
+
+  /* a surface with no pinned concept (a Files tree, #226) omits the flag and
+     gets exactly the old behaviour — the extension is backwards compatible */
+  const unknown = bulkActions(
+    applyClick(createSelection(), "s1", {}, ALL),
+    [{ id: "s1", kind: "file" }],
+  );
+  const bare = unknown.find((a) => a.id === "pin")!;
+  assert.equal(bare.disabled, undefined, "no pinned flag → live pin, unchanged for #226");
+  assert.match(bare.label, /^pin/i, "…and the plain Pin label");
+});
