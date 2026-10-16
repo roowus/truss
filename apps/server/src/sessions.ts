@@ -30,6 +30,45 @@ interface LiveSession {
 
 const live = new Map<string, LiveSession>();
 
+/**
+ * A prompt arrived for a session whose harness is gone and could not be
+ * resumed (issue #235). Carries the row's last stored failure detail when
+ * there is one, so the 409 can name the real reason instead of the cwd —
+ * the cwd is irrelevant to a spawn failure, and pointing at it sent users
+ * to the wrong directory.
+ */
+export class NotResumableError extends Error {
+  constructor(
+    readonly state: string,
+    readonly why?: string,
+  ) {
+    /* plain, path-free, and em-dash-free: this string is what the user
+       reads in the chat banner (TRUSS.md). `detail` carries the raw cause
+       for anything that wants it structured. */
+    super(
+      why
+        ? `This session can't be resumed because it ended in the "${state}" state. Reason: ${why}`
+        : `This session can't be resumed: it is in the "${state}" state and the harness has no running process for it.`,
+    );
+    this.name = "NotResumableError";
+  }
+}
+
+/** the detail of the newest `session.state error` event, if the log has one */
+function lastSessionFailureDetail(sessionId: string): string | undefined {
+  try {
+    for (const { ev } of [...store.listEvents(sessionId)].reverse()) {
+      if (ev.type !== "session.state") continue;
+      const detail = (ev as { detail?: unknown }).detail;
+      if (typeof detail === "string" && detail.trim()) return detail;
+      return undefined;
+    }
+  } catch {
+    /* a store that cannot be read must not turn a refusal into a crash */
+  }
+  return undefined;
+}
+
 /** wire frame: seq is the event-log rowid; clients dedupe replay vs live by it */
 export interface EventFrame {
   seq: number;
@@ -399,7 +438,14 @@ export async function sendPrompt(
       const resumed = await resumeLiveSession(sessionId);
       if (resumed) s = resumed;
     }
-    if (!s) throw new Error(`session is ${row.state} — harness process not running`);
+    if (!s) {
+      /* the row carries the state, but WHY it died is only in the event
+         store — read it back so the caller (and the 409 it becomes) can
+         name the real failure instead of inviting the user to guess
+         (issue #235: the old message pointed at the session's cwd, which
+         had nothing to do with the failure) */
+      throw new NotResumableError(row.state, lastSessionFailureDetail(sessionId));
+    }
   }
   // the user bubble is a local echo: instant in UI, persisted like everything else
   const messageId = `u-${Date.now()}`;
