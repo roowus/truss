@@ -124,7 +124,7 @@ function HealthItem({ health, open, onToggle }: { health: HealthSnapshot | null;
   const rows = healthRows(health);
   return (
     <div className="relative h-full">
-      <SBItem onClick={onToggle} title={`Server health: ${meta.label} — ${meta.hint}`}>
+      <SBItem onClick={onToggle} title={`Server health: ${meta.label}. ${meta.hint}`}>
         <span className="w-1.5 h-1.5 rounded-full" style={{ background: meta.color }} />
         {meta.label}
       </SBItem>
@@ -144,7 +144,7 @@ function HealthItem({ health, open, onToggle }: { health: HealthSnapshot | null;
               </div>
             )}
             <div className="max-h-[300px] overflow-auto t-scroll py-1">
-              {rows.length === 0 && <div className="px-3 py-2 text-[11px] text-[var(--t-dim)]">No snapshot yet — the server has not reported.</div>}
+              {rows.length === 0 && <div className="px-3 py-2 text-[11px] text-[var(--t-dim)]">No snapshot yet. The server has not reported.</div>}
               {rows.map((r) => {
                 const m = HEALTH_META[r.state] ?? HEALTH_META.down;
                 return (

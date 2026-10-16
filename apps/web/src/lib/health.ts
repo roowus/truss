@@ -44,7 +44,7 @@ export function healthDotState(snapshot: HealthSnapshot | null): HealthState | "
     health we have not been told about. */
 export const HEALTH_META: Record<HealthState | "unknown", { label: string; color: string; hint: string }> = {
   ok: { label: "healthy", color: "var(--t-teal)", hint: "Every subsystem came up" },
-  degraded: { label: "degraded", color: "var(--t-amber)", hint: "Running with less — see the details" },
+  degraded: { label: "degraded", color: "var(--t-amber)", hint: "Running with less. See the details" },
   down: { label: "down", color: "var(--t-red)", hint: "A subsystem the server cannot pretend about is down" },
   unknown: { label: "unknown", color: "var(--t-dim)", hint: "No health snapshot yet" },
 };

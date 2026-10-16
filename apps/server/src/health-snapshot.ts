@@ -166,7 +166,7 @@ export function redactUrl(raw: string): string {
     const u = new URL(raw);
     return `${u.protocol}//${u.host}${u.pathname}`;
   } catch {
-    return "<configured endpoint (unparseable — value withheld)>";
+    return "<configured endpoint (unparseable, value withheld)>";
   }
 }
 

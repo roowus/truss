@@ -215,3 +215,19 @@ test("the Store class body is not collapsed onto its declaration line", () => {
   );
   assert.match(src, /class Store \{\n\s+state: AppState = \{/, "the class declaration and its state field are on separate lines");
 });
+
+test("no em dashes in this feature's user-facing copy (TRUSS.md)", () => {
+  /* TRUSS.md: "No em dashes in user-facing copy." The health labels, hints
+     and popover strings render verbatim, so they are copy, not comments.
+     (Comments are exempt; only the strings the user reads are checked.) */
+  const src = readFileSync(new URL("../src/lib/health.ts", import.meta.url), "utf8");
+  for (const line of src.split("\n")) {
+    const trimmed = line.trim();
+    // skip comment lines — the rule is about copy the user reads
+    if (trimmed.startsWith("*") || trimmed.startsWith("/*") || trimmed.startsWith("//")) continue;
+    const strings = line.match(/"([^"]*)"|`([^`]*)`/g) ?? [];
+    for (const s of strings) {
+      assert.ok(!s.includes("—"), `em dash in user-facing copy: ${s} (TRUSS.md bans it)`);
+    }
+  }
+});

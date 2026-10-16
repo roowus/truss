@@ -147,8 +147,6 @@ test("a host with no harnesses installed still reports degraded, never down", ()
   rmSync(dir, { recursive: true, force: true });
 });
 
-/* ALL adapters missing is STILL degraded — a server with zero harnesses
-   serves its UI, history, and event log. That is "works with less". */
 test("the catalog row is never a hardcoded ok when nothing has loaded", () => {
   /* audit round 1, B2: probeCatalog returned "ok" on both branches, so the
      row was permanently green even when no catalog had ever loaded — while
