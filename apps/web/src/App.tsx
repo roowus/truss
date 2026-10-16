@@ -8,7 +8,7 @@ import { StatusBar, Toasts, CommandPalette } from "@/components/Chrome";
 import { NewSessionDialog, type NewSessionPreset } from "@/components/NewSessionDialog";
 import { AddHostWizard } from "./components/AddHostWizard";
 import { openPanel } from "@/lib/workspace";
-import { canClose, isAddTabChord, isCloseTabChord, isCloseWindowChord, isNewWorkspaceChord, isReopenClosedChord } from "@/lib/workspaceClose";
+import { canClose, isAddTabChord, isCloseTabChord, isCloseWindowChord, isNewWorkspaceChord, isReopenClosedChord, workspaceIndexFromChord } from "@/lib/workspaceClose";
 import { TrussLogo, Spinner } from "@/components/ui";
 import { cn } from "@/utils/cn";
 
@@ -104,8 +104,12 @@ function Shell() {
       } else if ((e.metaKey || e.ctrlKey) && e.key === ",") {
         e.preventDefault();
         openPanel("settings");
-      } else if (!typing && !e.ctrlKey && !e.metaKey && e.altKey && !e.shiftKey && /^[1-9]$/.test(e.key)) {
-        const space = desktops.state.spaces[Number(e.key) - 1];
+      } else if (!typing && workspaceIndexFromChord(e) !== null) {
+        /* Alt+1-9 (issue #186): e.key only was dead on macOS, where Option
+           composes the digit row into glyphs ("¡" for Option+1); the helper
+           falls back to e.code without double-firing on shifted digit rows. */
+        const index = workspaceIndexFromChord(e) as number;
+        const space = desktops.state.spaces[index];
         if (space) { e.preventDefault(); desktops.switchTo(space.id); }
       } else if (!typing && !e.metaKey && !e.ctrlKey && !e.altKey && e.key.toLowerCase() === "n") {
         e.preventDefault();

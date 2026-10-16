@@ -208,6 +208,36 @@ const altChord = (e: ChordEvent, key: string, code: string, shift: boolean) => {
   return letter !== null ? letter === key : e.code === code;
 };
 
+/* The same letter-first, code-fallback discipline for the DIGIT row (issue
+   #186). The numbers differ from the letters in one way that matters: a digit
+   is unambiguous under Shift, so there is no second Alt+Shift+<digit> chord
+   to disambiguate — Alt+1-9 is the whole family, advertised that way in the
+   strip tooltips and the palette.
+
+   Why the fallback is needed: macOS Option is a composer on the number row
+   too. Option+1 reports "¡" as e.key on a US layout (2 "™", 3 "£", 4 "¢",
+   5 "∞", 6 "§", 7 "¶", 8 "•", 9 "ª"), so the App.tsx regex that matched
+   /^[1-9]$/ against e.key was dead on mac — the exact #186 bug — while the
+   physical position still arrives as e.code Digit1..Digit9.
+
+   Why it cannot be a plain e.key OR e.code match: the round-3 audit's
+   double-fire shape (see letterOf above) recurs on any layout whose digit
+   row is shifted. AZERTY is the standard case — the 1-labeled key types "&"
+   with code Digit1 — so an OR would fire the switch for a plain "&" AND
+   again for the physical key, two workspaces from one keydown. So: a plain
+   digit in e.key decides alone (the printed digit is the chord's meaning,
+   matching how the letters trust the printed letter); e.code is consulted
+   only when e.key carried no digit at all, which is the Option-glyph path.
+   One keydown yields one index, never two. */
+const digitOf = (e: ChordEvent) => {
+  const k = e.key;
+  return k.length === 1 && k >= "1" && k <= "9" ? Number(k) : null;
+};
+
+/** The Alt frame shared by the alphabetic chords: exactly Alt(+Shift) — no Cmd/Ctrl, since AltGr (Ctrl+Alt) is typing, not a chord. */
+const altOnly = (e: ChordEvent, shift: boolean) =>
+  e.altKey === true && (e.shiftKey === true) === shift && e.metaKey !== true && e.ctrlKey !== true;
+
 /**
  * The Alt family: Chrome's window/tab commands one for one, with Alt swapped
  * in for the Ctrl/Cmd browsers reserve (those keydowns never reach a plain
@@ -250,6 +280,27 @@ export const isCloseWindowChord = (e: ChordEvent, typing = false) => chord(e, "w
  */
 export const isReopenClosedChord = (e: ChordEvent, typing = false) =>
   chord(e, "t") || (chord(e, "z") && !typing) || (altChord(e, "t", "KeyT", true) && !typing);
+
+/**
+ * Alt+1-9: switch to the Nth workspace — Chrome's Ctrl+1-9 (which browsers
+ * reserve for their own tabs, so it takes the family's Alt like the rest).
+ * Returns the 0-based workspace index the chord selects, or null when the
+ * event is not that chord; App.tsx resolves the index against the live
+ * workspace list and does nothing when that workspace does not exist.
+ *
+ * Shift is not part of it (the tooltips and the palette both advertise
+ * plain Alt+<N>), and this yields while typing like its siblings.
+ */
+export const workspaceIndexFromChord = (e: ChordEvent): number | null => {
+  if (!altOnly(e, false)) return null;
+  const digit = digitOf(e);
+  if (digit !== null) return digit - 1;
+  /* e.key was not a plain digit: macOS Option composed a glyph (issue #186),
+     or the layout put something else on the row. Fall back to physical
+     position — and only a digit code, so stray glyphs never match. */
+  const code = e.code ?? "";
+  return /^Digit[1-9]$/.test(code) ? Number(code.slice(5)) - 1 : null;
+};
 
 /* Sized for the mixed stack: tab closes vastly outnumber workspace closes,
    and Chrome keeps ~25 — a 5-deep cap let six quick tab closes evict a
