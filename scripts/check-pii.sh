@@ -68,17 +68,25 @@ REAL_PERSONAL='lewishelh|/Users/rewis\b|/home/rewis\b|rewis/projects'
 
 PATTERN="(${REAL_TAILNET}|${REAL_IPS}|${REAL_V6}|${REAL_HOSTS}|${REAL_DEVICE_LABEL}|${REAL_PERSONAL})"
 
-# Files that legitimately document the sanitization rule itself. This is a
-# `case` GLOB, not an ERE — `case` matches shell patterns, so `^`, `(`, `|`
-# and `$` are literal, and a pattern built in a variable does not gain
-# alternation when expanded ($A as one word is a single pattern). The
+# Paths that legitimately carry the real values, because they ARE the rule.
+# This is a `case` GLOB, not an ERE — `case` matches shell patterns, so `^`,
+# `(`, `|` and `$` are literal, and a pattern built in a variable does not
+# gain alternation when expanded ($A as one word is a single pattern). The
 # patterns are therefore written literally here. (`pii-guard.test.ts` pins
 # that this branch is live: the guard's own failure message tells readers to
 # use it, and a dead escape hatch is worse than none.)
+#
+# DELIBERATELY MINIMAL. An earlier revision also exempted
+# `.github/workflows/*.yml|*.yaml` "just in case", which no workflow needed:
+# it skipped files that would have passed anyway while blinding the guard to
+# the one class of file where deploy hostnames and IPs most plausibly land.
+# TRUSS.md's rule is to allowlist the SPECIFIC file on a genuine false
+# positive — never a pre-emptive class carve-out. `check-pii.sh` itself is
+# already skipped by the SELF_BASENAME check below.
 SELF_BASENAME='check-pii.sh'
 is_allowlisted() {
   case "${1:-}" in
-    scripts/check-pii.sh|.github/workflows/*.yml|.github/workflows/*.yaml) return 0 ;;
+    scripts/check-pii.sh) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -101,7 +109,28 @@ case "$mode" in
   # only matters for the by-hand local run — but the message below tells the
   # reader this scans "everything currently in the work tree", so it must.
   --all)   { git ls-files -z; git ls-files -z --others --exclude-standard; } >"$list" ;;
-  --rev)   git diff --name-only -z "${2:?need a rev range}" >"$list" ;;
+  --rev)
+    # Resolve the range BEFORE diffing. `set -uo pipefail` (no -e) means an
+    # unresolvable range would print git's fatal to stderr, write nothing to
+    # the list, and leave the script exiting 0 — i.e. "range clean" for a
+    # typo'd base ref or a `git fetch` that silently failed to create
+    # origin/<base>. Since pii-guard gates `verify`, that silent pass would
+    # let a leak merge, contradicting this script's own rule that a guard
+    # which exits 0 on bad input is a guard one edit away from disabled.
+    rev="${2:?need a rev range}"
+    # Strip a two- or three-dot range to its base so we can prove it resolves.
+    # Order matters: check "..." first, since ".." also matches inside "A...B".
+    base="${rev%%...*}"
+    [ "$base" = "$rev" ] && base="${rev%%..*}"
+    if ! git rev-parse --verify --quiet "$base" >/dev/null; then
+      echo "check-pii: '$rev' is not a resolvable range — refusing to report a clean scan" >&2
+      exit 2
+    fi
+    if ! git diff --name-only -z "$rev" >"$list"; then
+      echo "check-pii: 'git diff $rev' failed — refusing to report a clean scan" >&2
+      exit 2
+    fi
+    ;;
   *) echo "check-pii: unknown mode '$mode'" >&2; exit 2 ;;
 esac
 

@@ -209,26 +209,76 @@ test("check-pii: the real device label is caught in EVERY spelling used", () => 
   }
 });
 
-test("check-pii: the documented allowlist escape hatch actually works", () => {
-  /* Audit round 1, B3. ALLOWLIST was an ERE string used as a `case` glob, so
-     `^`, `(`, `|` and `$` were literal and the branch never matched anything.
-     The guard is still safe today (the basename check skips the script), but
-     its own failure message instructs the reader to use the allowlist when
-     they hit a false positive — and since `pii-guard` gates `verify`, a dead
-     escape hatch is a trap. The patterns are now literal `case` globs inside
-     a function, and this pins that a workflow file is genuinely exempt. */
+test("check-pii: the allowlist is live, minimal, and does NOT exempt workflows", () => {
+  /* Audit round 1, B3 + audit round 2, B1. Two things are pinned here.
+
+     B3: ALLOWLIST was an ERE string used as a `case` glob, so `^`, `(`, `|`
+     and `$` were literal and the branch never matched anything. The guard was
+     still safe (the basename check skips the script), but its own failure
+     message tells the reader to use the allowlist on a false positive, and a
+     dead escape hatch that gates `verify` is a trap.
+
+     B1: the first fix over-corrected by also exempting every workflow file
+     "just in case". No workflow needed it, so it skipped files that would
+     have passed anyway while blinding the guard to the one class of file
+     where deploy hostnames and IPs most plausibly land. TRUSS.md says to
+     allowlist the specific file on a genuine false positive. Both halves are
+     asserted: the script is skipped, a workflow is NOT. */
   const dir = mkdtempSync(join(tmpdir(), "pii-allow-"));
   try {
     const git = (...args: string[]) =>
       execFileSync("git", ["-c", "user.email=t@e", "-c", "user.name=t", ...args], { cwd: dir, stdio: "pipe" });
     git("init", "-q", ".");
     mkdirSync(join(dir, ".github", "workflows"), { recursive: true });
-    // A workflow legitimately names the real suffix, so it is allowlisted.
-    writeFileSync(join(dir, ".github", "workflows", "ci.yml"), `# ${REAL_VALUES.suffix}\n`);
+    mkdirSync(join(dir, "scripts"), { recursive: true });
+    // The detector itself is exempt: it is the rule, and must hold the values.
+    writeFileSync(join(dir, "scripts", "check-pii.sh"), `# ${REAL_VALUES.suffix}\n`);
+    // A workflow is NOT exempt — that carve-out was removed (B1).
+    writeFileSync(join(dir, ".github", "workflows", "deploy.yml"), `# ${REAL_VALUES.suffix}\n`);
     git("add", "-A");
 
     const { code, stderr } = runGuard(dir);
-    assert.equal(code, 0, `an allowlisted path must be skipped — the guard said:\n${stderr}`);
+    assert.equal(code, 1, `a workflow is not allowlisted and must be scanned — the guard said:\n${stderr}`);
+    // The report lists offending paths 2-space indented; the trailer below
+    // mentions check-pii.sh by name in its guidance, so assert on the report
+    // line specifically rather than on the whole message.
+    assert.match(stderr, /^ {2}\.github\/workflows\/deploy\.yml$/m, "the report names the workflow file");
+    assert.doesNotMatch(stderr, /^ {2}scripts\/check-pii\.sh$/m, "the detector itself stays exempt");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("check-pii: --rev refuses a range it cannot resolve instead of passing", () => {
+  /* Audit round 2, B2. `--rev` ran `git diff <range>` without checking its
+     status, and the script sets `-uo pipefail` but not `-e`. An unresolvable
+     range therefore printed git's fatal to stderr, wrote nothing to the file
+     list, and exited 0 — "range clean" for a typo'd base ref, or for a
+     `git fetch` that silently failed to create origin/<base>. Since
+     pii-guard gates `verify`, that silent pass could let a leak merge; it is
+     also the exact failure the unknown-mode test calls out. Valid ranges in
+     both spellings must still work, so the check cannot simply refuse
+     everything. */
+  const dir = mkdtempSync(join(tmpdir(), "pii-revbad-"));
+  try {
+    const git = (...args: string[]) =>
+      execFileSync("git", ["-c", "user.email=t@e", "-c", "user.name=t", ...args], { cwd: dir, stdio: "pipe" });
+    git("init", "-q", ".");
+    writeFileSync(join(dir, "a.ts"), "export const a = 'devbox.example.ts.net';\n");
+    git("add", "-A");
+    git("commit", "-qm", "base");
+    writeFileSync(join(dir, "b.ts"), "export const b = 1;\n");
+    git("add", "-A");
+    git("commit", "-qm", "second");
+
+    for (const bogus of ["totally-bogus-range", "nope...HEAD"]) {
+      const { code, stderr } = runGuard(dir, ["--rev", bogus]);
+      assert.equal(code, 2, `--rev '${bogus}' must refuse, not report a clean scan — got:\n${stderr}`);
+    }
+    for (const good of ["HEAD~1...HEAD", "HEAD~1..HEAD"]) {
+      const { code, stderr } = runGuard(dir, ["--rev", good]);
+      assert.equal(code, 0, `--rev '${good}' must still work — the guard said:\n${stderr}`);
+    }
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -271,14 +321,20 @@ test("check-pii: --rev catches an identifier introduced in the range", () => {
     writeFileSync(join(dir, "leak.ts"), `export const a = 'http://${REAL_VALUES.linuxHost}';\n`);
     git("add", "-A");
     git("commit", "-qm", "plant");
+    // A third commit so HEAD~2 resolves: since audit round 2 the guard
+    // REFUSES an unresolvable range (exit 2) rather than reporting it clean,
+    // so the "clean range" control below needs a base that actually exists.
+    writeFileSync(join(dir, "after.ts"), "export const c = 1;\n");
+    git("add", "-A");
+    git("commit", "-qm", "after");
 
-    const caught = runGuard(dir, ["--rev", "HEAD~1...HEAD"]);
+    const caught = runGuard(dir, ["--rev", "HEAD~2...HEAD~1"]);
     assert.equal(caught.code, 1, "a planted identifier must fail the range scan");
     assert.ok(caught.stderr.includes("rin" + "uxfedola"), "the report names the planted file's line");
 
-    /* and the range *before* the leak is clean — so the failure above is the
+    /* and the range *after* the leak is clean — so the failure above is the
        identifier, not a blanket refusal in --rev mode */
-    const clean = runGuard(dir, ["--rev", "HEAD~2...HEAD~1"]);
+    const clean = runGuard(dir, ["--rev", "HEAD~1...HEAD"]);
     assert.equal(clean.code, 0, `the clean range must pass — the guard said:\n${clean.stderr}`);
   } finally {
     rmSync(dir, { recursive: true, force: true });
