@@ -231,14 +231,17 @@ function ChatHeader({ id }: { id: string }) {
               <Icon name="clip" size={13} className="text-[var(--t-mute)]" />
               Copy reference
             </button>
-            {/* the full identity, copyable (issue #132): the same block the
-                dump below displays, so what the user reads is what they
-                paste — line 1 is the #13 one-liner, untouched */}
+            {/* the full identity, copyable (issue #132): line 1 is the #13
+                one-liner, untouched, then every id we hold labeled and the
+                unshortened cwd (formatSessionRefFull's labels match the dump
+                below). The toast body is a one-line hint, not the block: the
+                toast renders bodies on a single line, and every other copy
+                affordance here does the same (audit B1) */}
             <button
               onClick={() => {
                 const fullText = formatSessionRefFull(meta, hosts);
                 void navigator.clipboard.writeText(fullText);
-                store.toast("ok", "Full details copied", fullText);
+                store.toast("ok", "Full details copied", formatSessionRef(meta, hosts));
                 setMenu(false);
               }}
               className="w-full flex items-center gap-2.5 px-3 h-8 text-left text-[12.5px] text-[var(--t-fg2)] hover:bg-white/[0.05]"
@@ -263,9 +266,10 @@ function ChatHeader({ id }: { id: string }) {
             )}
             <div className="px-3 py-1.5 text-[11px] leading-relaxed">
               {/* the all-ids dump, displayed: every id we hold, labeled, full
-                  cwd — these are the same labels formatSessionRefFull emits,
-                  so the displayed dump and "Copy full details" agree word for
-                  word (issue #132) */}
+                  cwd — the labels are formatSessionRefFull's (issue #132).
+                  This is a superset of the copy block, not a transcript of
+                  it: it also shows the resume row, and it renders a cwd row
+                  even when cwd is empty where the copy omits one */}
               <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-2.5 gap-y-0.5 font-mono">
                 <dt className="text-[var(--t-dim)]">truss</dt>
                 <dd className="text-[var(--t-mute)] break-all">{meta.id}</dd>
