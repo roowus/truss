@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { detectBackend } from "@/lib/backend";
 import { store, useApp } from "@/lib/store";
 import { desktops, useDesktops } from "@/lib/desktops";
@@ -8,6 +8,8 @@ import { StatusBar, Toasts, CommandPalette } from "@/components/Chrome";
 import { NewSessionDialog, type NewSessionPreset } from "@/components/NewSessionDialog";
 import { AddHostWizard } from "./components/AddHostWizard";
 import { openPanel } from "@/lib/workspace";
+import { isFindChord } from "@/lib/findInPanel";
+import { openFindInActivePanel } from "@/lib/findRuntime";
 import { canClose, isAddTabChord, isCloseTabChord, isCloseWindowChord, isNewWorkspaceChord, isReopenClosedChord } from "@/lib/workspaceClose";
 import { TrussLogo, Spinner } from "@/components/ui";
 import { cn } from "@/utils/cn";
@@ -60,6 +62,13 @@ function Shell() {
   const [palette, setPalette] = useState(false);
   const [addHost, setAddHost] = useState(false);
   const [sidebar, setSidebar] = useState(() => window.innerWidth >= 900);
+  /* a modal owns the keyboard: the find chord is still intercepted (the
+     browser find never opens) but no bar mounts under an overlay — its
+     autofocus would steal the dialog's field (audit B3). Read through a
+     ref: the capture listener below registers once. */
+  const modalOpen = dialog || palette || addHost;
+  const modalRef = useRef(modalOpen);
+  modalRef.current = modalOpen;
   const density = useDesktops((s) => s.settings.density);
   const sidebarWidth = density === "compact" ? 246 : 276;
   const openNew = useCallback((preset?: NewSessionPreset) => {
@@ -115,14 +124,29 @@ function Shell() {
         setSidebar((s) => !s);
       }
     };
+    /* App-native find (issue #194): Cmd/Ctrl+F opens the focused panel's
+       own find bar; the browser's native find is blind over dockview
+       panels and never opens. This listens in the CAPTURE phase, apart
+       from the main handler above: xterm consumes keydowns at its textarea
+       (find must work with a shell focused), and capture is the only phase
+       that still sees them. Unlike the Alt family the chord fires while
+       typing — that's the point, you search FROM wherever you are. */
+    const find = (e: KeyboardEvent) => {
+      if (!isFindChord(e)) return;
+      e.preventDefault();
+      if (modalRef.current) return;
+      openFindInActivePanel();
+    };
     const onAddHost = () => setAddHost(true);
     window.addEventListener("truss:new", onNewEv);
     window.addEventListener("truss:add-host", onAddHost);
     window.addEventListener("keydown", key);
+    window.addEventListener("keydown", find, true);
     return () => {
       window.removeEventListener("truss:new", onNewEv);
       window.removeEventListener("truss:add-host", onAddHost);
       window.removeEventListener("keydown", key);
+      window.removeEventListener("keydown", find, true);
     };
   }, [openNew]);
 

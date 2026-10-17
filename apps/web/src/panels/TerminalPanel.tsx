@@ -1,12 +1,14 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { IDockviewPanelProps } from "dockview-react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
+import { SearchAddon } from "@xterm/addon-search";
 import "@xterm/xterm/css/xterm.css";
 import { store, useApp } from "@/lib/store";
 import { cn } from "@/utils/cn";
 import { desktops, useDesktops } from "@/lib/desktops";
 import { shortPath } from "@/lib/format";
+import { isFindNavigating, registerFindProvider, terminalFindProvider } from "@/lib/findRuntime";
 import { Btn, Icon } from "@/components/ui";
 import { openFreeShell } from "@/lib/workspace";
 
@@ -41,6 +43,16 @@ export function TerminalPanel({ params, api, containerApi }: IDockviewPanelProps
   activeRef.current = workspaceActive;
   const [nonce, setNonce] = useState(0);
 
+  /* app-native find (issue #194): the shell's scrollback is searchable via
+     xterm's SearchAddon — the one panel that opts out of Workspace's
+     generic DOM wrapper, because the DOM only holds the buffer's visible
+     rows. The live pair is read through a ref: the provider outlives any
+     one terminal instance (reattach, font-size rebuilds). The bar itself is
+     global (Workspace renders it). */
+  const termRef = useRef<{ term: Terminal; search: SearchAddon } | null>(null);
+  const findProvider = useMemo(() => terminalFindProvider(() => termRef.current), []);
+  useEffect(() => registerFindProvider(containerApi, api?.id, findProvider), [containerApi, api?.id, findProvider]);
+
   useEffect(() => {
     if (workspaceActive) requestAnimationFrame(() => refit.current());
   }, [workspaceActive]);
@@ -60,7 +72,10 @@ export function TerminalPanel({ params, api, containerApi }: IDockviewPanelProps
     });
     const fit = new FitAddon();
     term.loadAddon(fit);
+    const search = new SearchAddon();
+    term.loadAddon(search);
     term.open(el);
+    termRef.current = { term, search };
     let lastSent = { cols: 0, rows: 0 };
     const conn = backend.connectTerminal(params.terminalId, {
       onHello: (h) => {
@@ -102,7 +117,10 @@ export function TerminalPanel({ params, api, containerApi }: IDockviewPanelProps
     requestAnimationFrame(doFit);
     const sub = term.onData((d) => conn.send(d));
     const vis = api.onDidVisibilityChange?.((e: { isVisible: boolean }) => e.isVisible && requestAnimationFrame(doFit));
-    const act = api.onDidActiveChange?.((e: { isActive: boolean }) => e.isActive && term.focus());
+    /* focus xterm when its tab activates so a click lets you type — but NOT
+       when the find controller did the activating (a match cycled into this
+       shell): the keyboard stays in the find bar (issue #194, round 2) */
+    const act = api.onDidActiveChange?.((e: { isActive: boolean }) => e.isActive && !isFindNavigating() && term.focus());
     return () => {
       cancelAnimationFrame(raf);
       ro.disconnect();
@@ -110,6 +128,7 @@ export function TerminalPanel({ params, api, containerApi }: IDockviewPanelProps
       vis?.dispose();
       act?.dispose();
       conn.close();
+      termRef.current = null;
       term.dispose();
       refit.current = () => {};
     };
