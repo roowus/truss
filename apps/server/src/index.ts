@@ -761,11 +761,16 @@ app.get("/api/sessions/:id/events", async (req, reply) => {
 
 app.post("/api/sessions/:id/prompt", async (req, reply) => {
   const { id } = req.params as { id: string };
-  const { text, attachments } = (req.body ?? {}) as { text?: string; attachments?: { name: string; path: string; size: number; mime?: string }[] };
+  const { text, attachments, clientOpId } = (req.body ?? {}) as {
+    text?: string;
+    attachments?: { name: string; path: string; size: number; mime?: string }[];
+    /** idempotency key (issue #216): a resend of the same op returns the
+        original messageId instead of delivering a second turn */
+    clientOpId?: string;
+  };
   if (!text?.trim() && !attachments?.length) return reply.code(400).send({ error: "text is required" });
   try {
-    await sendPrompt(id, text ?? "", attachments);
-    return { ok: true };
+    return await sendPrompt(id, text ?? "", attachments, clientOpId);
   } catch (err) {
     return reply.code(409).send({ error: String(err) });
   }
@@ -817,9 +822,9 @@ app.post("/api/sessions/:id/model", async (req, reply) => {
 
 app.post("/api/sessions/:id/interrupt", async (req, reply) => {
   const { id } = req.params as { id: string };
+  const { clientOpId } = (req.body ?? {}) as { clientOpId?: string };
   try {
-    interrupt(id);
-    return { ok: true };
+    return interrupt(id, clientOpId);
   } catch (err) {
     return reply.code(409).send({ error: String(err) });
   }
@@ -828,11 +833,14 @@ app.post("/api/sessions/:id/interrupt", async (req, reply) => {
 /** permission card answer — the agent→user round-trip closes here */
 app.post("/api/sessions/:id/permission", async (req, reply) => {
   const { id } = req.params as { id: string };
-  const { requestId, choice } = (req.body ?? {}) as { requestId?: string; choice?: string };
+  const { requestId, choice, clientOpId } = (req.body ?? {}) as {
+    requestId?: string;
+    choice?: string;
+    clientOpId?: string;
+  };
   if (!requestId || !choice) return reply.code(400).send({ error: "requestId and choice required" });
   try {
-    resolvePermission(id, requestId, choice);
-    return { ok: true };
+    return resolvePermission(id, requestId, choice, clientOpId);
   } catch (err) {
     return reply.code(409).send({ error: String(err) });
   }

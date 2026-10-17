@@ -64,11 +64,24 @@ export interface Backend {
   /** switch a session's model: live where the harness supports it, else restart-with-history or stored for next resume */
   setSessionModel(id: string, model: string, provider?: string): Promise<{ mode: "live" | "restart" | "stored" }>;
   getEvents(id: string): Promise<{ events: Frame[] }>;
-  prompt(id: string, text: string, attachments?: PromptAttachment[]): Promise<{ ok: boolean }>;
+  /** a prompt's ack (issue #216): clientOpId echoes the idempotency key and
+     messageId is the user message the turn belongs to — a replay of the same
+     op returns the same pair, which is how the outbox knows it already landed */
+  prompt(
+    id: string,
+    text: string,
+    attachments?: PromptAttachment[],
+    clientOpId?: string,
+  ): Promise<{ ok: boolean; clientOpId?: string; messageId?: string; deduped?: boolean }>;
   /** upload a file into the session's workspace (.truss-uploads/) for attaching */
   upload(id: string, name: string, dataBase64: string): Promise<{ upload: PromptAttachment }>;
-  interrupt(id: string): Promise<{ ok: boolean }>;
-  permission(id: string, requestId: string, choice: string): Promise<{ ok: boolean }>;
+  interrupt(id: string, clientOpId?: string): Promise<{ ok: boolean; clientOpId?: string; deduped?: boolean }>;
+  permission(
+    id: string,
+    requestId: string,
+    choice: string,
+    clientOpId?: string,
+  ): Promise<{ ok: boolean; clientOpId?: string; deduped?: boolean }>;
   deleteSession(id: string, hard: boolean): Promise<unknown>;
   /** the 30-day trash: list / restore / delete-forever */
   trash(): Promise<{ sessions: SessionMeta[] }>;
@@ -218,11 +231,12 @@ export function createLiveBackend(): Backend {
     setSessionModel: (id, model, provider) =>
       req("POST", `/api/sessions/${encodeURIComponent(id)}/model`, { model, provider }),
     getEvents: (id) => req("GET", `/api/sessions/${encodeURIComponent(id)}/events`),
-    prompt: (id, text, attachments) => req("POST", `/api/sessions/${encodeURIComponent(id)}/prompt`, { text, attachments }),
+    prompt: (id, text, attachments, clientOpId) =>
+      req("POST", `/api/sessions/${encodeURIComponent(id)}/prompt`, { text, attachments, clientOpId }),
     upload: (id, name, dataBase64) => req("POST", `/api/sessions/${encodeURIComponent(id)}/upload`, { name, dataBase64 }),
-    interrupt: (id) => req("POST", `/api/sessions/${encodeURIComponent(id)}/interrupt`, {}),
-    permission: (id, requestId, choice) =>
-      req("POST", `/api/sessions/${encodeURIComponent(id)}/permission`, { requestId, choice }),
+    interrupt: (id, clientOpId) => req("POST", `/api/sessions/${encodeURIComponent(id)}/interrupt`, { clientOpId }),
+    permission: (id, requestId, choice, clientOpId) =>
+      req("POST", `/api/sessions/${encodeURIComponent(id)}/permission`, { requestId, choice, clientOpId }),
     trash: () => req("GET", "/api/trash"),
     bulkDeleteSessions: (ids) => req("POST", "/api/sessions/bulk-delete", { ids }),
     restoreSession: (id) => req("POST", `/api/sessions/${encodeURIComponent(id)}/restore`, {}),

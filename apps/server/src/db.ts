@@ -71,6 +71,29 @@ CREATE TABLE IF NOT EXISTS kv (
 );
 `);
 
+/* op ledger (issue #216): the client op ids a session has already run, so an
+   at-least-once retry (a timed-out POST resent, or the outbox replayed after
+   a WS reconnect) returns the ORIGINAL result instead of dispatching again.
+
+   Recreated on every boot rather than migrated. It is a bounded, disposable
+   dedupe window, not history — surviving a restart is deliberately NOT a
+   property it has (the user asked for exactly that tradeoff: a replay across
+   a bounce is one reconnect, and the client's outbox is likewise bounded).
+   DROP-then-CREATE also means a future shape change cannot throw on an
+   existing db the way an unconditional `ALTER` would. */
+db.exec(`
+DROP TABLE IF EXISTS op_ledger;
+CREATE TABLE IF NOT EXISTS op_ledger (
+  session_id   TEXT NOT NULL,
+  op_kind      TEXT NOT NULL,
+  client_op_id TEXT NOT NULL,
+  result       TEXT NOT NULL,
+  at           INTEGER NOT NULL,
+  PRIMARY KEY (session_id, op_kind, client_op_id)
+);
+CREATE INDEX IF NOT EXISTS idx_op_ledger_at ON op_ledger(at);
+`);
+
 export interface SessionRow {
   id: string;
   harness: HarnessId;
@@ -293,6 +316,85 @@ export const store = {
      not lose a ref just because its session is in the trash (issue #5) */
   knownHarnessRefs(): string[] {
     return (knownHarnessRefsStmt.all() as { harness_ref: string }[]).map((r) => r.harness_ref);
+  },
+
+  /* ── op ledger (issue #216) ── */
+
+  /** the recorded result for a (session, kind, op id), if this session has
+     already run it — undefined means "not seen, go ahead" */
+  getOp(sessionId: string, kind: string, clientOpId: string): unknown | undefined {
+    const row = db
+      .prepare(`SELECT result FROM op_ledger WHERE session_id = ? AND op_kind = ? AND client_op_id = ?`)
+      .get(sessionId, kind, clientOpId) as { result: string } | undefined;
+    if (!row) return undefined;
+    try {
+      return JSON.parse(row.result) as unknown;
+    } catch {
+      /* a row we cannot read is not a licence to re-dispatch — treat the op
+         as already run and hand back an empty result */
+      return {};
+    }
+  },
+
+  /**
+   * Claim an op atomically: INSERT-if-absent, so exactly one of two
+   * concurrent callers with the same op id wins. Returns the recorded result
+   * when the op was ALREADY there (`won: false`), which is the caller's cue
+   * to replay instead of dispatching.
+   *
+   * This is deliberately an insert-if-absent rather than an upsert: an upsert
+   * always succeeds, so two racing retries would both believe they claimed
+   * the op and both dispatch.
+   */
+  claimOp(
+    sessionId: string,
+    kind: string,
+    clientOpId: string,
+    result: unknown,
+    evictOver: number,
+  ): { won: boolean; result?: unknown } {
+    const info = db
+      .prepare(
+        `INSERT INTO op_ledger (session_id, op_kind, client_op_id, result, at)
+         VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(session_id, op_kind, client_op_id) DO NOTHING`,
+      )
+      .run(sessionId, kind, clientOpId, JSON.stringify(result ?? {}), Date.now());
+    if (info.changes === 0) {
+      return { won: false, result: this.getOp(sessionId, kind, clientOpId) };
+    }
+    this.evictOps(sessionId, evictOver);
+    return { won: true };
+  },
+
+  /** enforce the per-session cap, oldest first */
+  evictOps(sessionId: string, evictOver: number) {
+    /* tie-break on rowid: `at` is millisecond-resolution, so a burst of sends
+       in the same millisecond would otherwise evict in arbitrary order */
+    db.prepare(
+      `DELETE FROM op_ledger
+       WHERE session_id = ?
+         AND rowid NOT IN (
+           SELECT rowid FROM op_ledger WHERE session_id = ? ORDER BY at DESC, rowid DESC LIMIT ?
+         )`,
+    ).run(sessionId, sessionId, evictOver);
+  },
+
+  /** drop expired rows; returns how many went. `now` is injectable so the
+     TTL is testable without waiting a day. */
+  sweepOpLedger(ttlMs: number, now = Date.now()): number {
+    const info = db.prepare(`DELETE FROM op_ledger WHERE at < ?`).run(now - ttlMs);
+    return Number(info.changes);
+  },
+
+  /** un-claim an op whose work did not actually happen (a prompt the adapter
+     refused), so the client's retry of that op id dispatches for real */
+  forgetOp(sessionId: string, kind: string, clientOpId: string) {
+    db.prepare(`DELETE FROM op_ledger WHERE session_id = ? AND op_kind = ? AND client_op_id = ?`).run(
+      sessionId,
+      kind,
+      clientOpId,
+    );
   },
 
   setDeletedAt(id: string, at: number | null) {
