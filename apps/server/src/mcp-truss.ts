@@ -53,7 +53,9 @@ function writeLayoutDoc(doc: Record<string, any>) {
 
 /* ── tool definitions ── */
 
-const TOOLS = [
+/* exported so tests can assert on the shipped tool descriptions — the model
+   reads these at call time, so the wording is part of the contract (#222). */
+export const TOOLS = [
   {
     name: "list_sessions",
     description: "List Truss sessions (chats) with id, title, harness, state, cwd, project tag, archived flag.",
@@ -265,7 +267,10 @@ const TOOLS = [
   {
     name: "schedule_task",
     description:
-      "Put a cron schedule on a task card (issue #16). 5-field cron in the SERVER's local time, " +
+      "Recurring and scheduled work belongs HERE, not in the OS: never write crontab entries, " +
+      "systemd timers, or launchd jobs for the user's automation (issue #222). Those run outside " +
+      "truss, the user cannot see or stop them, and nothing is recorded in the run history. " +
+      "Put a cron schedule on a task card instead (issue #16). 5-field cron in the SERVER's local time, " +
       "e.g. '0 9 * * 1-5' = weekdays 9am. With id: set/replace that card's schedule (null or '' clears it). " +
       "Without id: file a NEW recurring card (title/cwd/harness + schedule required). Due cards spawn sessions " +
       "exactly like the Run button; invalid expressions are rejected with the parse reason. Every schedule you " +

@@ -16,7 +16,7 @@ process.env.HOME = HOME;
 
 const { composePractices, getGlobalPractices, saveGlobalPractices, POSTING_GUIDE, POSTING_GUIDE_PI } =
   await import("../src/practices.js");
-const { deliverablesGuidance } = await import("../src/deliverables.js");
+const { deliverablesGuidanceNoMcp } = await import("../src/deliverables.js");
 
 const GLOBAL_FILE = join(HOME, ".truss", "TRUSS.md");
 const PROJECTS_DIR = join(HOME, ".truss", "projects");
@@ -41,10 +41,19 @@ test("global: missing file -> getGlobalPractices returns the built-in default", 
 test("POSTING_GUIDE_PI: pi's preamble names its real tools and carries the canonical paragraph", () => {
   /* issue #203: the old "no tool bus" wording became false the day the pi
      extension shipped — a revert would tell pi sessions the feed is
-     unreachable and reintroduce the bug with the suite green */
+     unreachable and reintroduce the bug with the suite green.
+     PR #240 (audit B1): pi has no truss MCP, so it must carry the NO-MCP
+     variant — the one that does not name schedule_task. */
   assert.ok(POSTING_GUIDE_PI.includes("post_feed"), "names the tool pi actually has");
   assert.ok(!/no tool bus/.test(POSTING_GUIDE_PI), "the pre-extension lie stays gone");
-  assert.ok(POSTING_GUIDE_PI.includes(deliverablesGuidance()), "the deliverables sentence is interpolated, not hand-duplicated");
+  assert.ok(
+    POSTING_GUIDE_PI.includes(deliverablesGuidanceNoMcp()),
+    "the deliverables sentence is interpolated, not hand-duplicated",
+  );
+  assert.ok(
+    !POSTING_GUIDE_PI.includes("schedule_task"),
+    "and it is the pi variant: naming schedule_task would point pi at a tool it has no way to call",
+  );
 });
 
 test("compose: no files anywhere -> no layers, empty composed", () => {
