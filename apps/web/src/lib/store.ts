@@ -86,6 +86,8 @@ export interface AppState {
   toasts: Toast[];
   /** the 30-day trash (recently deleted) — restored or purged from the sidebar */
   trash: SessionMeta[];
+  /** every label in use (issue #174) — the sidebar filter's chips */
+  labelsRegistry: string[];
   focused?: string;
   bootError?: string;
 }
@@ -243,6 +245,7 @@ class Store {
     feedLoaded: false,
     toasts: [],
     trash: [],
+    labelsRegistry: [],
   };
   private subs = new Set<() => void>();
   private raf = 0;
@@ -290,6 +293,7 @@ class Store {
       this.refreshTodos(),
       this.refreshFeed(),
       this.refreshHosts(),
+      this.refreshLabels(),
     ]);
     // Active sessions may have pending permission cards — hydrate them eagerly.
     for (const id of this.state.order) {
@@ -335,7 +339,7 @@ class Store {
     await this.refreshSessions();
     await this.refreshTerminals();
     await this.refreshAgents();
-    await Promise.all([this.refreshTodos(), this.refreshFeed(), this.refreshHosts(), this.refreshTrash()]);
+    await Promise.all([this.refreshTodos(), this.refreshFeed(), this.refreshHosts(), this.refreshTrash(), this.refreshLabels()]);
     for (const id of Object.keys(this.state.views)) {
       if (this.state.sessions[id]) void this.rehydrate(id);
     }
@@ -543,9 +547,13 @@ class Store {
               ...(ev.pinned !== undefined ? { pinned: ev.pinned } : {}),
               ...(ev.model !== undefined ? { model: ev.model ?? undefined } : {}),
               ...(ev.provider !== undefined ? { provider: ev.provider ?? undefined } : {}),
+              ...(ev.labels !== undefined ? { labels: ev.labels } : {}),
             },
           },
         }));
+        /* labels moved → the filter's registry may have gained or lost a
+           name (issue #174) */
+        if (ev.labels !== undefined) void this.refreshLabels();
       }
       return;
     }
@@ -835,6 +843,36 @@ class Store {
       return { sessions: { ...s.sessions, [id]: { ...meta, title: next } } };
     });
   }
+  /* GitHub-style labels (issue #174): replace-all — the server cleans
+     (trim/dedupe/cap) and its response is authoritative; the session.updated
+     broadcast covers every other client. The registry refreshes so the
+     sidebar filter learns a brand-new name (and forgets an orphaned one) */
+  async setSessionLabels(id: string, labels: string[]) {
+    const be = this.state.backend;
+    if (!be) return;
+    try {
+      const r = await be.setSessionLabels(id, labels);
+      this.set((s) => {
+        const meta = s.sessions[id];
+        if (!meta) return {};
+        return { sessions: { ...s.sessions, [id]: { ...meta, labels: r.labels } } };
+      });
+      void this.refreshLabels();
+    } catch (e: any) {
+      this.toast("error", "Couldn't update labels", e?.message ?? String(e));
+    }
+  }
+
+  async refreshLabels() {
+    if (!this.state.backend) return;
+    try {
+      const { labels } = await this.be.listLabels();
+      this.set({ labelsRegistry: labels });
+    } catch {
+      /* older server without the labels route — the filter stays hidden */
+    }
+  }
+
   /* sidebar host rename (issue #147): the label is display-only (the id is
      the identity), so the row patches in place like a pin */
   async renameHost(id: string, label: string) {

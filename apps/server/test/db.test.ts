@@ -159,6 +159,27 @@ test("migrations: reopening the same dir is idempotent", async () => {
   cleanup();
 });
 
+test("sessions: a corrupt labels cell reads as [] and never takes the list down (issue #174 audit, B3)", async () => {
+  const { db, cleanup } = await freshServer("db-labels-corrupt");
+  db.store.createSession({ id: "sl1", harness: "pi", title: "t", cwd: "/tmp" });
+  db.store.createSession({ id: "sl2", harness: "pi", title: "t", cwd: "/tmp" });
+  db.store.setSessionLabels("sl1", ["bug", "ui"]);
+  assert.deepEqual(db.store.getSession("sl1")?.labels, ["bug", "ui"], "the round-trip is a real array");
+  assert.deepEqual(db.store.getSession("sl2")?.labels, [], "a pre-feature row (NULL) reads as none");
+  /* hand-corrupt both cells: malformed JSON, and valid JSON that is not an array */
+  db.store.run(`UPDATE sessions SET labels = ? WHERE id = ?`, "[bad", "sl1");
+  db.store.run(`UPDATE sessions SET labels = ? WHERE id = ?`, '{"a":1}', "sl2");
+  assert.deepEqual(db.store.getSession("sl1")?.labels, [], "malformed JSON fails closed");
+  assert.deepEqual(db.store.getSession("sl2")?.labels, [], "a non-array payload fails closed");
+  /* the file shares one DB across fixtures (the module caches after the
+     first import) — assert on the two rows this test owns */
+  const mine = db.store.listSessions().filter((r) => r.id === "sl1" || r.id === "sl2");
+  assert.equal(mine.length, 2, "both rows still list");
+  assert.ok(mine.every((r) => r.labels.length === 0), "the list survives corrupt cells");
+  assert.deepEqual(db.store.listLabels(), [], "the registry skips them too (no other test here sets labels)");
+  cleanup();
+});
+
 test("sessions: setSessionModel moves model+provider as a pair (and clears)", async () => {
   const { db, cleanup } = await freshServer("db-model");
   db.store.createSession({ id: "s9", harness: "pi", title: "t", cwd: "/tmp", model: "m1", provider: "p1" });

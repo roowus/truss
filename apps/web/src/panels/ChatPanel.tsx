@@ -16,7 +16,11 @@ import { RAIL_INSET, activeRailIndex, railIndexAtOffset, railMarkTop, railNatura
 import { createBrowserVoiceInput, appendTranscript, type BrowserVoiceController } from "@/lib/voice";
 import type { VoiceState } from "@/lib/voiceInput";
 import { openPanel, openAgentShell, renameSessionPanels } from "@/lib/workspace";
-import { Btn, Empty, HarnessMark, Icon, IconBtn, Select, Spinner, StateDot, STATE_META } from "@/components/ui";
+import { Btn, Empty, HarnessMark, Icon, IconBtn, LabelChip, Select, Spinner, StateDot, STATE_META } from "@/components/ui";
+import { labelChips, SESSION_LABEL_CAP } from "@/lib/labels";
+import { clampPopoverPos } from "@/lib/popover";
+import { createPortal } from "react-dom";
+import type { SessionMeta } from "@/lib/proto";
 import { VoiceVisualizer } from "@/components/VoiceVisualizer";
 import { Markdown } from "./Markdown";
 import { cn } from "@/utils/cn";
@@ -161,6 +165,7 @@ function ChatHeader({ id }: { id: string }) {
         </span>
       </span>
       <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-[var(--t-fg)]" title={tooltip}>{meta.title}</span>
+      <LabelStrip id={id} meta={meta} />
       <div className="ml-auto flex items-center gap-1.5 shrink-0">
         {plan.visible.includes("trajectory") && (
           <IconBtn icon="wave" label="Trajectory" onClick={() => openPanel("trajectory", { sessionId: id })} />
@@ -278,6 +283,137 @@ function ChatHeader({ id }: { id: string }) {
         </>
       )}
     </div>
+  );
+}
+
+/* ---------------- session labels (issue #174) ----------------
+   Colored chips next to the title — × removes, + adds (free text or a
+   registry pick). The server cleans (trim/dedupe/cap 8) and broadcasts
+   session.updated, so this strip and every sidebar row repaint together.
+   The add panel portals to <body> and clamps to the viewport (the house
+   Select pattern): the strip itself is overflow-hidden so chips can never
+   push the header's right cluster off the pane (issue #3's invariant), and
+   an absolute child would be clipped invisible by it (audit round 1, B1). */
+function LabelStrip({ id, meta }: { id: string; meta: SessionMeta }) {
+  const registry = useApp((s) => s.labelsRegistry);
+  const [open, setOpen] = useState(false);
+  const [draft, setDraft] = useState("");
+  /* audit round 1, B4: one write in flight — a second add/remove built on
+     the stale pre-response snapshot would silently drop the first (the
+     route is replace-all). The controls disable until the POST settles. */
+  const [busy, setBusy] = useState(false);
+  const labels = meta.labels ?? [];
+  const chips = labelChips(labels, 3);
+  /* the cap lives server-side; the mirrored constant keeps the add
+     affordance disabling honestly instead of silently no-opping */
+  const full = labels.length >= SESSION_LABEL_CAP;
+  const write = (next: string[]) => {
+    setBusy(true);
+    void store.setSessionLabels(id, next).finally(() => setBusy(false));
+  };
+  const add = (name: string) => {
+    const next = name.trim();
+    /* guards before the clear (audit round 4, B5): Enter during an
+       in-flight write must keep the draft — clearing first read exactly
+       like an accepted add while nothing landed */
+    if (!next || busy) return;
+    setDraft("");
+    write([...labels, next]);
+  };
+  const draftKey = draft.trim().toLowerCase();
+  const suggestions = registry.filter(
+    (l) => !labels.some((x) => x.toLowerCase() === l.toLowerCase()) && (!draftKey || l.toLowerCase().includes(draftKey)),
+  );
+
+  /* anchor + clamp, like Select: measured after mount, parked off-screen
+     until then so there is no flash of an unclamped panel */
+  const btnRef = useRef<HTMLButtonElement>(null);
+  const popRef = useRef<HTMLDivElement>(null);
+  const [popPos, setPopPos] = useState<{ top: number; left: number } | null>(null);
+  useLayoutEffect(() => {
+    if (!open) return;
+    const b = btnRef.current?.getBoundingClientRect();
+    const pop = popRef.current;
+    if (!b || !pop) return;
+    setPopPos(clampPopoverPos(b, pop.offsetWidth, pop.offsetHeight, window.innerWidth, window.innerHeight));
+  }, [open, draft, suggestions.length, busy]);
+
+  return (
+    <span className="flex items-center gap-1 min-w-0 overflow-hidden shrink-0 max-w-[45%]">
+      {chips.shown.map((l) => (
+        <LabelChip
+          key={l}
+          name={l}
+          className="max-w-[90px]"
+          onRemove={busy ? undefined : () => write(labels.filter((x) => x !== l))}
+        />
+      ))}
+      {chips.overflow > 0 && (
+        <span className="text-[10px] text-[var(--t-dim)] tabular-nums" title={labels.slice(chips.shown.length).join(", ")}>
+          +{chips.overflow}
+        </span>
+      )}
+      <button
+        ref={btnRef}
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        disabled={(full && !open) || busy}
+        title={full ? `A session carries at most ${SESSION_LABEL_CAP} labels` : "Add a label"}
+        aria-label="Add a label"
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        className={cn(
+          "shrink-0 inline-grid place-items-center w-4 h-4 rounded-full border border-dashed border-[var(--t-line2)] text-[var(--t-dim)] hover:text-[var(--t-mute)] hover:border-[var(--t-mute)] disabled:opacity-30",
+          open && "text-[var(--t-fg)] border-[var(--t-mute)]",
+        )}
+      >
+        <Icon name="plus" size={9} />
+      </button>
+      {open &&
+        createPortal(
+          <>
+            <div className="fixed inset-0 z-[160]" onClick={() => setOpen(false)} />
+            <div
+              ref={popRef}
+              role="dialog"
+              aria-label="Add a label"
+              className="fixed z-[170] w-56 rounded-lg bg-[var(--t-bg2)] border border-[var(--t-line2)] shadow-2xl p-2 t-pop"
+              style={popPos ?? { top: -9999, left: -9999 }}
+            >
+              {/* the input stays enabled while a write is in flight (busy is
+                  enforced inside add) — disabling it would drop focus, so a
+                  follow-up Escape would miss the close handler */}
+              <input
+                autoFocus
+                value={draft}
+                onChange={(e) => setDraft(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") add(draft);
+                  else if (e.key === "Escape") setOpen(false);
+                }}
+                placeholder="New label name"
+                maxLength={32}
+                className="w-full h-7 px-2 rounded-md bg-[var(--t-bg1)] border border-[var(--t-line2)] text-[12px] text-[var(--t-fg)] outline-none focus:border-[var(--t-line2)] placeholder:text-[var(--t-dim)]"
+              />
+              {suggestions.length > 0 && (
+                <div className="mt-1.5 flex flex-wrap gap-1" role="group" aria-label="Labels already in use">
+                  {suggestions.map((l) => (
+                    <button key={l} type="button" disabled={busy} onClick={() => add(l)} className="hover:brightness-125 disabled:opacity-50" title={`Add “${l}”`}>
+                      <LabelChip name={l} />
+                    </button>
+                  ))}
+                </div>
+              )}
+              <div className="mt-1.5 text-[10px] text-[var(--t-dim)]">
+                {full
+                  ? `At the ${SESSION_LABEL_CAP}-label cap. Remove one first.`
+                  : `Enter adds. Names trim, dedupe case-insensitively, cap at ${SESSION_LABEL_CAP}.`}
+              </div>
+            </div>
+          </>,
+          document.body,
+        )}
+    </span>
   );
 }
 
