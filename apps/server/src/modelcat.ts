@@ -4,7 +4,16 @@
  * 9router catalog, cached for 60s. This is what makes harness model pickers
  * rich: the credentials already cover these providers, the pickers just
  * never saw them.
+ *
+ * The route table is DERIVED from the live key-proxy config (issue #229).
+ * It used to be hand-maintained, which meant a route that was enabled and
+ * keyed at the proxy but missing from this file was never queried, so its
+ * models could not appear in any picker. A missing or malformed config
+ * degrades to the old static table (see provider-shapes.ts) rather than
+ * emptying every picker.
  */
+
+import { deriveProviderTables, type RouteSpec } from "./provider-shapes.js";
 
 export interface CatalogProvider {
   id: string;
@@ -15,23 +24,16 @@ export interface CatalogProvider {
   error?: string;
 }
 
-interface RouteSpec {
-  id: string;
-  name: string;
-  port: number;
-  modelsPath: string;
-  endpoint: string;
-}
+/* enabled key-proxy routes that serve a /models endpoint, derived from the
+   proxy config so a newly added route is visible without a code edit */
+const TABLES = deriveProviderTables();
+const ROUTES: RouteSpec[] = TABLES.routes;
 
-/* key-proxy routes that serve OpenAI-compatible /models */
-const ROUTES: RouteSpec[] = [
-  { id: "fireworks", name: "Fireworks", port: 45820, modelsPath: "/inference/v1/models", endpoint: "http://127.0.0.1:45820/inference/v1" },
-  { id: "zai", name: "z.ai", port: 45821, modelsPath: "/api/paas/v4/models", endpoint: "http://127.0.0.1:45821/api/paas/v4" },
-  { id: "openrouter", name: "OpenRouter", port: 45823, modelsPath: "/api/v1/models", endpoint: "http://127.0.0.1:45823/api/v1" },
-  { id: "huggingface", name: "HuggingFace", port: 45824, modelsPath: "/v1/models", endpoint: "http://127.0.0.1:45824/v1" },
-  { id: "deepinfra", name: "DeepInfra", port: 45826, modelsPath: "/v1/models", endpoint: "http://127.0.0.1:45826/v1" },
-  { id: "deepseek", name: "DeepSeek", port: 45827, modelsPath: "/v1/models", endpoint: "http://127.0.0.1:45827/v1" },
-];
+/* Whether the live tables came from the proxy config or from the static
+   fallback. Exposed so boot can SAY which one is in play: a silent fallback
+   would be the same invisible-provider bug this change exists to kill. */
+export const CATALOG_ROUTES_DERIVED: boolean = TABLES.derived;
+export const CATALOG_ROUTE_IDS: readonly string[] = ROUTES.map((r) => r.id);
 
 let cache: { at: number; providers: CatalogProvider[] } | null = null;
 const TTL = 60_000;
@@ -109,10 +111,10 @@ function parseModels(j: { data?: RawModel[] }): { id: string; context: number; v
     }));
 }
 
-/* Test seams: the picker tables are hand-maintained, and a route missing from
-   one of them is silently invisible (the DeepSeek/DeepInfra gap). Exposing the
-   ids and the spec list lets a test cross-check the tables against each other
-   instead of trusting three lists to stay in sync by hand. */
+/* Test seams: the tables are now derived from the key-proxy config, but the
+   cross-check against the router and pi tables stays useful — a derivation
+   bug, or a provider whose shape is only half-filled in, would still show up
+   as the three tables disagreeing. */
 export const PROVIDER_ROUTE_SPECS: readonly RouteSpec[] = ROUTES;
 export const PROVIDER_ROUTE_IDS: readonly string[] = ROUTES.map((r) => r.id);
 export const __parseModelsForTest = parseModels;

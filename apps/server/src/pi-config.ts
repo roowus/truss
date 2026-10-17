@@ -2,6 +2,7 @@ import { mkdirSync, readFileSync, writeFileSync, existsSync, copyFileSync } from
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { modelCatalog } from "./modelcat.js";
+import { deriveProviderTables } from "./provider-shapes.js";
 import { piTrussExtensionSource } from "./piExtension.js";
 
 /**
@@ -34,14 +35,10 @@ export function syncPiExtension(): { path: string; wrote: boolean } {
   return { path: PI_EXTENSION, wrote: true };
 }
 
-const PROVIDER_IDS = {
-  fireworks: "truss-fw",
-  zai: "truss-zai",
-  openrouter: "truss-or",
-  huggingface: "truss-hf",
-  deepinfra: "truss-deepinfra",
-  deepseek: "truss-deepseek",
-} as const;
+/* derived from the key-proxy config plus the provider shape map (issue #229):
+   a provider absent here is silently missing from pi's models.json even when
+   its route is enabled and keyed. */
+const PROVIDER_IDS: Record<string, string> = deriveProviderTables().piProviderIds;
 
 /* Test seam: a provider missing here is silently absent from pi's
    models.json even when its key-proxy route is enabled and keyed. */
@@ -69,7 +66,7 @@ export async function syncPiModelsJson(): Promise<{ providers: number; models: n
 
   let count = 0;
   for (const p of catalog) {
-    const pid = PROVIDER_IDS[p.id as keyof typeof PROVIDER_IDS];
+    const pid = PROVIDER_IDS[p.id];
     if (!pid) continue;
     if (!p.models.length) continue; // keep a previously-good list rather than blank it on a route error
     cfg.providers[pid] = {
@@ -89,5 +86,5 @@ export async function syncPiModelsJson(): Promise<{ providers: number; models: n
   }
   mkdirSync(join(homedir(), ".pi", "agent"), { recursive: true });
   writeFileSync(PI_MODELS, JSON.stringify(cfg, null, 2) + "\n", { mode: 0o600 });
-  return { providers: Object.keys(PROVIDER_IDS).filter((k) => cfg.providers[PROVIDER_IDS[k as keyof typeof PROVIDER_IDS]]).length, models: count };
+  return { providers: Object.keys(PROVIDER_IDS).filter((k) => cfg.providers[PROVIDER_IDS[k]]).length, models: count };
 }

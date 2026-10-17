@@ -1,6 +1,7 @@
 import http from "node:http";
 import { Readable } from "node:stream";
 import { modelCatalog } from "./modelcat.js";
+import { deriveProviderTables } from "./provider-shapes.js";
 import { listCredentials } from "./credentials.js";
 import {
   anthropicError,
@@ -42,17 +43,12 @@ export interface ProviderRoute {
   openaiChatUrl?: string;
 }
 
-/* dispatch table — the loopback routes the dsh-key-proxy serves (its config
-   is the source of truth for keys; ports/paths are stable box topology) */
-export const MODEL_ROUTER_PROVIDERS: ProviderRoute[] = [
-  { id: "zai", label: "z.ai", protocol: "anthropic", anthropicBase: "http://127.0.0.1:45821/api/anthropic" },
-  { id: "fireworks", label: "Fireworks", protocol: "openai", openaiChatUrl: "http://127.0.0.1:45820/inference/v1/chat/completions" },
-  { id: "openrouter", label: "OpenRouter", protocol: "openai", openaiChatUrl: "http://127.0.0.1:45823/api/v1/chat/completions" },
-  { id: "huggingface", label: "HuggingFace", protocol: "openai", openaiChatUrl: "http://127.0.0.1:45824/v1/chat/completions" },
-  { id: "deepinfra", label: "DeepInfra", protocol: "openai", openaiChatUrl: "http://127.0.0.1:45826/v1/chat/completions" },
-  { id: "deepseek", label: "DeepSeek", protocol: "openai", openaiChatUrl: "http://127.0.0.1:45827/v1/chat/completions" },
-  { id: "router", label: "9router", protocol: "openai", openaiChatUrl: "http://127.0.0.1:45822/v1/chat/completions" },
-];
+/* dispatch table — derived from the key-proxy config plus the provider shape
+   map (issue #229), so a route added to the proxy can be dispatched to
+   without editing this file. The 9router aggregator entry trails the sorted
+   providers: it is not a probed proxy route, but a direct route must always
+   beat the aggregator's alias for the same model id. */
+export const MODEL_ROUTER_PROVIDERS: ProviderRoute[] = deriveProviderTables().routerProviders;
 
 const FALLBACK_PROVIDER = "zai"; // today's route: unknown models behave exactly as pre-router
 const ROUTER_CATALOG_URL = "http://127.0.0.1:20128/v1/models"; // 9router, open on loopback
