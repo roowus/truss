@@ -44,15 +44,82 @@ export interface AcpLaunchSpec {
   cwd?: string;
 }
 
+/** one JSON-RPC error as it arrives on the wire. The SDK serializes the
+   message and forwards `data` only when the thrown error carried one
+   (issue #235) — the `cause` chain that holds the actionable text is not
+   put on the wire, so `data` is the only place a real reason can survive.
+   `code` is declared for the wire shape but deliberately NOT rendered:
+   a numeric JSON-RPC code tells a user nothing the message does not. */
+export interface AcpErrorPayload {
+  code?: number;
+  message?: string;
+  data?: unknown;
+}
+
 interface Frame {
   id?: string | number;
   method?: string;
   params?: Record<string, unknown>;
   result?: unknown;
-  error?: { message?: string };
+  error?: AcpErrorPayload;
 }
 
 type SessionHandler = (frame: Frame) => void;
+
+/** how much of a non-string `data` payload is worth keeping. A pathological
+   payload must not bloat the 500 body or the session row's `detail`. */
+const ACP_DETAIL_CAP = 600;
+
+/**
+ * Fold a JSON-RPC error into ONE plain string carrying everything we can
+ * recover (issue #235).
+ *
+ * The failure that motivated this: an unreadable session-store entry makes
+ * dsh's persistence flush throw, dsh-acp wraps it as
+ * `Error("ACP session persistence flush failed", { cause })`, and the SDK
+ * sends only `message: "Internal error"` — the `EACCES` text and the
+ * offending path were discarded, so the 500 read `{"error":"Internal
+ * error"}` and the user chasing it hit a dead end.
+ *
+ * Preference order: a `data.details` string verbatim, else a compact JSON
+ * dump of `data`, else just the message. Deliberately NOT keyed on
+ * `details` alone — the key is not guaranteed on the wire, and a
+ * hard-coded one would silently regress to today's behavior.
+ *
+ * This runs on the error path, so it must not be able to fail: a `data`
+ * that will not serialize falls back to the plain message rather than
+ * throwing a new error out of the rejection.
+ */
+export function describeAcpError(err: AcpErrorPayload | undefined): string {
+  if (!err) return "acp error";
+  const message = err.message ?? "acp error";
+  const detail = renderAcpDetail(err.data);
+  return detail ? `${message}: ${detail}` : message;
+}
+
+/** the recoverable half of `err.data`, or "" when there is nothing to add */
+function renderAcpDetail(data: unknown): string {
+  if (data === undefined || data === null) return "";
+  try {
+    if (typeof data === "string") return cap(data);
+    if (typeof data === "object") {
+      const details = (data as { details?: unknown }).details;
+      if (typeof details === "string" && details.trim()) return cap(details);
+    }
+    const dumped = JSON.stringify(data);
+    /* undefined for functions/symbols, and JSON.stringify throws on a
+       circular payload (caught below) — either way the chain terminates
+       in the plain message, never in a new exception */
+    return dumped ? cap(dumped) : "";
+  } catch {
+    return "";
+  }
+}
+
+function cap(s: string): string {
+  const flat = s.replace(/\s+/g, " ").trim();
+  return flat.length > ACP_DETAIL_CAP ? `${flat.slice(0, ACP_DETAIL_CAP)}…` : flat;
+}
 
 export class AcpClient {
   private proc: ChildProcess | null = null;
@@ -306,7 +373,7 @@ export class AcpClient {
     if (rec.id != null && this.pending.has(String(rec.id))) {
       const p = this.pending.get(String(rec.id))!;
       this.pending.delete(String(rec.id));
-      if (rec.error) p.rej(new Error(rec.error.message ?? "acp error"));
+      if (rec.error) p.rej(new Error(describeAcpError(rec.error)));
       else p.res(rec.result);
       return;
     }

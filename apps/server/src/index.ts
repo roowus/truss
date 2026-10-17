@@ -28,6 +28,7 @@ import {
   purgeSession,
   renameSession,
   restoreSession,
+  NotResumableError,
   type EventFrame,
 } from "./sessions.js";
 import { attachTerminal, closeTerminal, createTerminal, listTerminals, renameTerminal, setTerminalPinned } from "./terminal.js";
@@ -767,6 +768,18 @@ app.post("/api/sessions/:id/prompt", async (req, reply) => {
     await sendPrompt(id, text ?? "", attachments);
     return { ok: true };
   } catch (err) {
+    /* the existing `error` field stays the whole story for old readers; a
+       non-resumable session additionally reports WHY it died, so a client
+       never has to invent an explanation (issue #235) */
+    if (err instanceof NotResumableError) {
+      return reply.code(409).send({
+        /* `err.message`, never `String(err)`: String() prefixes the class
+           name, which is not something a user should read */
+        error: err.message,
+        state: err.state,
+        ...(err.why ? { detail: err.why } : {}),
+      });
+    }
     return reply.code(409).send({ error: String(err) });
   }
 });

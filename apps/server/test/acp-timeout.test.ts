@@ -734,8 +734,10 @@ test("a timed-out model-switch respawn flips the row to error — a stale 'idle'
     /* the flip is what opens sendPrompt's resume gate: the row now reads
        error and still carries the first spawn's harness ref, so the next
        prompt really attempts the auto-resume (spawn 3) instead of being
-       refused with the old permanent "session is idle" */
-    await assert.rejects(() => sessions.sendPrompt(s.id, "hello"), /session is error/);
+       refused with the old permanent "session is idle". Since issue #235
+       the refusal also names WHICH state it ended in and why, so the
+       assertion matches the state rather than one phrasing of it. */
+    await assert.rejects(() => sessions.sendPrompt(s.id, "hello"), /"error" state/);
     assert.equal(spawns, 3, "the gate opened: sendPrompt attempted the auto-resume");
     assert.deepEqual(sent, [], "a failed auto-resume must not deliver the prompt");
     /* and the truthful row pays off: the next prompt resumes the session */
