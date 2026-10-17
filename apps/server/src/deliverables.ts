@@ -50,7 +50,7 @@ const FEED_GUIDANCE =
 /**
  * The canonical paragraph for harnesses that attach the truss MCP server
  * (claude-code, dsh, hermes) — they can actually call `schedule_task`, so it
- * is named. See `deliverablesGuidanceFor` for the pi variant.
+ * is named. See `deliverablesGuidanceNoMcp` for the pi variant.
  */
 export function deliverablesGuidance(): string {
   return (
