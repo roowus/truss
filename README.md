@@ -62,8 +62,8 @@ pnpm -C apps/server start   # serves the app + REST + WS on 127.0.0.1:4040
 | Var | Default | What it does |
 |---|---|---|
 | `TRUSS_PORT` | `4040` | server port |
-| `TRUSS_HOST` | `0.0.0.0` | bind address |
-| `TRUSS_PUBLIC_URL` | unset | the operator-declared front door when a reverse proxy or public DNS name forwards to this server — remote-host installs refuse any return address the bind can't answer, and this is the escape hatch that whitelists yours |
+| `TRUSS_HOST` | `127.0.0.1` | bind address. Loopback by default; set `0.0.0.0` (or a specific address) to expose it on your network — that is the explicit opt-in, and the server prints a loud warning naming the bind when you do, because Truss has no authentication of its own |
+| `TRUSS_PUBLIC_URL` | unset | the operator-declared front door when a reverse proxy or public DNS name forwards to this server — remote-host installs refuse any return address the bind can't answer, and this is the escape hatch that whitelists yours. Validated at startup: a wildcard host, port 0, a garbage port, credentials or a non-http(s) scheme is refused rather than repaired, and declaring it is what silences the no-auth warning |
 | `TRUSS_DATA_DIR` | `apps/server/data` | where the SQLite store lives (sessions, transcripts, todos, feed, layout) |
 | `TRUSS_AGENT_TOKEN` | `truss-dev` | shared secret for remote node agents |
 | `TRUSS_WEB_DIST` | `apps/web/dist` | override the served web build |
@@ -79,6 +79,13 @@ pnpm -C apps/server start   # serves the app + REST + WS on 127.0.0.1:4040
 ## Security model
 
 Truss is a **single-user, fully trusted** local app. The server has **no auth at all**, and agents can run shell commands by design. Bind to loopback or your private network only. Do not expose it publicly without putting real auth in front of it.
+
+The default matches that rule: `TRUSS_HOST` falls back to `127.0.0.1`, so a fresh start is reachable only from this machine. Exposing it is an explicit choice — set `TRUSS_HOST=0.0.0.0`, or point it at one interface. When the bind is not loopback and no `TRUSS_PUBLIC_URL` is declared, the server prints a warning at startup naming the bind address and stating plainly that the app has no authentication. The startup line always reports the effective exposure, so the log says what actually happened rather than requiring you to remember what you set:
+
+```
+listening on http://127.0.0.1:4040 (local only)
+listening on http://0.0.0.0:4040 (NO AUTH, reachable from your network)
+```
 
 ## Stack and docs
 

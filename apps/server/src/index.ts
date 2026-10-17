@@ -51,6 +51,7 @@ import { startDoubletakePoll } from "./integrations/doubletake.js";
 import { composePractices, getGlobalPractices, saveGlobalPractices } from "./practices.js";
 import { createHost, deleteHost, getHost, isHostTombstoned, listHosts, renameHost, rotateHostToken, setHostPinned, setHostRevoked, verifyAgentToken } from "./hosts.js";
 import { assertDialableServerUrl, netInfo, taildropToPeer, tailscalePeers, tailscaleServe, tailscaleSshOk, tailscaleSshRun } from "./net.js";
+import { DEFAULT_BIND_HOST, exposureBanner, exposureLine, resolveExposure } from "./exposure.js";
 import { deliveryOptions, installerDropName, interactiveInstallScript, pairingPage } from "./installer.js";
 import { mintPairing, redeemPairing, redeemRateOk } from "./pairing.js";
 import { approvePairRequest, createPairRequest, denyPairRequest, listPairRequests, pairRequestRateOk, readPairRequest, setPairBroadcaster } from "./pairrequests.js";
@@ -339,7 +340,10 @@ app.get("/api/net", async () => netInfo(PORT));
 async function currentNet() {
   const addr = app.server.address();
   const port = typeof addr === "object" && addr ? addr.port : PORT;
-  return netInfo(port, process.env.TRUSS_HOST ?? "0.0.0.0");
+  /* the effective bind, so the wizard's reachability filter agrees with the
+     interface we actually answer on — never the old implicit 0.0.0.0
+     (issue #214) */
+  return netInfo(port, process.env.TRUSS_HOST?.trim() || DEFAULT_BIND_HOST);
 }
 app.get("/api/net/tailscale/peers", async () => tailscalePeers());
 app.post("/api/net/tailscale-serve", async (req, reply) => {
@@ -1312,8 +1316,39 @@ if (existsSync(join(webDist, "index.html"))) {
 /* exported for in-process integration tests (test/server-harness.ts) */
 export { app };
 
+/* ── exposure (issue #214) ──────────────────────────────────────────────
+   Which interface are we about to answer on, and does the operator know?
+   The bind defaults to loopback (matching the README's security model), a
+   wide bind is the operator's explicit TRUSS_HOST opt-in and is announced
+   loudly, and TRUSS_PUBLIC_URL goes through the SAME validation — a bad one
+   refuses to start rather than binding something surprising. Resolved
+   BEFORE listen() so a malformed value fails loudly instead of leaving a
+   half-configured server running. */
+const exposure = resolveExposure({
+  port: PORT,
+  host: process.env.TRUSS_HOST,
+  publicUrl: process.env.TRUSS_PUBLIC_URL,
+});
+
 app
-  .listen({ port: PORT, host: process.env.TRUSS_HOST ?? "0.0.0.0" })
+  .listen({ port: PORT, host: exposure.bind })
+  .then(() => {
+    /* the one explicit exposure statement, printed exactly once, after the
+       socket is really bound — alongside fastify's own line, never instead
+       of it. The actual bound port is read back so TRUSS_PORT=0 (tests)
+       reports the port it truly got. */
+    const addr = app.server.address();
+    const boundPort = typeof addr === "object" && addr ? addr.port : PORT;
+    const effective = { ...exposure, port: boundPort };
+    const banner = exposureBanner(effective);
+    if (banner) console.warn(banner);
+    console.log(exposureLine(effective));
+    /* a machine-readable marker so tests can assert the effective bind
+       without guessing the ephemeral port (see test/exposure.test.ts) */
+    if (process.env.TRUSS_EXPOSURE_PROBE) {
+      console.log(`TRUSS_EXPOSURE_PROBE port=${boundPort} bind=${effective.bind} exposure=${effective.exposure}`);
+    }
+  })
   .catch((err) => {
     app.log.error(err);
     process.exit(1);
