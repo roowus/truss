@@ -1,5 +1,6 @@
 import type { HarnessAdapter, AdapterHandle, SessionOpts } from "./adapters/types.js";
 import { isCatalogModel } from "./adapters/model-catalog-cache.js";
+import { TUNNEL_REATTACH_MIN } from "@truss/proto";
 import type { HarnessId, ProtoEvent } from "@truss/proto";
 
 /**
@@ -23,8 +24,11 @@ interface AgentInfo {
   adapters: { id: string; capabilities: HarnessAdapter["capabilities"] }[];
   /** version handshake (issue #100): the agent reports its protocol level
      and the hash of the bundle it runs — skew against the server's current
-     bundle is finally visible (installed agents never auto-update) */
-  protocol?: number;
+     bundle is finally visible (installed agents never auto-update).
+     Normalized to a NUMBER at hello (issue #217): a legacy agent that
+     announced no field at all is protocol 1, and the route has already
+     refused anything newer than this server or unreadable. */
+  protocol: number;
   bundleHash?: string;
   /** directory discovery (issue #123): announced at hello — the remote's
      home and its existing projects-family dirs. Old agents send neither and
@@ -300,16 +304,27 @@ export function agentHello(
   hostname: string,
   adapterList: { id: string; capabilities: HarnessAdapter["capabilities"] }[],
   socket: AgentInfo["socket"],
-  meta: { sessions?: string[]; protocol?: number; bundleHash?: string; home?: string; suggestedCwds?: string[] } = {},
+  /* `protocol` arrives RAW (unknown) on purpose: the route's
+     `assessTunnelProtocol` floor check has already run, so anything reaching
+     here is either a number or absent — and normalizing it in this signature
+     (`typeof === "number" ? … : undefined`) would erase the legacy-vs-junk
+     distinction at exactly the seam the floor protects (issue #217) */
+  meta: { sessions?: string[]; protocol?: unknown; bundleHash?: string; home?: string; suggestedCwds?: string[] } = {},
 ) {
   const existing = agents.get(hostId);
   if (existing) agentBye(hostId, existing.socket);
+  /* normalize once, here at the boundary: the reattach rule below and the
+     `outdated` mark both need a NUMBER, and a legacy agent that announced
+     nothing is protocol 1 (issue #217). A junk value can't reach here — the
+     route refused it before calling in — but `!Number.isFinite` keeps this
+     honest rather than trusting that. */
+  const protocol = typeof meta.protocol === "number" && Number.isFinite(meta.protocol) ? meta.protocol : 1;
   agents.set(hostId, {
     hostId,
     hostname,
     socket,
     adapters: adapterList,
-    protocol: meta.protocol,
+    protocol,
     bundleHash: meta.bundleHash,
     home: meta.home,
     suggestedCwds: meta.suggestedCwds,
@@ -408,14 +423,18 @@ export function agentBye(hostId: string, socket?: AgentInfo["socket"]) {
   /* protocol-1 agents dispose every harness at close and hello with no
      session list — their sessions can never reattach, so waiting for the
      reconcile just leaks the queues (audit B5). Reap them at the blip, the
-     pre-handshake behavior. Protocol-2 sessions stay: the agent kept them
-     alive and its next hello reattaches. */
-  if (!agent.protocol || agent.protocol < 2) {
+     pre-handshake behavior. Agents at or above the REATTACH floor keep their
+     sessions: the agent kept them alive and its next hello reattaches.
+
+     The floor is TUNNEL_REATTACH_MIN, NOT TUNNEL_PROTOCOL (audit B1): this
+     asks "can this agent reattach?", not "is it the current level?". The two
+     coincide today and must not be conflated — see the constant's comment. */
+  if (agent.protocol < TUNNEL_REATTACH_MIN) {
     for (const [sessionId, q] of eventQueues) {
       if (queueHost.get(sessionId) !== hostId) continue;
       reapSession(sessionId, q, `node-agent ${hostId} disconnected`);
     }
-    console.log(`[remote] agent ${hostId} gone (protocol 1 — its sessions were disposed at close)`);
+    console.log(`[remote] agent ${hostId} gone (protocol ${agent.protocol} — its sessions were disposed at close)`);
     registrySink?.();
     return;
   }

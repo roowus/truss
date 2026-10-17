@@ -76,7 +76,7 @@ import {
   requestMetrics,
   wireRemoteRegistry,
 } from "./remote.js";
-import { collectMetrics } from "@truss/proto";
+import { assessTunnelProtocol, collectMetrics, TUNNEL_CLOSE, TUNNEL_PROTOCOL, tunnelCloseReason } from "@truss/proto";
 import { createMetricsHistory, histPointOf } from "./metricsHistory.js";
 import { registerAdapter, unregisterAdapter } from "./sessions.js";
 
@@ -198,9 +198,11 @@ heartbeat.unref();
 
 /* ── node-agent channel (remote hosts dial OUT to here) ── */
 const AGENT_TOKEN = process.env.TRUSS_AGENT_TOKEN ?? "truss-dev";
-/* tunnel protocol level: 1 = pre-handshake agents (hello had no sessions
-   list, versions, or header auth); 2 = the issue #100 handshake */
-const AGENT_PROTOCOL = 2;
+/* the tunnel protocol level both sides import (issue #217). This used to be
+   a literal here and a SECOND literal in the node-agent, with nothing
+   comparing them — the shared constant is the single source of truth, and
+   `assessTunnelProtocol` is the floor check at hello. */
+const AGENT_PROTOCOL = TUNNEL_PROTOCOL;
 
 wireRemoteRegistry({
   register: registerAdapter,
@@ -235,10 +237,10 @@ app.get("/agent/connect", { websocket: true }, (socket, req) => {
        Distinct code so the agent stops retrying instead of pointing at a
        token it cannot fix (issue #85, audit round 3) */
     if (host && isHostTombstoned(host)) {
-      socket.close(4404, "host deleted");
+      socket.close(TUNNEL_CLOSE.HOST_DELETED, "host deleted");
       return;
     }
-    socket.close(4403, "unauthorized");
+    socket.close(TUNNEL_CLOSE.UNAUTHORIZED, "unauthorized");
     return;
   }
   let helloed = false;
@@ -268,14 +270,31 @@ app.get("/agent/connect", { websocket: true }, (socket, req) => {
     }
     if (!helloed) {
       if (msg.type !== "hello") {
-        socket.close(4400, "hello first");
+        socket.close(TUNNEL_CLOSE.HELLO_FIRST, "hello first");
         return;
       }
       /* the host row may have been deleted between connect and hello —
          dropAgent only sees registered agents, so without this gate the
          hello would register a dead host's harnesses (audit round 2) */
       if (!getHost(host)) {
-        socket.close(4404, "host deleted");
+        socket.close(TUNNEL_CLOSE.HOST_DELETED, "host deleted");
+        return;
+      }
+      /* the protocol FLOOR (issue #217): an agent newer than this server —
+         or one announcing a version we cannot read — is refused here, BEFORE
+         agentHello registers anything. The server must never pretend it can
+         speak a protocol it does not know: the alternative is a tunnel that
+         half-understands frames and drifts in silent, weird ways. An OLDER
+         agent is deliberately still allowed (see the classifier) — installed
+         agents never auto-update, so a hard floor would break every one of
+         them the day this server upgrades; it is marked `outdated` instead. */
+      const verdict = assessTunnelProtocol(msg.protocol, AGENT_PROTOCOL);
+      if (verdict.refuse) {
+        console.log(`[remote] refusing agent ${host}: ${verdict.detail}`);
+        /* the full detail is for the LOG; the close frame carries at
+           most 123 bytes of reason, and an over-long one makes `ws` throw
+           so the peer never learns anything at all */
+        socket.close(TUNNEL_CLOSE.PROTOCOL_TOO_NEW, tunnelCloseReason(verdict.detail));
         return;
       }
       helloed = true;
@@ -288,7 +307,11 @@ app.get("/agent/connect", { websocket: true }, (socket, req) => {
            survived on the agent, its protocol level, its bundle hash */
         {
           sessions: Array.isArray(msg.sessions) ? (msg.sessions as unknown[]).map(String) : undefined,
-          protocol: typeof msg.protocol === "number" ? msg.protocol : undefined,
+          /* the raw field is passed through UNNORMALIZED: the classifier, not
+             this cast, decides what counts as legacy vs junk (issue #217) —
+             `typeof === "number"` here would silently turn a junk "three"
+             into an absent field and wave it through the floor */
+          protocol: msg.protocol,
           bundleHash: typeof msg.bundleHash === "string" ? msg.bundleHash : undefined,
           /* directory discovery (issue #123) — absent from pre-probe agents,
              which then simply carry no cwd suggestion. Strings only, capped
@@ -317,16 +340,28 @@ app.get("/agent/connect", { websocket: true }, (socket, req) => {
 
 /* installed agents never auto-update (issue #100 item 18) — but the skew is
    now VISIBLE: each agent's self-reported bundle hash against the one this
-   server builds right now */
+   server builds right now. The protocol skew lands here too (issue #217): a
+   connected agent whose level is behind ours marks its host `outdated`, and
+   the current bundle hash rides along so the host detail can show installed
+   vs current side by side. Derived, never stored — this is a property of the
+   live connection, not of the host row, and it must not survive a restart as
+   a lie about a host that has since been reinstalled. */
 function decoratedAgents() {
   const current = agentBundleHash();
   return listAgents().map((a) => ({
     ...a,
     bundleCurrent: !current || !a.bundleHash ? undefined : a.bundleHash === current,
+    currentBundleHash: current ?? undefined,
+    /* an agent that announced nothing (or something older) is outdated; a
+       refused newer/junk agent never reaches this map at all */
+    outdated: assessTunnelProtocol(a.protocol, AGENT_PROTOCOL).verdict === "older",
   }));
 }
 
-app.get("/api/agents", async () => ({ agents: decoratedAgents() }));
+/* `protocol` is the server's own level, shipped with the list so a client
+   can render "agent X vs server Y" without importing the package (issue
+   #217) — the UI wants to show the comparison, not to know the number */
+app.get("/api/agents", async () => ({ agents: decoratedAgents(), protocol: AGENT_PROTOCOL }));
 
 /* ── network reachability + the agent installer ── */
 app.get("/api/net", async () => netInfo(PORT));

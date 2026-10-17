@@ -227,6 +227,69 @@ test("protocol-1 agents reap their sessions at disconnect; protocol-2 sessions w
   }
 });
 
+test("the reattach floor is a CAPABILITY check, not the current protocol level (audit B1)", async () => {
+  /* The predicate this pins asks "can this agent reattach?", which protocol 2
+     introduced (issue #100). Writing it as `< TUNNEL_PROTOCOL` compiles and
+     passes TODAY because both numbers are 2 — then silently reaps every live
+     session of a fully reattach-capable protocol-2 agent the moment the level
+     bumps to 3. This test goes red the moment those two questions are
+     conflated, so the fix for a failing run is the constant, not the
+     assertion. */
+  const proto = await import("@truss/proto");
+  assert.equal(
+    proto.TUNNEL_REATTACH_MIN,
+    2,
+    "protocol 2 is where blip-tolerant reattach landed; this moves only if a level truly gains or loses reattach",
+  );
+  assert.ok(
+    proto.TUNNEL_REATTACH_MIN <= proto.TUNNEL_PROTOCOL,
+    "the reattach floor can never be ABOVE the current level — no reachable agent could satisfy it",
+  );
+
+  const { cleanup } = await freshServer("rem-reattach-floor");
+  try {
+    const remote = await import("../src/remote.js");
+    let adapter: any = null;
+    const gone: string[] = [];
+    remote.wireRemoteRegistry({
+      register: (_id, a) => {
+        adapter = a;
+      },
+      unregister: () => {},
+      sessionGone: (id) => void gone.push(id),
+    });
+
+    const spawnOn = async (host: string, socket: ReturnType<typeof fakeSocket>, sid: string, meta?: { protocol: number }) => {
+      const sent = (socket as any).__sent ?? [];
+      remote.agentHello(host, `${host}-host`, [{ id: "pi", capabilities: CAPS }], socket, meta as never);
+      const p = adapter.spawn({ sessionId: sid, cwd: "/tmp" });
+      const frame = JSON.parse(sent[sent.length - 1]) as { reqId: string };
+      remote.agentFrame(host, { type: "spawned", reqId: frame.reqId, ok: true });
+      await p;
+    };
+
+    /* an agent AT the floor keeps its sessions across a blip — the
+       protocol-2-on-a-protocol-3-server case a conflated predicate reaps */
+    const floor = proto.TUNNEL_REATTACH_MIN;
+    const floorSent: string[] = [];
+    const s = fakeSocket(floorSent);
+    (s as any).__sent = floorSent;
+    await spawnOn("h-floor", s, "s-floor", { protocol: floor });
+    remote.agentBye("h-floor", s);
+    assert.deepEqual(gone, [], `an agent at the reattach floor (protocol ${floor}) must keep its sessions across a blip`);
+
+    /* and one BELOW it still reaps — the capability genuinely absent */
+    const belowSent: string[] = [];
+    const below = fakeSocket(belowSent);
+    (below as any).__sent = belowSent;
+    await spawnOn("h-below", below, "s-below", { protocol: floor - 1 });
+    remote.agentBye("h-below", below);
+    assert.deepEqual(gone, ["s-below"], `an agent below the floor (protocol ${floor - 1}) cannot reattach, so it reaps`);
+  } finally {
+    cleanup();
+  }
+});
+
 test("spawn through a half-open socket fails fast, not after a 30s ack-timeout lie (audit round 5)", async () => {
   const { cleanup } = await freshServer("rem-halfopen-spawn");
   try {

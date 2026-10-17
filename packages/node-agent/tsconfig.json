@@ -1,5 +1,8 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": { "outDir": "dist" },
-  "include": ["src", "../../apps/server/src/adapters", "../../packages/proto/src"]
+  /* test/ joined the include when the tunnel-close suite landed (issue
+     #217): `lint` is this package's only typecheck, so a test outside the
+     include would never be checked at all */
+  "include": ["src", "test", "../../apps/server/src/adapters", "../../packages/proto/src"]
 }

@@ -543,3 +543,27 @@ test("pair.changed refetches hosts; only a fresh ask toasts (the Allow click mus
     delete (s as Record<string, unknown>).refreshHosts;
   }
 });
+
+test("refreshAgents carries the server's tunnel protocol level into state (issue #217)", async () => {
+  /* The host panel renders "agent speaks X vs the server's Y" from this
+     field, and the server ships its level with the agent list precisely so
+     the UI need not import @truss/proto (audit round 1, B2 — the passthrough
+     was advisory-untested; this pins it). Both directions matter: a value
+     must land, and its absence must stay absent rather than becoming a
+     number the panel would compare against. */
+  const original = store.state.backend;
+  try {
+    store.set({ backend: { agents: async () => ({ agents: [], protocol: 3 }) } } as never);
+    await store.refreshAgents();
+    assert.equal(store.state.serverProtocol, 3, "the server's level reaches state");
+    assert.deepEqual(store.state.agents, [], "and the list still lands");
+    assert.equal(store.state.agentsError, undefined, "no error on success");
+
+    /* an older server that predates the field: undefined, never a guess */
+    store.set({ backend: { agents: async () => ({ agents: [] }) } } as never);
+    await store.refreshAgents();
+    assert.equal(store.state.serverProtocol, undefined, "an absent level stays undefined");
+  } finally {
+    store.set({ backend: original });
+  }
+});
